@@ -80,3 +80,15 @@ class EpochStat(object):
         else:
             return (self.epoch_loss / self.epoch_toks), None
 
+def load_model(model, opt, file_name, load_opt=False):
+    layer_state_dict = paddle.load("%s.pdparams"%file_name)
+    model.set_state_dict(layer_state_dict)
+    if(load_opt):
+        opt_state_dict = paddle.load("%s.pdopt"%file_name)
+        opt.set_state_dict(opt_state_dict)
+
+def save_model(model, opt, file_prefix, epoch):
+    save_file_name = "%s-%d"%(file_prefix, epoch)
+    print("Saving models to %s"%(save_file_name))
+    paddle.save(model.state_dict(), save_file_name + ".pdparams")
+    paddle.save(opt.state_dict(), save_file_name + ".pdopt")

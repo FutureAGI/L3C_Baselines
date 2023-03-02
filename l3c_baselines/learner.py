@@ -6,67 +6,82 @@ import parl
 import argparse
 import os
 import gym
+import pickle
 from plasmer_block import PlasmerEncoderLayer 
 from l3c_baselines.utils import metalm_loss_func, autoregressive_mask
 from l3c_baselines.utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
 from l3c_baselines.utils import load_model, save_model
-from model import Model
+from l3c_baselines.actor import ActorMazeWorld
+from plasmer_classifier import PlasmerClassifier
+from lstm_classifier import LSTMClassifier
+from transformer_classifier import TransformerClassifier
 from metagym.metalm import MetaMaze, MazeTaskSampler
 
-@parl.remote_class
-class Actor(object):
-    def __init__(self, config_dict, fixed_task=None):
-        self._env = gym.make("meta-maze-discrete-3D-v0", enable_render="False", task_type="SURVIVAL")
-        self._config_dict = config_dict
-        self._model = Model(config_dict)
-        self._default_reward = 0
-        self._default_action = -1
-        if(fixed_task is not None):
-            self.task = fixed_task
-            self._env.set_task(self.task)
+class Learner(object):
+    def __init__(self, server_ip, configs):
+        parl.connect(server_ip, distributed_files=['./l3c_baselines/*.py', './*.py'])
+        self._model = model
+        self._actors = [ActorMazeWorld(configs)]
+        self._inactive_actors = dict()
+        self._max_steps = configs["inner_horizon"]
+        self._eval_tasks_file = configs["eval_tasks_file"]
+        if(self._eval_tasks_file is not None):
+            self._eval_tasks = pickle.load(self._eval_tasks_file)
         else:
-            self.task = sample_task()
-            self._env.set_task(self.task)
-        
-    def sample_task(self):
-        return MazeTaskSampler(
-            n            = 15,  # Number of cells = n*n
-            allow_loops  = False,  # Whether loops are allowed
-            crowd_ratio  = 0.40,   # Specifying how crowded is the wall in the region, only valid when loops are allowed. E.g. crowd_ratio=0 means no wall in the maze (except the boundary)
-            cell_size    = 2.0, # specifying the size of each cell, only valid for 3D mazes
-            wall_height  = 3.2, # specifying the height of the wall, only valid for 3D mazes
-            agent_height = 1.6, # specifying the height of the agent, only valid for 3D mazes
-            view_grid    = 1, # specifiying the observation region for the agent, only valid for 2D mazes
-            step_reward  = -0.01, # specifying punishment in each step in ESCAPE mode, also the reduction of life in each step in SURVIVAL mode
-            goal_reward  = 1.0, # specifying reward of reaching the goal, only valid in ESCAPE mode
-            initial_life = 1.0, # specifying the initial life of the agent, only valid in SURVIVAL mode
-            max_life     = 2.0, # specifying the maximum life of the agent, acquiring food beyond max_life will not lead to growth in life. Only valid in SURVIVAL mode
-            food_density = 0.01,# specifying the density of food spot in the maze, only valid in SURVIVAL mode
-            food_interval= 100, # specifying the food refreshing periodicity, only valid in SURVIVAL mode
-            )
+            self._eval_tasks = None
 
-    def exec_episode(self, max_steps, model_weights, resample=True):
-        steps = 0
-        if(resample):
-            self.task = sample_task()
-            self._env.set_task(self.task)
-        init_state = self._env.reset()
-        self._model.load_weights(model_weights)
-        state_list = [init_state]
-        action_list = [self._default_action]
-        reward_list = [self._default_reward]
-        while steps < max_steps:
-            steps += 1
-            action = self.model(state_list, action_list, reward_list)
-            observation, reward, done, info = self._env.step(action)
-            state_list.append(observation)
-            action_list.append(action)
-            reward_list.append(reward)
-            if(done):
-                state_list.append(self._env.reset())
-                action_list.append(self._default_action)
-                reward_list.append(self._default_reward)
-        return state_list, action_list, reward_list
+    def get_distributed_interactions(self, tasks=None):
+        weights = self._model.get_weights()
+        # Remote tasks recorder
+        tasks = list()
+        # Active tasks dict, if True, it is active
+        active_task = dict()
+        n_active_tasks = 0
+        data = {"states": list(), "actions": list(), "rewards": list()}
+
+        # Distribute Tasks and Run
+        for i, actor in enumerate(self._actors):
+            if(i not in self._inactive_actors):
+                tasks.append(actor.exec_episodes(self._max_steps, weights))
+                active_task[i] = True
+            else:
+                # In case node is no longer active, turn it off
+                tasks.append(None)
+                active_task[i] = False
+            n_active_tasks += 1
+
+        # Retrieve data
+        wait_time = 0
+        while wait_time < self._max_wait_time and n_active_tasks > 0:
+            time.sleep(1)
+            for key in active_task:
+                if(active_task[key]):
+                    try:
+                        state_list, action_list, reward_list = tasks[key].get_nowait()
+                        data["states"].append(state_list)
+                        data["actions"].append(action_list)
+                        data["rewards"].append(reward_list)
+                        active_task[key] = False
+                        n_active_tasks -= 1
+                    except Exception:
+                        pass
+            wait_time += 1
+
+        # Set the inactive node (Timeout)
+        if(n_active_tasks > 0):
+            for key in active_task:
+                self._inactive_actors.add(i)
+        return data
+        
+    def train(self):
+        data = self.get_distributed_actions()
+        self._model.train(data)
+
+    def eval(data):
+        if(self.eval_tasks is not None):
+            data = self.get_distributed_actions(tasks=self.eval_tasks)
+        avg_reward = numpy.mean(map(sum, data["rewards"]))
+        return avg_reward
 
 if __name__=="__main__":
     fleet.init(is_collective=True)
