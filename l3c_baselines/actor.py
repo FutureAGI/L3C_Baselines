@@ -6,19 +6,18 @@ import parl
 import argparse
 import os
 import gym
-from plasmer_block import PlasmerEncoderLayer 
-from l3c_baselines.utils import metalm_loss_func, autoregressive_mask
-from l3c_baselines.utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
-from l3c_baselines.utils import load_model, save_model
-from model import Model
-from metagym.metalm import MetaMaze, MazeTaskSampler
+from l3c.metamaze import MetaMaze, MazeTaskSampler
+from .utils import metalm_loss_func, autoregressive_mask
+from .utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
+from .utils import load_model, save_model
+from .plasmer_block import PlasmerEncoderLayer 
 
 @parl.remote_class
 class Actor(object):
     def __init__(self, config_dict, fixed_task=None):
         self._env = gym.make("meta-maze-discrete-3D-v0", enable_render="False", task_type="SURVIVAL")
         self._config_dict = config_dict
-        self._model = Model(config_dict)
+        #self._model = Need To Rewrite Here
         self._default_reward = 0
         self._default_action = -1
         if(fixed_task is not None):

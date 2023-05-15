@@ -18,7 +18,7 @@ import paddle
 from paddle.distributed.fleet.meta_parallel import VocabParallelEmbedding
 import paddle.nn as nn
 
-from transformer_block import MultiHeadAttention
+from .transformer_block import MultiHeadAttention
 
 
 class UnifiedEmbeddings(nn.Layer):

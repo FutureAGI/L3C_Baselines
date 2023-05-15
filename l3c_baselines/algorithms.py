@@ -25,9 +25,9 @@ from paddle.nn import Linear
 import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
-from plastic_layers import FullPlasticLayer
-from paddle.nn.layer.transformer import _convert_attention_mask
-from plasmer_block import FullPlasticLayer
+from .plastic_layers import FullPlasticLayer
+from .paddle.nn.layer.transformer import _convert_attention_mask
+from .plasmer_block import FullPlasticLayer
 
 
 def segmentation(segment_size, *args):

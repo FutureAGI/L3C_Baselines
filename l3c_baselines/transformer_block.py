@@ -307,6 +307,7 @@ class MultiHeadAttention(nn.Layer):
             product = layers.matmul(
                 x=q, y=k, transpose_y=True, alpha=scale_factor)
 
+        #print("product:", product.shape, attn_bias.shape)
         if isinstance(attn_bias, str) and attn_bias == "upper_triangle":
             weights = incubate.softmax_mask_fuse_upper_triangle(product)
         elif attn_bias is not None:

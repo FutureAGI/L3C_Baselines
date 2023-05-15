@@ -25,9 +25,9 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle.nn.layer.transformer import _convert_attention_mask
-from plastic_layers import FullPlasticLayer
-from transformer_block import MultiHeadAttention
-from transformer_block import TransformerEncoderLayer
+from .plastic_layers import FullPlasticLayer
+from .transformer_block import MultiHeadAttention
+from .transformer_block import TransformerEncoderLayer
 
 class PRNNEncoderLayer(nn.Layer):
     """Transformer encoder layer.

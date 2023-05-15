@@ -25,9 +25,9 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle.nn.layer.transformer import _convert_attention_mask
-from plastic_layers import FullPlasticLayer
-from transformer_block import MultiHeadAttention
-from transformer_block import TransformerEncoderLayer
+from .plastic_layers import FullPlasticLayer
+from .transformer_block import MultiHeadAttention
+from .transformer_block import TransformerEncoderLayer
 
 class PlasmerEncoderLayer(nn.Layer):
     """Transformer encoder layer.
@@ -48,6 +48,7 @@ class PlasmerEncoderLayer(nn.Layer):
                  fuse_qkv=False,
                  weight_attr=None,
                  bias_attr=None,
+                 plastic_fc=None,
                  num_partitions=1):
         super(PlasmerEncoderLayer, self).__init__()
         attn_dropout = dropout if attn_dropout is None else attn_dropout
@@ -71,18 +72,21 @@ class PlasmerEncoderLayer(nn.Layer):
             weight_attr=weight_attr
             )
 
-        self.plastic_fc = FullPlasticLayer(
+        if(plastic_fc is None):
+            self.plastic_fc = FullPlasticLayer(
                 d_model,
                 d_model,
                 plasticity_rule="mABCD",
-                dopamine_activation="sigmoid",
-                memory_decay=0.01,
+                dopamine_activation="tanh",
+                memory_decay=0.05,
                 memory_decay_thres=5.0,
                 initial_variance=0.10,
-                learning_rate=0.01,
+                learning_rate=0.05,
                 rules_attr=self.weight_attr,
                 dopamine_weight_attr=self.weight_attr,
                 dopamine_bias_attr=self.bias_attr)
+        else:
+            self.plastic_fc = plastic_fc
 
         self.linear1 = ColumnParallelLinear(
             d_model,
@@ -116,44 +120,46 @@ class PlasmerEncoderLayer(nn.Layer):
             tgt = self.norm1(src)
 
         if cache is not None:
-            tgt, incremental_cache = self.self_attn(src, src, src, attn_bias, pe_out, cache=cache)
+            tgt, incremental_cache = self.self_attn(tgt, tgt, tgt, attn_bias, pe_out, cache=cache)
         else:
-            tgt = self.self_attn(src, src, src, attn_bias, pe_out)
+            tgt = self.self_attn(tgt, tgt, tgt, attn_bias, pe_out)
+
+        tgt = residual + self.dropout1(tgt)
+
+
+        if not self.normalize_before:
+            tgt = self.norm1(tgt)
+
+        # Residual attention Layer
+        residual = tgt
+        if self.normalize_before:
+            tgt = self.norm2(tgt)
 
         if(mem is None):
-            source_shape = src.shape
+            source_shape = tgt.shape
             mem = paddle.normal(
                     mean=0.0, 
                     std=self.plastic_fc.initial_variance, 
                     shape=(source_shape[0], source_shape[2], source_shape[2]),
                     name=None)
 
-        # Residual After the plastic Layer
-        tgt = self.plastic_fc(src, mem) + self.dropout1(tgt)
-        updated_mem = self.plastic_fc.update_mem(src, tgt, mem)
+        # Add Plastic Layer: As an addition to the fully connected layer
+        tgt_res = self.plastic_fc(tgt, mem)
+        updated_mem = self.plastic_fc.update_mem(tgt, tgt_res, mem)
 
-        src = residual + tgt
+        tgt = self.activation(self.linear1(tgt + tgt_res))
+        tgt = self.dropout2(tgt)
+        tgt = self.linear2(tgt)
 
-        if not self.normalize_before:
-            src = self.norm1(src)
-
-        residual = src
-        if self.normalize_before:
-            src = self.norm2(src)
-
-        src = self.activation(self.linear1(src))
-        src = self.dropout2(src)
-        src = self.linear2(src)
-
-        src = residual + self.dropout1(src)
+        tgt = residual + self.dropout1(tgt)
 
         if not self.normalize_before:
-            src = self.norm2(src)
+            tgt = self.norm2(tgt)
 
         if cache is not None:
-            return (src, updated_mem), incremental_cache
+            return (tgt, updated_mem), incremental_cache
         else:
-            return (src, updated_mem)
+            return (tgt, updated_mem)
 
     def gen_cache(self, x):
         """Generates cache for faster decoding step by step.

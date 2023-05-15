@@ -7,15 +7,15 @@ import argparse
 import os
 import gym
 import pickle
-from plasmer_block import PlasmerEncoderLayer 
-from l3c_baselines.utils import metalm_loss_func, autoregressive_mask
-from l3c_baselines.utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
-from l3c_baselines.utils import load_model, save_model
-from l3c_baselines.actor import ActorMazeWorld
-from plasmer_classifier import PlasmerClassifier
-from lstm_classifier import LSTMClassifier
-from transformer_classifier import TransformerClassifier
-from metagym.metalm import MetaMaze, MazeTaskSampler
+from .utils import metalm_loss_func, autoregressive_mask
+from .utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
+from .utils import load_model, save_model
+from .actor import ActorMazeWorld
+from .plasmer_block import PlasmerEncoderLayer 
+from .plasmer_classifier import PlasmerClassifier
+from .lstm_classifier import LSTMClassifier
+from .transformer_classifier import TransformerClassifier
+from .metagym.metalm import MetaMaze, MazeTaskSampler
 
 class Learner(object):
     def __init__(self, server_ip, configs):

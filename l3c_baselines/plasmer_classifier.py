@@ -25,7 +25,10 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle.nn.layer.transformer import _convert_attention_mask
-from plasmer_block import PlasmerEncoderLayer 
+from .plastic_layers import FullPlasticLayer
+from .embeddings import UnifiedEmbeddings
+from .plasmer_block import PlasmerEncoderLayer 
+from .utils import detached_memory, autoregressive_mask
 
 class PlasmerClassifier(nn.Layer):
     """Plasmer is a stack of N encoder layers."""
@@ -38,17 +41,55 @@ class PlasmerClassifier(nn.Layer):
             vocab_size,
             dropout=0.1, 
             norm=None, 
+            normalize_before=True,
             use_recompute=False, 
             weight_attr=None, 
             bias_attr=None):
         super(PlasmerClassifier, self).__init__()
-        self.layers = nn.LayerList([PlasmerEncoderLayer(d_model, nhead, dim_feedforward) for _ in range(nlayers)])
 
         self.norm = norm
         self.use_recompute = use_recompute
         self.dropout = nn.Dropout(dropout, mode="upscale_in_train")
 
-        self.fea_embedding = paddle.nn.Embedding(vocab_size, d_model, sparse=True)
+        if not normalize_before:
+            self.input_norm = nn.LayerNorm(d_model)
+            self.output_norm = None
+        else:
+            self.input_norm = None
+            self.output_norm = nn.LayerNorm(d_model)
+
+        self.embeddings = UnifiedEmbeddings(
+            hidden_size=d_model,
+            vocab_size=vocab_size,
+            dropout=dropout,
+            use_type=False,
+            use_role=False,
+            use_turn=False,
+            norm=self.input_norm,
+            pe_style="rel",
+            weight_attr=weight_attr,
+        )
+
+        self.plastic_fc = FullPlasticLayer(
+            d_model,
+            d_model,
+            plasticity_rule="mABCD",
+            dopamine_activation="tanh",
+            memory_decay=0.01,
+            memory_decay_thres=5.0,
+            initial_variance=0.10,
+            learning_rate=0.05,
+            rules_attr=weight_attr,
+            dopamine_weight_attr=weight_attr,
+            dopamine_bias_attr=bias_attr)
+
+        self.layers = nn.LayerList([PlasmerEncoderLayer(
+             d_model, 
+             nhead, 
+             dim_feedforward,
+             normalize_before=True,
+             plastic_fc=self.plastic_fc,
+             ) for _ in range(nlayers)])
 
         self.output_mapping = Linear(
             d_model, vocab_size,
@@ -66,18 +107,29 @@ class PlasmerClassifier(nn.Layer):
         attn_bias = _convert_attention_mask(src_mask, paddle.get_default_dtype())
 
         # [Batch_size, Segment, Embedding_Size]
-        src = self.fea_embedding(features)
+        emb_out, attn_bias = self.embeddings(
+            token_ids=features,
+            pos_ids=None,
+            type_ids=None,
+            role_ids=None,
+            turn_ids=None,
+            input_mask=autoregressive_mask(features),
+            aux_emb=None)
+
+        pe_out = self.embeddings.get_pe_out(
+            emb_out,
+            mems=mems)
 
         # Flatten to [Batch_size, Segment, Embedding_Size], with the form of fea, label, fea, label, ...
         if mems is None:
-            source_shape = src.shape
+            source_shape = emb_out.shape
             mems = [paddle.normal(
                     mean=0.0, 
                     std=self.layers[0].plastic_fc.initial_variance, 
                     shape=(source_shape[0], source_shape[2], source_shape[2]),
                     name=None) for _ in range(len(self.layers))]
 
-        output = src
+        output = emb_out
         all_outputs = [output]
         new_mems = []
         for i, mod in enumerate(self.layers):

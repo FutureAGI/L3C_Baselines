@@ -25,14 +25,22 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle.nn.layer.transformer import _convert_attention_mask
-from utils import detached_memory, autoregressive_mask
-from transformer_block import TransformerEncoderLayer, TransformerEncoder
-from embeddings import UnifiedEmbeddings
+from .utils import detached_memory, autoregressive_mask
+from .transformer_block import TransformerEncoderLayer, TransformerEncoder
+from .embeddings import UnifiedEmbeddings
 
 class TransformerClassifier(nn.Layer):
     """LSTM Classifier"""
 
-    def __init__(self, d_model, emb_size, nlayers, nhead, normalize_before=True, dropout=0.1, weight_attr=None, bias_attr=None):
+    def __init__(self, 
+            d_model, 
+            vocab_size, 
+            nlayers, 
+            nhead, 
+            normalize_before=True, 
+            dropout=0.1, 
+            weight_attr=None, 
+            bias_attr=None):
         super(TransformerClassifier, self).__init__()
 
         if not normalize_before:
@@ -44,7 +52,7 @@ class TransformerClassifier(nn.Layer):
 
         self.embeddings = UnifiedEmbeddings(
             hidden_size=d_model,
-            vocab_size=emb_size,
+            vocab_size=vocab_size,
             dropout=dropout,
             use_type=False,
             use_role=False,
@@ -75,7 +83,7 @@ class TransformerClassifier(nn.Layer):
             use_recompute=False)
 
         self.output_mapping = Linear(
-            d_model, emb_size,
+            d_model, vocab_size,
             weight_attr,
             bias_attr)
 
@@ -90,7 +98,7 @@ class TransformerClassifier(nn.Layer):
         # [Batch_size, Segment, Embedding_Size]
         emb_out, attn_bias = self.embeddings(
             token_ids=features,
-            pos_ids=features,
+            pos_ids=None,
             type_ids=None,
             role_ids=None,
             turn_ids=None,

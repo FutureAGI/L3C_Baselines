@@ -24,7 +24,10 @@ from paddle.nn import Linear
 import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
+import numpy
 
+def debug_print_norm(string, mem):
+    print(string, "mem", paddle.linalg.norm(mem, p=numpy.inf))
 
 class FullPlasticLayer(nn.Layer):
     """Full Plastic Layer
@@ -40,13 +43,12 @@ class FullPlasticLayer(nn.Layer):
                  input_dim,
                  output_dim,
                  plasticity_rule="mABCD",
-                 dopamin_type="neuron",                 #neuron/single
-                 dopamine_activation="sigmoid",
+                 dopamine_activation="tanh",
+                 activation="gelu",
                  memory_decay=0.01,
                  memory_decay_thres=5.0,
                  initial_variance=0.10,
-                 learning_rate=0.01,
-                 is_batch_update=True,
+                 learning_rate=None,
                  rules_attr=None,
                  dopamine_weight_attr=None,
                  dopamine_bias_attr=None):
@@ -54,8 +56,6 @@ class FullPlasticLayer(nn.Layer):
         self.plasticity_rule = plasticity_rule
         self.d_in = input_dim
         self.d_out = output_dim
-        self.dopamine_type = dopamine_type
-        self.is_batch_update = is_batch_update
 
         self._dtype = self._helper.get_default_dtype()
         if(learning_rate is None):
@@ -67,9 +67,15 @@ class FullPlasticLayer(nn.Layer):
         self.dopamine_bias_attr = dopamine_bias_attr
         self.dopamine_activation = getattr(
             F, dopamine_activation)
+        self.activation = getattr(
+            F, activation)
 
         if(self.plasticity_rule == "mABCD"):
             self.init_parameter_1()
+        elif(self.plasticity_rule == "A"):
+            self.init_parameter_2()
+        elif(self.plasticity_rule is None):
+            pass
         else:
             raise Exception("Unexpected plasticity rule type:", self.plasticity_rule)
 
@@ -89,10 +95,11 @@ class FullPlasticLayer(nn.Layer):
         # mem: [B, D_in, D_out]
         # return updated mem:  [B, D_in, D_out]
         if(self.plasticity_rule == "mABCD"):
-            if(self.is_batch_update):
-                return self.plasticity_update_1_b(i, o, mem)
-            else:
-                return self.plasticity_update_1_s(i, o, mem)
+            return self.plasticity_update_1(i, o, mem)
+        elif(self.plasticity_rule == "A"):
+            return self.plasticity_update_2(i, o, mem)
+        elif(self.plasticity_rule is None):
+            return mem
         else:
             raise Exception("Unexpected plasticity rule type:", self.plasticity_rule)
 
@@ -118,66 +125,59 @@ class FullPlasticLayer(nn.Layer):
             attr=self.weight_attr,
             dtype=self._dtype,
             is_bias=False)
-        if(self.dopamine_type == "neuron"):
-            self.dopamine_mapping = Linear(
-                self.d_out, self.d_out,
-                weight_attr=self.dopamine_weight_attr,
-                bias_attr=self.dopamine_bias_attr)
-        elif(self.dopamine_type == "single"):
-            self.dopamine_mapping = Linear(
-                self.d_out, 1,
-                weight_attr=self.dopamine_weight_attr,
-                bias_attr=self.dopamine_bias_attr)
+        self.dopamine_mapping = Linear(
+            self.d_out, 1,
+            weight_attr=self.dopamine_weight_attr,
+            bias_attr=self.dopamine_bias_attr)
 
-    def plasticity_update_1_b(self, i, o, mem):
+    def init_parameter_2(self):
+        # Parameter initialization for mABCD plasticity rule
+        self.w_a = self.create_parameter(
+            shape=[self.d_in, self.d_out],
+            attr=self.weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+
+    def plasticity_update_1(self, i, o, mem):
         # i: [B, L, D_in], x_in : [B, L, D_in ,1]
         # o: [B, L, D_out], x_out : [B, L, 1 ,D_out]
-        x_in = paddle.unsqueeze(i, 3)
-        x_out = paddle.unsqueeze(o, 2)
+        #debug_print_norm("before", mem)
+        x_in = paddle.unsqueeze(i.detach(), 3)
+        x_out = paddle.unsqueeze(o.detach(), 2)
 
-        # io, ii, oo: [B, L, D_in, D_out]
-        io = paddle.matmul(x_in, x_out)
-        ii = paddle.repeat_interleave(x_in, self.d_out, axis=3)
-        oo = paddle.repeat_interleave(x_out, self.d_in, axis=2)
+        # modulation: [B, L, 1, 1]
+        modulation = paddle.unsqueeze(self.dopamine_activation(self.dopamine_mapping(o)), axis=-1)
+        x_out = modulation * x_out
 
-        # raw_mod: [B, L, D_in, D_out]
+        # io, ii, oo: [B, D_in, D_out]
+        io = paddle.mean(paddle.matmul(x_in, x_out), axis=1)
+        ii = paddle.mean(modulation * x_in, axis=1)
+        oo = paddle.mean(x_out, axis=1)
+
+        # raw_mod: [B, D_in, D_out]
         raw_mod = self.w_a * io + self.w_b * ii + self.w_c * oo + self.w_d
 
-        # modulation: [B, L, 1]
-        modulation = self.dopamine_activation(self.dopamine_mapping(o) - 1.0)
 
         # goes back to [B, D_in, D_out]
-        mem += self.learning_rate * paddle.mean(raw_mod * paddle.unsqueeze(modulation, 3), axis=1)
-        delta_mem = mem - paddle.clip(mem, min=-self.mem_decay_thres, max=self.mem_decay_thres)
-        mem -= self.mem_decay * delta_mem
+        update_mem = mem + self.learning_rate * raw_mod
+        update_mem = (1 - self.mem_decay) * update_mem + self.mem_decay * paddle.clip(update_mem, min=-self.mem_decay_thres, max=self.mem_decay_thres)
 
-        return mem
+        return update_mem
 
-    def plasticity_update_1_s(self, i, o, mem):
-        # i: [B, D_in], x_in : [B, D_in ,1]
-        # o: [B, D_out], x_in : [B, 1 ,D_out]
-        x_in = paddle.unsqueeze(i, 2)
-        x_out = paddle.unsqueeze(o, 1)
+    def plasticity_update_2(self, i, o, mem):
+        x_in = paddle.unsqueeze(i.detach(), 3)
+        x_out = paddle.unsqueeze(o.detach(), 2)
 
-        # io, ii, oo: [B, L, D_in, D_out]
-        io = paddle.matmul(x_in, x_out)
-        ii = paddle.repeat_interleave(x_in, self.d_out, axis=2)
-        oo = paddle.repeat_interleave(x_out, self.d_in, axis=1)
+        io = paddle.mean(paddle.matmul(x_in, x_out), axis=1)
+        update_mem = mem + self.learning_rate * self.w_a * io
 
-        raw_mod = self.w_a * io + self.w_b * ii + self.w_c * oo + self.w_d
-        modulation = self.dopamine_activation(self.dopamine_mapping(o) - 1.0)
-
-        mem += self.learning_rate * paddle.mean(raw_mod * paddle.unsqueeze(modulation, 3), axis=1)
-        delta_mem = mem - paddle.clip(mem, min=-self.mem_decay_thres, max=self.mem_decay_thres)
-        mem -= self.mem_decay * delta_mem
-
-        return mem
+        return update_mem
 
     def forward(self, src, mem):
         """ src: input [B, L, D_in],  tgt: additional output [B, L, D_out]
             mem: memory [B, D_in, D_out]
         """
-        out = F.linear(src, mem) + self.output_bias 
+        out = self.activation(F.linear(src, mem) + self.output_bias) 
         return out
 
     def update_mem(self, src, tgt, mem):
