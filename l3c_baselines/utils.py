@@ -18,23 +18,12 @@ def detached_memory(mems):
 def metalm_loss_func(model, features,
         labels,
         loss_mask=None,
-        src_mask=None,
-        pe_out=None,
         mems=None):
     # Mask the loss for Labels
-    output, new_mems = model.forward(features, src_mask=src_mask, pe_out=pe_out, mems=mems)
+    output, new_mems = model.forward(features, mems=mems)
     loss = F.cross_entropy(output, labels, weight=loss_mask, reduction="none")
 
     return loss, new_mems
-
-def autoregressive_mask(data):
-    length = data.shape[1]
-    return paddle.tile(paddle.tensor.tril(
-            paddle.full(shape=[length, length],
-            fill_value=1,
-            dtype=paddle.get_default_dtype())),
-            [data.shape[0], 1, 1]
-            )
 
 def linear_segments(length,
         minimum=0.0, 
@@ -58,11 +47,14 @@ class EpochStat(object):
         self.epoch_toks = None
         self.epoch_mems = None
         self.cnt = 0
+        self.add_cnt = 0
 
-    def add_batch(self, batch_toks, batch_loss, batch_mems):
+    def add_batch(self, batch_toks, batch_loss, pos_loss, batch_mems):
         if(self.epoch_loss is None):
             self.epoch_toks = batch_toks
             self.epoch_loss = batch_loss
+            self.epoch_pos_loss = pos_loss
+            self.add_cnt = 1
             if(batch_mems is not None):
                 self.epoch_mems = batch_mems
                 self.cnt += 1
@@ -70,15 +62,45 @@ class EpochStat(object):
             assert self.epoch_toks.shape[0] == batch_toks.shape[0], "statistics must be equal"
             self.epoch_toks += batch_toks
             self.epoch_loss += batch_loss
+            self.epoch_pos_loss += pos_loss
+            self.add_cnt += 1
             if(self.epoch_mems is not None and batch_mems is not None):
                 self.epoch_mems[:batch_toks.shape[0]] += batch_mems
                 self.cnt += 1
 
     def get_statistics(self):
         if(self.cnt > 0):
-            return (self.epoch_loss / self.epoch_toks), (1.0 / self.cnt) * self.epoch_mems
+            mem_sta = (1.0 / self.cnt) * self.epoch_mems
         else:
-            return (self.epoch_loss / self.epoch_toks), None
+            mem_sta = None
+        return (self.epoch_loss / self.epoch_toks), (1.0 / self.add_cnt) * self.epoch_pos_loss, mem_sta
+
+def debug_print_grad(model):
+    for name, parameter in model.named_parameters():
+        print("gradient", name, "shape", parameter.shape, 
+            "norm-inf", float(paddle.linalg.norm(parameter.grad, p=numpy.inf)))
+
+def debug_print_para(model):
+    sum_para_n = 0
+    for name, parameter in model.named_parameters():
+        sum_para_n += numpy.product(parameter.shape)
+        print("parameter", name, "shape", parameter.shape, 
+            "norm-inf", float(paddle.linalg.norm(parameter, p=numpy.inf)))
+    print("total parameters: ", sum_para_n)
+
+def debug_print_norm(mems, name=None):
+    if(isinstance(mems, list) or isinstance(mems, tuple)):
+        print("---- A-list of tensors:", name)
+        for mem in mems:
+            debug_print_norm(mem, name=name)
+        print("---- End")
+    elif(isinstance(mems, paddle.Tensor)):
+        if(name is None):
+            name = mems.name
+        print("Paddle.Tensor: ", name, 
+            "\tShape:", mems.shape, 
+            "\tnorm-inf", float(paddle.linalg.norm(mems, p=numpy.inf)), 
+            "\tnorm-l2",  float(paddle.linalg.norm(mems, p=2) / numpy.sqrt(numpy.prod(mems.shape))))
 
 def load_model(model, opt, file_name, load_opt=False):
     layer_state_dict = paddle.load("%s.pdparams"%file_name)

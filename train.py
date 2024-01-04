@@ -5,18 +5,19 @@ import paddle
 import argparse
 import os
 import paddle.profiler as profiler
-from l3c_baselines.plasmer_block import PlasmerEncoderLayer 
-from l3c_baselines.utils import metalm_loss_func, autoregressive_mask
+import time
+import l3c
+from l3c_baselines.utils import metalm_loss_func
 from l3c_baselines.utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
 from l3c_baselines.utils import load_model, save_model
-from l3c_baselines.plasmer_classifier import PlasmerClassifier
-from l3c_baselines.lstm_classifier import LSTMClassifier
-from l3c_baselines.transformer_classifier import TransformerClassifier
+from l3c_baselines.utils import debug_print_norm, debug_print_grad, debug_print_para
+from l3c_baselines.LSTM_block import AutoRegressiveLSTM
+from l3c_baselines.RMT_block import AutoRegressiveRMT
+from l3c_baselines.TRN_block import AutoRegressiveTRN
 from l3c.metalm import MetaLMv1, MetaLMv2
 
-
 MAX_EPOCH = 200
-MAX_ITERATION = 50
+MAX_ITERATION = 100
 
 if os.name == 'nt':
     import win32api, win32con
@@ -110,29 +111,16 @@ def INNER_ITERATOR(fea, lab, segment_size, pad_id):
     b_idx = 0
     seg_idx = 0
     max_len = fea.shape[1]
+    bsz = fea.shape[0]
     while b_idx < max_len:
         seg_idx += 1
         e_idx = min(b_idx + segment_size, max_len)
         if(e_idx <= b_idx):
             return
-        seg_toks = numpy.sum((fea[:, b_idx:e_idx] != pad_id).astype("int32"))
+        seg_toks = (e_idx - b_idx) * bsz
         yield b_idx, e_idx, fea[:, b_idx:e_idx], lab[:, b_idx:e_idx], seg_toks
         b_idx = e_idx
 
-def debug_print_grad(model):
-    for name, parameter in model.named_parameters():
-        print("gradient", name, "shape", parameter.shape, "norm", float(paddle.linalg.norm(parameter.grad, p=numpy.inf)))
-
-def debug_print_para(model):
-    sum_para_n = 0
-    for name, parameter in model.named_parameters():
-        sum_para_n += numpy.product(parameter.shape)
-        print("parameter", name, "shape", parameter.shape, "norm", float(paddle.linalg.norm(parameter, p=numpy.inf)))
-    print("total parameters: ", sum_para_n)
-
-def debug_print_norm(mems):
-    for mem in mems[0]:
-        print("memory: shape", mem.shape, "norm", float(paddle.linalg.norm(mem, p=numpy.inf)))
 
 def train_batch(
         data_generator, 
@@ -151,7 +139,8 @@ def train_batch(
     if(isinstance(data_generator, FileDataset)):
         feas, labs, is_end = data_generator.batch()
     elif(isinstance(data_generator, MetaLMv1) or isinstance(data_generator, MetaLMv2)):
-        feas, labs = data_generator.batch_generator(batch_size)
+        seed = int(10 * time.time() + worker_index * 1000000) % 4294967295
+        feas, labs = data_generator.batch_generator(batch_size, seed=seed)
         is_end = False
     elif(isinstance(data_generator, list)):
         feas, labs = data_generator
@@ -160,6 +149,7 @@ def train_batch(
         raise Exception("Unknown data_generator type:", data_generator)
     mem = None
     acc_loss = []
+    batch_loss = []
     batch_ppl = []
     batch_toks = []
     seg_idx = 0
@@ -168,17 +158,17 @@ def train_batch(
     #        profile_memory=True, timer_only=True)
     for b_idx, e_idx, fea, lab, seg_toks in INNER_ITERATOR(feas, labs, seg_size, pad_id):
         seg_idx += 1
-        src_mask = autoregressive_mask(lab)
         #print("Worker index", worker_index, "Memory allocated before:", paddle.device.cuda.memory_allocated())
         (loss, mem) = metalm_loss_func(model,
                 paddle.to_tensor(fea, dtype="int32"), 
                 paddle.to_tensor(lab, dtype="int32"), 
-                src_mask=src_mask,
                 mems=mem)
+        #print("loss.shape", loss.shape, "seg_toks", seg_toks, "from", b_idx, "to", e_idx)
         #debug_print_norm(mem)
         ppl = paddle.sum(loss)
         batch_ppl.append(ppl.numpy()[0])
         batch_toks.append(seg_toks)
+        batch_loss.append(numpy.asarray(loss))
         if(is_train):
             if(loss_weights is None):
                 acc_loss.append([seg_toks, paddle.sum(loss)])
@@ -212,15 +202,15 @@ def train_batch(
         sum_loss = (1.0 / (max(sum_toks, 1.0))) * sum_loss
 
         sum_loss.backward()
-        #debug_print_grad(model)
         opt.step()
         opt.clear_grad()
 
     acc_loss = []
+    pos_loss = numpy.mean(numpy.concatenate(batch_loss, axis=-1), axis=0)
     mem = detached_memory(mem)
     #debug_print_para(model)
 
-    return numpy.asarray(batch_ppl), numpy.asarray(batch_toks), is_end
+    return numpy.asarray(batch_ppl), numpy.asarray(batch_toks), pos_loss, is_end
 
 if __name__=="__main__":
     fleet.init(is_collective=True)
@@ -240,8 +230,11 @@ if __name__=="__main__":
     parser.add_argument('--model_layer_num', type=int, default=1)
     parser.add_argument('--model_hidden_size', type=int, default=512)
     parser.add_argument('--model_head_num', type=int, default=16)
+    parser.add_argument('--model_memory_size', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--detach_segments', type=int, default=1)
+    parser.add_argument('--opt_learning_rate', type=float, default=1.0e-4)
+    parser.add_argument('--opt_warmup_steps', type=float, default=2000)
     parser.add_argument('--model_load_path', type=str, default=None)
     parser.add_argument('--train_warmup_steps', type=int, default=None)
     parser.add_argument('--train_intermediate_steps', type=int, default=None)
@@ -251,6 +244,7 @@ if __name__=="__main__":
 
     train_segment = args.train_segment
     eval_segment = args.eval_segment
+    max_segment = max(train_segment, eval_segment)
     V = args.vocab_size
     n = args.elements_number
     l = args.elements_length
@@ -265,9 +259,12 @@ if __name__=="__main__":
     n_layer = args.model_layer_num
     n_hidden = args.model_hidden_size
     n_head = args.model_head_num
+    n_mem = args.model_memory_size
     load_model_path = args.model_load_path
     eval_dataset = args.evaluation_data_path
     batch_size = args.batch_size
+    opt_lr = args.opt_learning_rate
+    opt_steps = args.opt_warmup_steps
 
     train_warmup_steps = args.train_warmup_steps
     train_intermediate_steps = args.train_intermediate_steps
@@ -277,51 +274,59 @@ if __name__=="__main__":
 
     if(version == 'v1'):
         DataGen = MetaLMv1(V, n, l, e, L)
+        pad_id = DataGen.PaddingID
+        vocab_size = DataGen.VocabSize
     elif(version == 'v2'):
         DataGen = MetaLMv2(V, ne, nh, e, L)
+        pad_id = DataGen.PaddingID
+        vocab_size = DataGen.VocabSize
+    elif(version == 'debug'):
+        DataGen = FileDataset(eval_dataset, 0)
+        pad_id = 0
+        vocab_size = V
     else:
         raise Exception("no such version %s"%version)
 
-    pad_id = DataGen.PaddingID
-    vocab_size = DataGen.VocabSize
 
     if(worker_index == 0):
         eval_loader = FileDataset(eval_dataset, pad_id)
 
     if(model_type == "LSTM"):
-        model = LSTMClassifier(
-            n_hidden, 
+        model = AutoRegressiveLSTM(
             vocab_size, 
-            dropout=0.10, 
-            nlayers=n_layer)
-    elif(model_type == "TransformerXL"):
-        model = TransformerClassifier(
-            n_hidden, 
-            vocab_size, 
-            n_layer, 
-            n_head)
-    elif(model_type == "Plasmer"):
-        model = PlasmerClassifier(
             n_hidden,
-            n_head, 
-            n_hidden * 4,
-            n_layer,
-            vocab_size,
+            n_layer)
+    elif(model_type == "RMT"):
+        model = AutoRegressiveRMT(
+            vocab_size, 
+            n_hidden, 
+            n_layer, 
+            n_head,
+            seg_len=max_segment,
+            mem_len=n_mem
+            )
+    elif(model_type == "TRN"):
+        model = AutoRegressiveTRN(
+            vocab_size, 
+            n_hidden, 
+            n_layer, 
+            n_head,
+            seg_len=max_segment,
             )
     else:
         raise Exception("No such model type: %s" % model_type)
 
-    model_info = paddle.summary(model, input_size=(1, 256), dtypes="int32", input=None)
-    print(model_info)
-    debug_print_para(model)
+    #model_info = paddle.summary(model, input_size=(1, 256), dtypes="int32", input=None)
+    #print(model_info)
+    #debug_print_para(model)
 
     model = paddle.DataParallel(model)
 
-    #lr = paddle.optimizer.lr.NoamDecay(d_model=1.0e-3, warmup_steps=1000)
-    #lr = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=1.0e-3, T_max=1000, eta_min=1.0e-4)
+    lr = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=opt_lr, T_max=10, eta_min=1.0e-3 * opt_lr, verbose=True)
     #lr = paddle.optimizer.lr.CyclicLR(base_learning_rate=2.0e-3, max_learning_rate=5.0e-5, step_size_up=10)
     #lr = paddle.optimizer.lr.InverseTimeDecay(learning_rate=5.0e-3, gamma=0.25, last_epoch=-1)
-    lr = paddle.optimizer.lr.ExponentialDecay(learning_rate=1.0e-3, gamma=0.99)
+    #lr = paddle.optimizer.lr.NoamDecay(d_model=n_hidden, warmup_steps=opt_steps)
+
     opt = paddle.optimizer.AdamW(learning_rate=lr, parameters=model.parameters(),
             grad_clip=paddle.nn.ClipGradByGlobalNorm(1.0),
             )
@@ -334,15 +339,15 @@ if __name__=="__main__":
 
     #Add inner loss weights
     if(train_warmup_steps is not None):
-        inner_loss_weights = linear_segments(L, warmup_steps=train_warmup_steps, intermediate_steps=train_intermediate_steps)
+        inner_loss_weights = linear_segments(L + 1, warmup_steps=train_warmup_steps, intermediate_steps=train_intermediate_steps)
     else:
         inner_loss_weights = None
 
+    print("Loss weights:", inner_loss_weights)
     epoch = 0
 
 
     while epoch < MAX_EPOCH:
-
         batch_idx = 0
         epoch += 1
         epoch_loss = None
@@ -350,10 +355,12 @@ if __name__=="__main__":
         # Training
         is_end = False
         train_stat = EpochStat()
+        if(isinstance(DataGen, FileDataset)):
+            DataGen.reset(batch_size)
         while batch_idx < MAX_ITERATION and not is_end:
             model.train()
             batch_idx += 1
-            batch_loss, batch_toks, is_end = train_batch(
+            batch_loss, batch_toks, pos_loss, is_end = train_batch(
                     DataGen, 
                     model, 
                     pad_id,
@@ -365,12 +372,13 @@ if __name__=="__main__":
                     detach_segments=detach_segments,
                     is_train=True
                     )
-            train_stat.add_batch(batch_toks, batch_loss, None)
+            train_stat.add_batch(batch_toks, batch_loss, pos_loss, None)
             print("Epoch: %d, batch %d, learning rate: %f, average loss: %s"%(epoch, batch_idx, opt.get_lr(), formulate_numpyarray(batch_loss / batch_toks)))
             sys.stdout.flush()
         lr.step()
-        epoch_loss, _ = train_stat.get_statistics()
+        epoch_loss, pos_loss, _ = train_stat.get_statistics()
         print("[TRAINING] Epoch: %d, training loss: %s"%(epoch, formulate_numpyarray(epoch_loss)))
+        print("[TRAINING]" + "\t".join(map(lambda x:"%.3f"%x, pos_loss.tolist())))
         sys.stdout.flush()
 
         if(worker_index == 0):
@@ -385,7 +393,7 @@ if __name__=="__main__":
             model.eval()
             eval_stat = EpochStat()
             while not is_end:
-                batch_loss, batch_toks, is_end = train_batch(
+                batch_loss, batch_toks, pos_loss, is_end = train_batch(
                         eval_loader, 
                         model, 
                         pad_id,
@@ -394,8 +402,10 @@ if __name__=="__main__":
                         seg_size=eval_segment,
                         is_train=False
                         )
-                eval_stat.add_batch(batch_toks, batch_loss, None)
-            epoch_loss, _ = eval_stat.get_statistics()
+                #print(batch_loss, batch_toks)
+                eval_stat.add_batch(batch_toks, batch_loss, pos_loss, None)
+            epoch_loss, pos_loss, _ = eval_stat.get_statistics()
             print("[EVALUATING] Epoch: %d, evaluation ppl: %s"%(epoch, formulate_numpyarray(epoch_loss)))
+            print("[EVALUATING]" + "\t".join(map(lambda x:"%.3f"%x, pos_loss.tolist())))
             sys.stdout.flush()
 

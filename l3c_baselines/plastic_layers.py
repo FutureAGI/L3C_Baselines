@@ -25,9 +25,7 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 import numpy
-
-def debug_print_norm(string, mem):
-    print(string, "mem", paddle.linalg.norm(mem, p=numpy.inf))
+from .utils import debug_print_norm
 
 class FullPlasticLayer(nn.Layer):
     """Full Plastic Layer
@@ -45,7 +43,7 @@ class FullPlasticLayer(nn.Layer):
                  plasticity_rule="mABCD",
                  dopamine_activation="tanh",
                  activation="gelu",
-                 memory_decay=0.01,
+                 memory_decay=0.02,
                  memory_decay_thres=5.0,
                  initial_variance=0.10,
                  learning_rate=None,
@@ -78,12 +76,6 @@ class FullPlasticLayer(nn.Layer):
             pass
         else:
             raise Exception("Unexpected plasticity rule type:", self.plasticity_rule)
-
-        self.output_bias = self.create_parameter(
-                shape=[self.d_out],
-                attr=None,
-                dtype=self._dtype,
-                is_bias=True)
 
         self.mem_decay_thres = memory_decay_thres
         self.mem_decay = memory_decay
@@ -150,17 +142,17 @@ class FullPlasticLayer(nn.Layer):
         x_out = modulation * x_out
 
         # io, ii, oo: [B, D_in, D_out]
-        io = paddle.mean(paddle.matmul(x_in, x_out), axis=1)
+        io = paddle.mean(x_in * x_out, axis=1)
         ii = paddle.mean(modulation * x_in, axis=1)
         oo = paddle.mean(x_out, axis=1)
+        xx = paddle.mean(modulation, axis=1)
 
         # raw_mod: [B, D_in, D_out]
-        raw_mod = self.w_a * io + self.w_b * ii + self.w_c * oo + self.w_d
-
+        raw_mod = self.w_a * io + self.w_b * ii + self.w_c * oo + self.w_d * xx
 
         # goes back to [B, D_in, D_out]
         update_mem = mem + self.learning_rate * raw_mod
-        update_mem = (1 - self.mem_decay) * update_mem + self.mem_decay * paddle.clip(update_mem, min=-self.mem_decay_thres, max=self.mem_decay_thres)
+        update_mem = self.regularize_mem(update_mem)
 
         return update_mem
 
@@ -170,14 +162,18 @@ class FullPlasticLayer(nn.Layer):
 
         io = paddle.mean(paddle.matmul(x_in, x_out), axis=1)
         update_mem = mem + self.learning_rate * self.w_a * io
+        update_mem = self.regularize_mem(update_mem)
 
         return update_mem
+
+    def regularize_mem(self, mem):
+        return  (1.0 - self.mem_decay) * mem + self.mem_decay * paddle.clip(mem, -self.mem_decay_thres, self.mem_decay_thres)
 
     def forward(self, src, mem):
         """ src: input [B, L, D_in],  tgt: additional output [B, L, D_out]
             mem: memory [B, D_in, D_out]
         """
-        out = self.activation(F.linear(src, mem) + self.output_bias) 
+        out = self.activation(F.linear(src, mem)) 
         return out
 
     def update_mem(self, src, tgt, mem):
@@ -185,4 +181,128 @@ class FullPlasticLayer(nn.Layer):
             tgt: output [B, L, D_out]
             mem: memory [B, D_in, D_out]
         """
-        return self.plasticity_update(src, tgt, mem)
+        return self.plasticity_update(src.detach(), tgt.detach(), mem)
+
+class PlasticLayer2(nn.Layer):
+    """Full Plastic Layer
+        Fully connected layer taking x_in = [batch, L, D_in] as input and give x_out = [batch, L, D_out] as output.
+        Input to output projection is linear as x_out = W * x_in + b
+        The plasticity in W is given by 
+            W = W + m (A x_out * x_in + B x_out + C x_in + D)
+        a is calculated by post synaptic signals
+            m = sigma (W' * x_out + b')
+    """
+
+    def __init__(self,
+                 input_dim,
+                 output_dim,
+                 rw_activation=("sigmoid", "softsign"),
+                 f_activation=("sigmoid", "sigmoid"),
+                 activation="gelu",
+                 initial_variance=0.10,
+                 learning_rate=None,
+                 weight_attr=None,
+                 bias_attr=None):
+        super(PlasticLayer2, self).__init__()
+        self.d_in = input_dim
+        self.d_out = output_dim
+
+        self._dtype = self._helper.get_default_dtype()
+        if(learning_rate is None):
+            self.learning_rate = paddle.sqrt(paddle.to_tensor(1.0 / output_dim))
+        else:
+            self.learning_rate = learning_rate
+        self.weight_attr = weight_attr
+        self.bias_attr = bias_attr
+        self.rw_activation_i = getattr(
+            F, rw_activation[0])
+        self.rw_activation_o = getattr(
+            F, rw_activation[1])
+        self.f_activation_i = getattr(
+            F, f_activation[0])
+        self.f_activation_o = getattr(
+            F, f_activation[1])
+        self.activation = getattr(
+            F, activation)
+
+        self.init_parameter()
+        self.initial_variance = initial_variance
+
+    def plasticity_update(self, i, o, mem):
+        # i: [B, L, D_in]
+        # o: [B, L, D_out]
+        # mem: [B, D_in, D_out]
+        # return updated mem:  [B, D_in, D_out]
+
+        # [B, L, D_in / D_out]
+        x_in = self.rw_activation_i(paddle.matmul(i, self.w_i) + self.b_i)
+        x_out = self.rw_activation_o(paddle.matmul(o, self.w_o) + self.b_o)
+
+        f_in = self.f_activation_i(paddle.matmul(i, self.w_f_i) + self.b_f_i)
+        f_out = self.f_activation_o(paddle.matmul(o, self.w_f_o) + self.b_f_o)
+
+        # [B, D_in, D_out]
+        delta_w = paddle.mean(paddle.unsqueeze(x_in, 3) * paddle.unsqueeze(x_out, 2), axis=1)
+        delta_m = paddle.mean(paddle.unsqueeze(f_in, 3) * paddle.unsqueeze(f_out, 2), axis=1)
+        debug_print_norm(delta_w, "delta_w")
+        debug_print_norm(delta_m, "delta_m")
+        
+        return (1.0 - delta_m) * mem + self.learning_rate * delta_w
+
+    def init_parameter(self):
+        # Parameter initialization for mABCD plasticity rule
+        self.w_i = self.create_parameter(
+            shape=[self.d_in, self.d_in],
+            attr=self.weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.b_i = self.create_parameter(
+            shape=[self.d_in,],
+            attr=self.bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+        self.w_o = self.create_parameter(
+            shape=[self.d_out, self.d_out],
+            attr=self.weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.b_o = self.create_parameter(
+            shape=[self.d_out,],
+            attr=self.bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+
+        self.w_f_i = self.create_parameter(
+            shape=[self.d_in, self.d_in],
+            attr=self.weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.b_f_i = self.create_parameter(
+            shape=[self.d_in,],
+            attr=self.bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+        self.w_f_o = self.create_parameter(
+            shape=[self.d_out, self.d_out],
+            attr=self.weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.b_f_o = self.create_parameter(
+            shape=[self.d_out,],
+            attr=self.bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+
+    def forward(self, src, mem):
+        """ src: input [B, L, D_in],  tgt: additional output [B, L, D_out]
+            mem: memory [B, D_in, D_out]
+        """
+        out = self.activation(F.linear(src, mem)) 
+        return out
+
+    def update_mem(self, src, tgt, mem):
+        """ src: input  [B, L, D_in] 
+            tgt: output [B, L, D_out]
+            mem: memory [B, D_in, D_out]
+        """
+        return self.plasticity_update(src.detach(), tgt.detach(), mem)
