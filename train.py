@@ -13,11 +13,9 @@ from l3c_baselines.utils import load_model, save_model
 from l3c_baselines.utils import debug_print_norm, debug_print_grad, debug_print_para
 from l3c_baselines.LSTM_block import AutoRegressiveLSTM
 from l3c_baselines.RMT_block import AutoRegressiveRMT
+from l3c_baselines.RMT2_block import AutoRegressiveRMT2
 from l3c_baselines.TRN_block import AutoRegressiveTRN
 from l3c.metalm import MetaLMv1, MetaLMv2
-
-MAX_EPOCH = 200
-MAX_ITERATION = 100
 
 if os.name == 'nt':
     import win32api, win32con
@@ -121,7 +119,6 @@ def INNER_ITERATOR(fea, lab, segment_size, pad_id):
         yield b_idx, e_idx, fea[:, b_idx:e_idx], lab[:, b_idx:e_idx], seg_toks
         b_idx = e_idx
 
-
 def train_batch(
         data_generator, 
         model, 
@@ -219,6 +216,7 @@ if __name__=="__main__":
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--vocab_size', type=int, default=64)
     parser.add_argument('--embedding_size', type=int, default=16)
+    parser.add_argument('--n_gram', type=int, default=3)
     parser.add_argument('--hidden_size', type=int, default=16)
     parser.add_argument('--elements_length', type=int, default=64)
     parser.add_argument('--elements_number', type=int, default=10)
@@ -236,6 +234,8 @@ if __name__=="__main__":
     parser.add_argument('--opt_learning_rate', type=float, default=1.0e-4)
     parser.add_argument('--opt_warmup_steps', type=float, default=2000)
     parser.add_argument('--model_load_path', type=str, default=None)
+    parser.add_argument('--train_max_epochs', type=int, default=200)
+    parser.add_argument('--train_epoch_max_iterations', type=int, default=500)
     parser.add_argument('--train_warmup_steps', type=int, default=None)
     parser.add_argument('--train_intermediate_steps', type=int, default=None)
     parser.add_argument('--evaluation_data_path', type=str, default=None)
@@ -250,6 +250,7 @@ if __name__=="__main__":
     l = args.elements_length
     L = args.sequence_length
     e = args.error_rate
+    ng = args.n_gram
     nh = args.hidden_size
     ne = args.embedding_size
     version = args.version
@@ -268,6 +269,9 @@ if __name__=="__main__":
 
     train_warmup_steps = args.train_warmup_steps
     train_intermediate_steps = args.train_intermediate_steps
+    
+    train_max_epochs = args.train_max_epochs
+    train_epoch_max_iterations = args.train_epoch_max_iterations
 
     worker_num = fleet.worker_num()
     worker_index = fleet.worker_index()
@@ -277,7 +281,7 @@ if __name__=="__main__":
         pad_id = DataGen.PaddingID
         vocab_size = DataGen.VocabSize
     elif(version == 'v2'):
-        DataGen = MetaLMv2(V, ne, nh, e, L)
+        DataGen = MetaLMv2(V, ng, ne, nh, e, L)
         pad_id = DataGen.PaddingID
         vocab_size = DataGen.VocabSize
     elif(version == 'debug'):
@@ -305,6 +309,15 @@ if __name__=="__main__":
             seg_len=max_segment,
             mem_len=n_mem
             )
+    elif(model_type == "RMT2"):
+        model = AutoRegressiveRMT2(
+            vocab_size, 
+            n_hidden, 
+            n_layer, 
+            n_head,
+            seg_len=max_segment,
+            mem_len=n_mem
+            )
     elif(model_type == "TRN"):
         model = AutoRegressiveTRN(
             vocab_size, 
@@ -320,7 +333,7 @@ if __name__=="__main__":
     #print(model_info)
     #debug_print_para(model)
 
-    model = paddle.DataParallel(model)
+    model = paddle.DataParallel(model, find_unused_parameters=True)
 
     lr = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=opt_lr, T_max=10, eta_min=1.0e-3 * opt_lr, verbose=True)
     #lr = paddle.optimizer.lr.CyclicLR(base_learning_rate=2.0e-3, max_learning_rate=5.0e-5, step_size_up=10)
@@ -347,7 +360,7 @@ if __name__=="__main__":
     epoch = 0
 
 
-    while epoch < MAX_EPOCH:
+    while epoch < train_max_epochs:
         batch_idx = 0
         epoch += 1
         epoch_loss = None
@@ -357,7 +370,7 @@ if __name__=="__main__":
         train_stat = EpochStat()
         if(isinstance(DataGen, FileDataset)):
             DataGen.reset(batch_size)
-        while batch_idx < MAX_ITERATION and not is_end:
+        while batch_idx < train_epoch_max_iterations and not is_end:
             model.train()
             batch_idx += 1
             batch_loss, batch_toks, pos_loss, is_end = train_batch(

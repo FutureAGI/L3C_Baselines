@@ -40,7 +40,6 @@ def linear_segments(length,
 def formulate_numpyarray(array):
     return "\t".join(map(lambda x:"%.3f"%x, array.tolist()))
 
-
 class EpochStat(object):
     def __init__(self):
         self.epoch_loss = None
