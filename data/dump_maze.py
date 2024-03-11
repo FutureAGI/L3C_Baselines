@@ -80,23 +80,38 @@ if __name__=="__main__":
     parser.add_argument("--task_type", type=str, default="NAVIGATION", help="task type")
     parser.add_argument("--maze_type", type=str, default="Discrete3D", help="maze type")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps")
-    parser.add_argument("--n", type=int, default=15, help="n")
-    parser.add_argument("--density", type=float, default=0.36, help="density")
-    parser.add_argument("--n_landmarks", type=int, default=10, help="n_landmarks")
+    parser.add_argument("--n", type=str, default="9,15,25,35", help="n:a list of int")
+    parser.add_argument("--density", type=str, default="0.20,0.34,0.36,0.38,0.45", help="density:a list of float")
+    parser.add_argument("--n_landmarks", type=str, default="5,6,7,8,9,10", help="n_landmarks:a list of int")
+    parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
     args = parser.parse_args()
 
-    observations, actions, rewards, maps = test_agent_maze(
-            maze_type=args.maze_type, 
-            max_steps=args.max_steps,
-            n=args.n, 
-            task_type=args.task_type, 
-            density=args.density, 
-            n_landmarks=args.n_landmarks)
+    density_list = list(map(float, args.density.split(",")))
+    n_list = list(map(int, args.n.split(",")))
+    n_landmarks_list = list(map(int, args.n_landmarks.split(",")))
 
-    # Convert observations, actions, and rewards to lmdb format and save file
-    # Open the lmdb environment
-    create_directory(args.output)
-    numpy.save("%s/observations.npy" % args.output, observations)
-    numpy.save("%s/actions.npy" % args.output, actions)
-    numpy.save("%s/rewards.npy" % args.output, rewards)
-    numpy.save("%s/maps.npy" % args.output, maps)
+    for idx in range(args.epochs):
+        n = random.choice(n_list)
+        n_landmarks = random.choice(n_landmarks_list)
+        density = random.choice(density_list)
+
+        observations, actions, rewards, maps = test_agent_maze(
+                maze_type=args.maze_type,
+                max_steps=args.max_steps,
+                n=n,
+                task_type=args.task_type,
+                density=density,
+                n_landmarks=n_landmarks)
+
+        if(args.epochs > 1):
+            file_path = "%s-%04d"%(args.output, idx)
+        else:
+            file_path = args.output
+
+        # Convert observations, actions, and rewards to lmdb format and save file
+        # Open the lmdb environment
+        create_directory(file_path)
+        numpy.save("%s/observations.npy" % file_path, observations)
+        numpy.save("%s/actions.npy" % file_path, actions)
+        numpy.save("%s/rewards.npy" % file_path, rewards)
+        numpy.save("%s/maps.npy" % file_path, maps)
