@@ -12,6 +12,7 @@ class Models(nn.Module):
                  action_size=4,
                  map_size=5,
                  hidden_size=256,
+                 max_steps=256,
                  nhead=8,
                  n_res_block=4,
                  n_trn_block=8):
@@ -19,8 +20,10 @@ class Models(nn.Module):
 
         self.encoder_1 = Encoder(3, hidden_size // 4, n_res_block, hidden_size // 4)
         self.encoder_2 = Encoder(hidden_size // 4, hidden_size, n_res_block, hidden_size // 4)
+
         self.decoder = Decoder(hidden_size, 3, hidden_size, n_res_block, hidden_size)
-        self.map_decoder = MapDecoder(hidden_size, 3, hidden_size, n_res_block, hidden_size)
+
+        self.map_decoder = MapDecoder(hidden_size, 3, hidden_size // 4, map_size, n_res_block, hidden_size // 4)
 
         # 创建动作编码层
         self.action_embedding = nn.Embedding(action_size + 1, hidden_size)
@@ -31,20 +34,24 @@ class Models(nn.Module):
         temporal_encoder_layer = nn.TransformerEncoderLayer(hidden_size, nhead)
         self.temporal_encoder = nn.TransformerEncoder(temporal_encoder_layer, num_layers=n_trn_block)
 
+        # 创建位置编码和Query向量[1, NT, 1, C]
+        self.max_steps = max_steps
+        temporal_embeddings = torch.randn(1, self.max_steps, 1, hidden_size)
+        self.temporal_query = nn.Parameter(temporal_embeddings, requires_grad=True)
+
         # 创建位置编码和Query向量[1, 1, NP, C]
         self.position_encoding_size = image_size // 16
         self.position_vocab_size = self.position_encoding_size * self.position_encoding_size
-        self.position_embedding = nn.Embedding(self.position_vocab_size, hidden_size)
-        self.position_query = self.position_embedding.weight.data.view(1, 1, self.position_vocab_size, hidden_size)
-        
-        # 创建地图Query向量[1, 1, NM, C]
-        self.map_size = map_size
-        self.map_vocab_size = map_size * map_size
-        self.map_embedding = nn.Embedding(self.map_vocab_size, hidden_size)
-        self.map_query = self.map_embedding.weight.data.view(1, 1, self.map_vocab_size, hidden_size)
+        position_embeddings = torch.randn(1, 1, self.position_vocab_size, hidden_size)
+        self.position_query = nn.Parameter(position_embeddings, requires_grad=True)
 
-        # 创建动作Query向量
-        self.action_query = self.action_embedding(torch.tensor([action_size], dtype=torch.long)).view(1, 1, -1, hidden_size)
+        #self.position_query.weight.register_backward_hook(backward_hook)
+        
+        # 创建地图Query向量[1, 1, 1, C]
+        map_embeddings = torch.randn(1, 1, 1, hidden_size)
+        self.map_query = nn.Parameter(map_embeddings, requires_grad=True)
+
+        self.hidden_size = hidden_size
 
     def forward(self, observations, actions, rewards, is_train=True):
         """
@@ -70,8 +77,8 @@ class Models(nn.Module):
         action_in = self.action_embedding(actions).view(B, NT, 1, eC)
 
         if(is_train):
-            mask_obs = torch.rand_like(actions, dtype=torch.float).lt(0.15).float()
-            mask_act = torch.rand_like(actions, dtype=torch.float).lt(0.15).float()
+            mask_obs = torch.rand_like(actions, dtype=torch.float).lt(0.15).float().detach()
+            mask_act = torch.rand_like(actions, dtype=torch.float).lt(0.15).float().detach()
             map_in = self.map_query.repeat((B, NT, 1, 1))
         else:
             #change NT to NT + 1 for all the inputs
@@ -84,22 +91,32 @@ class Models(nn.Module):
             mask_act[:, -1] = 1
             NT = NT + 1
 
+        # 创建动作Query向量
+        action_query = self.action_embedding(torch.tensor([self.action_size], dtype=torch.long)).view(1, 1, -1, self.hidden_size)
         obs_mask = (1 - mask_obs.unsqueeze(-1).unsqueeze(-1)) * enc_out[:, 1:, :, :] + self.position_query
-        act_mask = (1 - mask_act.unsqueeze(-1).unsqueeze(-1)) * action_in + self.action_query
+        act_mask = (1 - mask_act.unsqueeze(-1).unsqueeze(-1)) * action_in + action_query
         map_mask = self.map_query.repeat((B, NT, 1, 1))
 
-        # Get the size of [B, NT * (eW * eH + Nm * Nm + 1), eC]
-        inputs = torch.cat([obs_mask, act_mask, map_mask], dim=2).view(B, -1, eC)
+        # Get the size of [B, NT, (2 + eW * eH), eC]
+        inputs = torch.cat([act_mask, map_mask, obs_mask], dim=2)
+        inputs = inputs + self.temporal_query[:, 1:(NT+1)]
 
-        # Get the size of [B, eWeH + NT * (eWeH + Nm^2 + 1), eC]
-        inputs = torch.cat([enc_out[:, 0, :, :], inputs], dim=1)
+        # Get the size of [B, NT * (2 + eW * eH), eC]
+        inputs = inputs.view(B, -1, eC)
 
-        # Get the output size of [B, NT, eWeH + Nm^2 + 1, eC]
-        outputs = self.temporal_encoder(inputs)[:, eW * eH:, :].view(B, NT, -1, eC)
+        # Get the size of [B, eWeH + NT * (2 + eWeH), eC]
+        inputs = torch.cat([enc_out[:, 0, :, :] + self.temporal_query[:, 0], inputs], dim=1)
 
-        obs_output = outputs[:, :, :eW * eH]
-        act_output = outputs[:, :, eW * eH]
-        map_output = outputs[:, :, eW * eH + 1:]
+        # Get the output size of [B, NT, 2 + eWeH, eC]
+        seq_len = inputs.size(1)
+        mask = (torch.triu(torch.ones(seq_len, seq_len, device=inputs.device)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        outputs = self.temporal_encoder(inputs.permute(1, 0, 2), mask=mask).permute(1, 0, 2)
+        outputs = outputs[:, eW * eH:, :].view(B, NT, -1, eC)
+
+        act_output = outputs[:, :, 0]
+        map_output = outputs[:, :, 1]
+        obs_output = outputs[:, :, 2:]
 
         img_out = self.decoder(obs_output.reshape(B * NT, eW, eH, eC).permute(0, 3, 1, 2))
         _, n_c, n_w, n_h = img_out.shape
@@ -107,7 +124,7 @@ class Models(nn.Module):
         img_out = img_out.reshape(B, NT, n_c, n_w, n_h)
         # [B, N_T, action_size]
         act_out = self.action_decoder(act_output.reshape(B * NT, eC)).reshape(B, NT, self.action_size)
-        map_out = self.map_decoder(map_output.reshape(B * NT, self.map_size, self.map_size, eC).permute(0, 3, 1, 2))
+        map_out = self.map_decoder(map_output.reshape(B * NT, eC))
         _, n_c, n_w, n_h = map_out.shape
         # [B, N_T, C, W, H]
         map_out = map_out.reshape(B, NT, n_c, n_w, n_h)

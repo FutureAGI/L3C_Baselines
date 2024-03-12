@@ -80,14 +80,18 @@ class MapDecoder(nn.Module):
         self, 
         in_channel, 
         out_channel, 
-        channel, 
+        channel,
+        map_size,
         n_res_block, 
         n_res_channel
     ):
         super().__init__()
 
-        blocks = [nn.Conv2d(in_channel, channel, 3, padding=1)]
+        self.input_mapping = nn.Linear(in_channel, map_size * map_size * channel)
+        self.map_size = map_size
+        self.channel = channel
 
+        blocks = [nn.Conv2d(channel, channel, 3, padding=1)]
         for i in range(n_res_block):
             blocks.append(ResBlock(channel, n_res_channel))
 
@@ -102,4 +106,6 @@ class MapDecoder(nn.Module):
         self.blocks = nn.Sequential(*blocks)
 
     def forward(self, input):
-        return self.blocks(input)
+        out = self.input_mapping(input)
+        out = out.view(-1, self.channel, self.map_size, self.map_size)
+        return self.blocks(out)
