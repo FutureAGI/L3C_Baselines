@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 from modules import Encoder, Decoder, ResBlock, MapDecoder
 
-class Models(nn.Module):
+class MazeModels(nn.Module):
     def __init__(self, 
                  image_size=128,
                  action_size=4,
@@ -169,7 +169,7 @@ class Models(nn.Module):
         
 
 if __name__=="__main__":
-    model = Models()
+    model = MazeModels()
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)
