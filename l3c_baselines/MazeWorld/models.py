@@ -161,7 +161,7 @@ class MazeModels(nn.Module):
         mse_loss_1 = self.mse_loss_img(img_out, observations[:, 1:], mask_obs)
         mse_loss_2 = self.mse_loss_img(map_out, local_maps)
         ce_loss = self.ce_loss_act(act_out, actions, mask_act)
-        return mse_loss_1 + mse_loss_2 + ce_loss
+        return mse_loss_1, mse_loss_2, ce_loss
 
     def inference(self, observations, actions, rewards):
         img_out, act_out, map_out, mask_obs, mask_act = self.forward(observations, actions, rewards, is_train=False)
