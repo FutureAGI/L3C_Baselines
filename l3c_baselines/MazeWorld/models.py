@@ -26,7 +26,7 @@ class MazeModels(nn.Module):
         self.map_decoder = MapDecoder(hidden_size, 3, hidden_size // 4, map_size, n_res_block, hidden_size // 4)
 
         # 创建动作编码层
-        self.action_embedding = nn.Embedding(action_size + 1, hidden_size)
+        self.action_embedding = nn.Embedding(action_size, hidden_size)
         self.action_size = action_size
         self.action_decoder = nn.Sequential(nn.Linear(hidden_size, action_size), nn.Softmax(dim=1))
 
@@ -46,10 +46,11 @@ class MazeModels(nn.Module):
         self.position_query = nn.Parameter(position_embeddings, requires_grad=True)
 
         #self.position_query.weight.register_backward_hook(backward_hook)
-        
         # 创建地图Query向量[1, 1, 1, C]
         map_embeddings = torch.randn(1, 1, 1, hidden_size)
         self.map_query = nn.Parameter(map_embeddings, requires_grad=True)
+        mask_action_embeddings = torch.randn(1, 1, 1, hidden_size)
+        self.action_query = nn.Parameter(mask_action_embeddings, requires_grad=True)
 
         self.hidden_size = hidden_size
 
@@ -92,9 +93,8 @@ class MazeModels(nn.Module):
             NT = NT + 1
 
         # 创建动作Query向量
-        action_query = self.action_embedding(torch.tensor([self.action_size], dtype=torch.long)).view(1, 1, -1, self.hidden_size)
         obs_mask = (1 - mask_obs.unsqueeze(-1).unsqueeze(-1)) * enc_out[:, 1:, :, :] + self.position_query
-        act_mask = (1 - mask_act.unsqueeze(-1).unsqueeze(-1)) * action_in + action_query
+        act_mask = (1 - mask_act.unsqueeze(-1).unsqueeze(-1)) * action_in + self.action_query
         map_mask = self.map_query.repeat((B, NT, 1, 1))
 
         # Get the size of [B, NT, (2 + eW * eH), eC]
@@ -132,7 +132,7 @@ class MazeModels(nn.Module):
         return img_out, act_out, map_out, mask_obs, mask_act
 
     def mse_loss_img(self, img_out, img_gt, mask = None):
-        mse_loss = torch.mean((img_out - img_gt)**2, dim=[2, 3, 4])
+        mse_loss = torch.mean(((img_out - img_gt) / 256)**2, dim=[2, 3, 4])
         if mask is not None:
             mse_loss = mse_loss * mask
             sum_mask = torch.sum(mask)

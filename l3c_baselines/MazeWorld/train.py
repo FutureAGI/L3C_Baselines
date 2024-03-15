@@ -1,4 +1,5 @@
 import argparse
+import sys
 import os
 import torch
 import numpy
@@ -7,16 +8,36 @@ from models import MazeModels
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
 
+def show_bar(fraction, bar):
+    percentage = int(bar * fraction)
+    empty = bar - percentage
+    sys.stdout.write("\r") 
+    sys.stdout.write("[") 
+    sys.stdout.write("=" * percentage)
+    sys.stdout.write(" " * empty)
+    sys.stdout.write("]") 
+    sys.stdout.write("%.2f %%" % (percentage * 100 / bar))
+
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def train_epoch(rank, use_gpu, world_size, data_path, time_step, learning_rate):
+def model_path(save_model_path, epoch_id):
+    directory_path = '%s/%02d/' % (save_model_path, epoch_id)
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
+    return ('%s/model.pth' % directory_path,'%s/optimizer.pth' % directory_path) 
+
+def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
+        train_data_path, test_data_path, 
+        load_model_path, save_model_path, 
+        time_step, learning_rate, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -25,56 +46,143 @@ def train_epoch(rank, use_gpu, world_size, data_path, time_step, learning_rate):
         device = torch.device('cpu')
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
-    print("use_gpu", use_gpu, "rank:", rank, device)
+    if(main_rank is None):
+        main = False
+    elif(main_rank == "all" or main_rank == rank):
+        main = True
+    else:
+        main = False
+
+    if(main):
+        print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModels(image_size=256, map_size=7, action_size=5)
-    print("Number of parameters: ", count_parameters(model))
+    model = MazeModels(image_size=128, map_size=7, action_size=5)
+    if(main):
+        print("Number of parameters: ", count_parameters(model))
+
     model = model.to(device)
+
     if use_gpu:
         model = DDP(model, device_ids=[rank])
     else:
         model = DDP(model)
 
     # Example dataset and dataloader
-    dataset = MazeDataSet(data_path, time_step)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=8, sampler=sampler)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    if(main):
+        print("Initializing Training Dataset...")
+    train_dataset = MazeDataSet(train_data_path, time_step, verbose=main)
+    if(main):
+        print("Initializing Testing Dataset...")
+    test_dataset = MazeDataSet(test_data_path, time_step, verbose=main)
 
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=0)
+
+    if(load_model_path is not None):
+        model.load_state_dict(torch.load('%s/model.pth' % load_model_path))
+        optimizer.load_state_dict(torch.load('%s/optimizer.pth' % load_model_path))
+
+    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
     # Example training loop
-    total_iteration = 0
-    for obs,acts,rews,maps in dataloader:
+    total_iteration = len(train_dataloader)
+    for epoch_id in range(max_epochs):
+        for batch_idx, batch in enumerate(train_dataloader):
+            obs, acts, rews, maps = batch
+            obs = obs.to(device)
+            acts = acts.to(device)
+            rews = rews.to(device)
+            maps = maps.to(device)
+            obs = obs.permute(0, 1, 4, 2, 3)
+            maps = maps.permute(0, 1, 4, 2, 3)
+            lmse1, lmse2, lce = model.module.train_loss(obs, acts, rews, maps)
+            loss = lmse1 + 0.10 * lmse2 + lce
+
+            try:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                prt_loss = (lmse1.detach().cpu().numpy(), lmse2.detach().cpu().numpy(), lce.detach().cpu().numpy())
+                if(main):
+                    percentage = (batch_idx + 1) / total_iteration * 100
+                    print("Epoch: %s [ %.2f %% ] Iteration: %s LearningRate:%f Loss: Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s" % 
+                            ((epoch_id, percentage, batch_idx, scheduler.get_last_lr()[0]) + prt_loss))
+                sys.stdout.flush()
+            except RuntimeError as e:
+                print("RuntimeError during backward pass:", e)
+                # Additional debugging steps or handling of the error
+                break  # Exit the loop or handle the error appropriately
+
+        if(main):
+            mod_path, opt_path = model_path(save_model_path, epoch_id)
+            torch.save(model.state_dict(), mod_path)
+            torch.save(optimizer.state_dict(), opt_path)
+
+        test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
+
+def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
+    # Example training loop
+    results = []
+    all_length = len(test_dataloader)
+
+    if(main):
+        print("[EVALUATION] Epochs: %s..." % epoch_id)
+    for batch_idx, batch in enumerate(test_dataloader):
+        obs,acts,rews,maps = batch
         obs = obs.to(device)
         acts = acts.to(device)
         rews = rews.to(device)
         maps = maps.to(device)
-        print(obs.shape, maps.shape)
         obs = obs.permute(0, 1, 4, 2, 3)
         maps = maps.permute(0, 1, 4, 2, 3)
-        lmse1, lmse2, lce = model.module.train_loss(obs, acts, rews, maps)
-        loss = lmse1 + lmse2 + lce
+        length = rews.shape[0] * rews.shape[1]
+        with torch.no_grad():
+            lmse1, lmse2, lce = model.module.train_loss(obs, acts, rews, maps)
 
-        try:
-            optimizer.zero_grad()
-            loss.backward()
-            prt_loss = (lmse1.detach().numpy(), lmse2.detach().numpy(), lce.detach().numpy())
-            total_iteration += 1
-            print("Iteration: %s; Current File: %s; Loss: Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s" % prt_loss)
+        dist.all_reduce(lmse1.data)
+        dist.all_reduce(lmse2.data)
+        dist.all_reduce(lce.data)
+        results.append((lmse1.detach().cpu(),lmse2.detach().cpu(),lce.detach().cpu(), length))
+
+        if(main):
+            show_bar((batch_idx + 1) / all_length, 100)
             sys.stdout.flush()
-            optimizer.step()
-        except RuntimeError as e:
-            print("RuntimeError during backward pass:", e)
-            # Additional debugging steps or handling of the error
-            break  # Exit the loop or handle the error appropriately
+
+    sum_lmse1 = 0
+    sum_lmse2 = 0
+    sum_lce = 0
+    sum_cnt = 0
+    for lmse1, lmse2, lce, n in results:
+        sum_lmse1 += n * lmse1
+        sum_lmse2 += n * lmse2
+        sum_lce += n * lce
+        sum_cnt += n
+    sum_lmse1 /= sum_cnt
+    sum_lmse2 /= sum_cnt
+    sum_lce /= sum_cnt
+
+    if(main):
+        print("\n[EVALUATION] Epochs: %s; Loss: Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s" % 
+                (epoch_id, sum_lmse1, sum_lmse2, sum_lce))
+        sys.stdout.flush()
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str)
+    parser.add_argument('--train_data_path', type=str)
+    parser.add_argument('--test_data_path', type=str)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--max_epochs', type=int, default=1)
     parser.add_argument('--time_step', type=int, default=64)
-    parser.add_argument('--verbose', type=bool, default=False)
+    parser.add_argument('--save_path', type=str, default='./model/')
+    parser.add_argument('--load_path', type=str, default=None)
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -84,7 +192,10 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
-    mp.spawn(train_epoch,
-             args=(use_gpu, world_size, args.data_path, args.time_step, args.lr),
+    mp.spawn(main_epoch,
+             args=(use_gpu, world_size, args.max_epochs, args.batch_size,
+                    args.train_data_path, args.test_data_path,
+                    args.load_path, args.save_path,
+                    args.time_step, args.lr, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

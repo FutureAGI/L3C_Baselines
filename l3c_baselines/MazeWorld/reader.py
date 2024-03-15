@@ -1,6 +1,5 @@
 import os
 import sys
-import lmdb
 import random
 import torch
 import numpy as np
@@ -8,13 +7,15 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class MazeDataSet(Dataset):
-    def __init__(self, directory, time_step):
-        print("\n\nInitializing data set from file: %s..." % directory)
+    def __init__(self, directory, time_step, verbose):
+        if(verbose):
+            print("\nInitializing data set from file: %s..." % directory)
         self.file_list = os.listdir(directory)
         self.file_list = [os.path.join(directory, file) for file in self.file_list]
         self.time_step = time_step
         self.reset()
-        print("...finished initializing data set\n\n")
+        if(verbose):
+            print("...finished initializing data set, number of samples: %s\n" % len(self.index_inverse_list))
 
     def reset(self):
         random.shuffle(self.file_list)
@@ -22,7 +23,7 @@ class MazeDataSet(Dataset):
         for file in self.file_list:
             seq_len = np.load(file + '/actions.npy').shape[0]
             n = seq_len // self.time_step
-            self.index_inverse_list.extend([(file, i * self.time_step) for i in range(n)] * seq_len)
+            self.index_inverse_list.extend([(file, i * self.time_step) for i in range(n)])
 
     def __getitem__(self, index):
         path, sub_index = self.index_inverse_list[index]
