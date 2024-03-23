@@ -8,9 +8,10 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from reader import MazeDataSet
-from models import MazeModels, gen_mask
+from models import MazeModels
 from torch.cuda.amp import autocast
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -62,7 +63,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters in Encoder: ", count_parameters(model.encoder))
-        print("Number of parameters in Temporal Encoder: ", count_parameters(model.temporal_encoder_1) * 3)
+        #print("Number of parameters in Temporal Encoder: ", count_parameters(model.temporal_encoder_1) * 3)
         print("Number of parameters in Observation Decoder: ", count_parameters(model.decoder))
         print("Number of parameters in Action Decoder: ", count_parameters(model.action_decoder))
         print("Number of parameters in Map Decoder: ", count_parameters(model.map_decoder))
@@ -89,8 +90,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=1000, eta_min=0)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = CosineAnnealingLR(optimizer, T_max=1000, eta_min=1.0e-5)
 
     if(load_model_path is not None):
         model.load_state_dict(torch.load('%s/model.pth' % load_model_path))
@@ -99,42 +100,45 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
     test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
     # Example training loop
     total_iteration = len(train_dataloader)
+    epoch_repeat = 1
     for epoch_id in range(max_epochs):
-        for batch_idx, batch in enumerate(train_dataloader):
-            obs, acts, rews, maps = batch
-            obs = obs.to(device)
-            acts = acts.to(device)
-            rews = rews.to(device)
-            maps = maps.to(device)
-            obs = obs.permute(0, 1, 4, 2, 3)
-            maps = maps.permute(0, 1, 4, 2, 3)
-            mask_obs, mask_act = gen_mask(acts, is_train=True)
-            mask_obs = mask_obs.to(device)
-            mask_act = mask_act.to(device)
-            with autocast():
-                lmse1, cnt1, lmse2, cnt2, lce, cnt3 = model.module.train_loss(obs, acts, rews, maps, mask_obs, mask_act)
-            loss = lmse1 + 0.30 * lmse2 + lce
-            prt_loss = (lmse1.detach().cpu().numpy(), lmse2.detach().cpu().numpy(), lce.detach().cpu().numpy())
+        for epoch_repeat_id in range(epoch_repeat):
+            for batch_idx, batch in enumerate(train_dataloader):
+                obs, acts, rews, maps = batch
+                obs = obs.to(device)
+                acts = acts.to(device)
+                rews = rews.to(device)
+                maps = maps.to(device)
+                obs = obs.permute(0, 1, 4, 2, 3)
+                maps = maps.permute(0, 1, 4, 2, 3)
+                with autocast():
+                    lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
+                loss = 2.0 * lrec + lobs + lact + 0.2 * lmap + lrew
+                prt_loss = (lrec.detach().cpu().numpy(), lobs.detach().cpu().numpy(), lact.detach().cpu().numpy(), lmap.detach().cpu().numpy(), lrew.detach().cpu().numpy())
 
-            try:
                 optimizer.zero_grad()
                 loss.backward()
+                clip_grad_norm_(model.module.parameters(), 1.0)
+
+                #for name, param in model.module.named_parameters():
+                #    if(param.grad is None):
+                #        prt_grad = None
+                #    else:
+                #        prt_grad = torch.norm(param.grad, torch.inf)
+                #    print(f"Gradient of {name}: {prt_grad}")
+
                 optimizer.step()
                 scheduler.step()
                 if(main):
                     percentage = (batch_idx + 1) / total_iteration * 100
-                    print("Epoch: %s [ %.2f %% ] Iteration: %s LearningRate:%f Loss: Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s" % 
+                    print("Epoch: %s [ %.2f %% ] Iteration: %s LearningRate:%f Loss: Recover: %s, Future Prediction MSE: %s, Action Cross Entropy: %s, Map Prediction MSE: %s, Reward Prediction: %s" % 
                             ((epoch_id + 1, percentage, batch_idx, scheduler.get_last_lr()[0]) + prt_loss))
                 sys.stdout.flush()
-            except RuntimeError as e:
-                print("RuntimeError during backward pass:", e)
-                # Additional debugging steps or handling of the error
-                break  # Exit the loop or handle the error appropriately
 
-        if(main):
-            mod_path, opt_path = model_path(save_model_path, epoch_id)
-            torch.save(model.state_dict(), mod_path)
-            torch.save(optimizer.state_dict(), opt_path)
+            if(main):
+                mod_path, opt_path = model_path(save_model_path, epoch_id)
+                torch.save(model.state_dict(), mod_path)
+                torch.save(optimizer.state_dict(), opt_path)
 
         test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id + 1)
 
@@ -153,56 +157,57 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         maps = maps.to(device)
         obs = obs.permute(0, 1, 4, 2, 3)
         maps = maps.permute(0, 1, 4, 2, 3)
-        mask_obs, mask_act = gen_mask(acts, is_train=True)
         length = rews.shape[0] * rews.shape[1]
-        mask_obs = mask_obs.to(device)
-        mask_act = mask_act.to(device)
         with torch.no_grad():
-            lmse1, cnt1, lmse2, cnt2, lce, cnt3 = model.module.train_loss(obs, acts, rews, maps, mask_obs, mask_act)
-            lmse1 = cnt1 * lmse1
-            lmse2 = cnt2 * lmse2
-            lce = cnt3 * lce
+            lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
+            lrec = cnt * lrec
+            lobs = cnt * lobs
+            lact = cnt * lact
+            lmap = cnt * lmap
+            lrew = cnt * lrew
 
-        dist.all_reduce(lmse1.data)
-        dist.all_reduce(lmse2.data)
-        dist.all_reduce(lce.data)
-        dist.all_reduce(cnt1.data)
-        dist.all_reduce(cnt2.data)
-        dist.all_reduce(cnt3.data)
+        dist.all_reduce(lrec.data)
+        dist.all_reduce(lobs.data)
+        dist.all_reduce(lact.data)
+        dist.all_reduce(lmap.data)
+        dist.all_reduce(lrew.data)
+        dist.all_reduce(cnt.data)
 
-        results.append((lmse1.cpu(),lmse2.cpu(),lce.cpu(), cnt1.cpu(), cnt2.cpu(), cnt3.cpu()))
+        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), lmap.cpu(), lrew.cpu(), cnt.cpu()))
 
         if(main):
             show_bar((batch_idx + 1) / all_length, 100)
             sys.stdout.flush()
 
-    sum_lmse1 = 0
-    sum_lmse2 = 0
-    sum_lce = 0
-    sum_n1 = 0
-    sum_n2 = 0
-    sum_n3 = 0
-    for lmse1, lmse2, lce, n1, n2, n3 in results:
-        sum_lmse1 += lmse1
-        sum_lmse2 += lmse2
-        sum_lce += lce
-        sum_n1 += n1
-        sum_n2 += n2
-        sum_n3 += n3
-    sum_lmse1 /= sum_n1
-    sum_lmse2 /= sum_n2
-    sum_lce /= sum_n3
+    sum_lrec = 0
+    sum_lobs = 0
+    sum_lact = 0
+    sum_lrew = 0
+    sum_lmap = 0
+    sum_cnt = 0
+    for lrec, lobs, lact, lmap, lrew, cnt in results:
+        sum_lrec += lrec
+        sum_lobs += lobs
+        sum_lact += lact
+        sum_lmap += lmap
+        sum_lrew += lrew
+        sum_cnt += cnt
+    sum_lobs /= sum_cnt
+    sum_lrec /= sum_cnt
+    sum_lact /= sum_cnt
+    sum_lmap /= sum_cnt
+    sum_lrew /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; Loss: Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s" % 
-                (epoch_id, sum_lmse1, sum_lmse2, sum_lce))
+        print("\n[EVALUATION] Epochs: %s; Loss: Recover: %s, Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s, Reward Prediction: %s" % 
+                (epoch_id, sum_lrec, sum_lobs, sum_lmap, sum_lact, sum_lrew))
         sys.stdout.flush()
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_data_path', type=str)
     parser.add_argument('--test_data_path', type=str)
-    parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=1)
     parser.add_argument('--time_step', type=int, default=64)
