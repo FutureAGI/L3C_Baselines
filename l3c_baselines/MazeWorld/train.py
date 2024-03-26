@@ -39,7 +39,7 @@ def model_path(save_model_path, epoch_id):
 def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
         train_data_path, test_data_path, 
         load_model_path, save_model_path, 
-        time_step, learning_rate, main_rank):
+        max_time_step, train_time_step, learning_rate, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -59,7 +59,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=time_step)
+    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=max_time_step)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters in Encoder: ", count_parameters(model.encoder))
@@ -79,10 +79,10 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
     # Example dataset and dataloader
     if(main):
         print("Initializing Training Dataset...")
-    train_dataset = MazeDataSet(train_data_path, time_step, verbose=main)
+    train_dataset = MazeDataSet(train_data_path, train_time_step, verbose=main)
     if(main):
         print("Initializing Testing Dataset...")
-    test_dataset = MazeDataSet(test_data_path, time_step, verbose=main)
+    test_dataset = MazeDataSet(test_data_path, train_time_step, verbose=main)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
@@ -210,7 +210,8 @@ if __name__=='__main__':
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=1)
-    parser.add_argument('--time_step', type=int, default=64)
+    parser.add_argument('--max_time_step', type=int, default=1024)
+    parser.add_argument('--train_time_step', type=int, default=256)
     parser.add_argument('--save_path', type=str, default='./model/')
     parser.add_argument('--load_path', type=str, default=None)
     args = parser.parse_args()
@@ -226,6 +227,6 @@ if __name__=='__main__':
              args=(use_gpu, world_size, args.max_epochs, args.batch_size,
                     args.train_data_path, args.test_data_path,
                     args.load_path, args.save_path,
-                    args.time_step, args.lr, 0),
+                    args.max_time_step, args.train_time_step, args.lr, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

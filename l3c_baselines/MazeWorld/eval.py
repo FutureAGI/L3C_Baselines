@@ -37,13 +37,14 @@ def demo_epoch(maze_env, task, model, device, video_writer):
 
     done = False
     step = 0
+    cache = None
     while not done:
         step += 1
         obs_tor = torch.from_numpy(numpy.array(obs_arr)).float().to(device).unsqueeze(0)
         act_tor = torch.from_numpy(numpy.array(act_arr)).long().to(device).unsqueeze(0)
         obs_tor = obs_tor.permute(0, 1, 4, 2, 3)
         with torch.no_grad():
-            next_obs, next_act, next_rew = model.inference_next(obs_tor, act_tor)
+            next_obs, next_act, next_rew, cache = model.inference_next(obs_tor, act_tor, cache)
         
         next_action = int(next_act.squeeze().item())
         next_obs_gt, next_rew_gt, done, _ = maze_env.step(next_action)
@@ -62,14 +63,15 @@ def demo_epoch(maze_env, task, model, device, video_writer):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_path', type=str)
-    parser.add_argument('--max_steps', type=int, default=512)
+    parser.add_argument('--max_time_step', type=int, default=1024)
+    parser.add_argument('--test_time_step', type=int, default=256)
     parser.add_argument('--scale', type=int, default=15)
     parser.add_argument('--density', type=int, default=0.36)
     parser.add_argument('--n_landmarks', type=int, default=8)
     parser.add_argument('--output', type=str, default="./videos")
     args = parser.parse_args()
 
-    maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=args.max_steps, task_type="NAVIGATION", resolution=(128, 128))
+    maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=args.test_time_step, task_type="NAVIGATION", resolution=(128, 128))
 
     task = MazeTaskSampler(n=args.scale, allow_loops=True, 
             wall_density=args.density,
@@ -78,7 +80,7 @@ if __name__=='__main__':
             commands_sequence = 10000,
             verbose=False)
 
-    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=args.max_steps)
+    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=args.max_time_step)
     use_gpu = torch.cuda.is_available()
     if(use_gpu):
         device = torch.device(f'cuda:0')

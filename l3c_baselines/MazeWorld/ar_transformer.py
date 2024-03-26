@@ -60,7 +60,6 @@ class ARTransformerEncoder(nn.Module):
         attn_mask = (torch.triu(torch.ones(s, s)) == 1).transpose(1, 0)[-l:]
         attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
         attn_mask = attn_mask.to(src.device)
-        print(attn_mask)
         new_cache = None
         output=src
         if(need_cache):

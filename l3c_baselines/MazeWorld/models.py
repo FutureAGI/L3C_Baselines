@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 from modules import Encoder, Decoder, ResBlock, MapDecoder
 from torch.utils.checkpoint import checkpoint  
+from ar_transformer import ARTransformerEncoder
 
 def print_memory(info="Default"):
     print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
@@ -36,10 +37,7 @@ class MazeModels(nn.Module):
         self.reward_decoder = nn.Sequential(nn.Linear(hidden_size, 4 * hidden_size), nn.GELU(), nn.Linear(4 * hidden_size, 1))
 
         # 创建Transformer编码器层
-        temporal_encoder_layer_1 = nn.TransformerEncoderLayer(hidden_size, nhead)
-        temporal_encoder_layer_2 = nn.TransformerEncoderLayer(hidden_size, nhead)
-        self.temporal_encoder_1 = nn.TransformerEncoder(temporal_encoder_layer_1, num_layers=n_trn_block // 3)
-        self.temporal_encoder_2 = nn.TransformerEncoder(temporal_encoder_layer_2, num_layers=n_trn_block * 2 // 3)
+        self.temporal_encoder = ARTransformerEncoder(n_trn_block, hidden_size, nhead, dim_feedforward=4*hidden_size)
 
         # 创建位置编码和Query向量[1, NT, 1, C]
         self.max_steps = max_steps
@@ -52,18 +50,21 @@ class MazeModels(nn.Module):
 
         self.hidden_size = hidden_size
 
-    def forward(self, observations, actions):
+    def forward(self, observations, actions, cache=None, need_cache=True):
         """
         Input Size:
             observations:[B, NT, C, W, H]
             actions:[B, NT / (NT - 1)] 
+            cache: [B, NC, H]
         """
         B, NT, C, W, H = observations.shape
         assert actions.shape[0] == B and actions.shape[1] == NT, "The shape of actions should be [%s, %s], but get %s" % (B, NT, actions.shape)
 
         # Preprocessing, normalize to [-1, 1]
         # Output Shape: [B, NT, H]
-        outputs = (observations.reshape(-1, C, W, H) - 127) / 32
+        outputs = observations
+
+        outputs = (outputs.reshape(-1, C, W, H) - 127) / 32
         outputs = self.encoder(outputs)
         #torch.cuda.empty_cache() 
         #print_memory("Stage Encoder")
@@ -92,15 +93,9 @@ class MazeModels(nn.Module):
 
         # Auto Regressive Mask
         seq_len = NT * 2
-        mask = (torch.triu(torch.ones(seq_len, seq_len, device=outputs.device)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
 
         # Temporal Encoders
-        outputs = checkpoint(lambda x:self.temporal_encoder_1(x.permute(1, 0, 2), mask=mask), outputs)
-        outputs = checkpoint(lambda x:self.temporal_encoder_2(x, mask=mask).permute(1, 0, 2), outputs)
-        #outputs = self.temporal_encoder_1(outputs.permute(1, 0, 2), mask=mask).permute(1, 0, 2)
-        #outputs = self.temporal_encoder_2(outputs, mask=mask)
-        #outputs = self.temporal_encoder_3(outputs, mask=mask).permute(1, 0, 2)
+        outputs, new_cache = checkpoint(lambda x:self.temporal_encoder(x, cache=cache, need_cache=need_cache), outputs)
 
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
@@ -131,7 +126,7 @@ class MazeModels(nn.Module):
         #torch.cuda.empty_cache() 
         #print_memory("Stage Output")
 
-        return rec_img_out, img_out, act_out, map_out, rew_out
+        return rec_img_out, img_out, act_out, map_out, rew_out, new_cache
 
     def mse_loss_img(self, img_out, img_gt, mask = None):
         mse_loss = torch.mean(((img_out - img_gt / 255)) ** 2, dim=[2, 3, 4])
@@ -159,7 +154,7 @@ class MazeModels(nn.Module):
         return ce_loss
 
     def train_loss(self, observations, actions, rewards, local_maps):
-        rec_img_out, img_out, act_out, map_out, rew_out = self.forward(observations[:, :-1], actions)
+        rec_img_out, img_out, act_out, map_out, rew_out, _ = self.forward(observations[:, :-1], actions, cache=None, need_cache=False)
         lmse_rec = self.mse_loss_img(rec_img_out, observations[:, :-1])
         lmse_obs = self.mse_loss_img(img_out, observations[:, 1:])
         lmse_map = self.mse_loss_img(map_out, local_maps)
@@ -168,7 +163,7 @@ class MazeModels(nn.Module):
         B, NT = actions.shape
         return lmse_rec, lmse_obs, ce_loss, lmse_map, lmse_rew, torch.tensor(B * NT, dtype=torch.int, device='cuda')
 
-    def inference_next(self, observations, actions):
+    def inference_next(self, observations, actions, cache=None):
         """
         Inference next observation and action
         """
@@ -177,14 +172,23 @@ class MazeModels(nn.Module):
         add_act = torch.zeros((B, 1), dtype=torch.int).to(device)
         add_obs = torch.zeros((B, 1, C, W, H), dtype=torch.float).to(device)
 
+        if(cache is not None):
+            l_cached = cache[0].shape[1] // 2
+            valid_obs = observations[l_cached:]
+            valid_act = actions[l_cached]
+        else:
+            valid_obs = observations
+            valid_act = actions
+        B, NT, C, W, H = valid_obs.shape
+
         if(NT < 2):
             ext_act = add_act
         else:
-            ext_act = torch.cat([actions, add_act], dim=1)
+            ext_act = torch.cat([valid_act, add_act], dim=1)
 
         # Inference Action First
         with torch.no_grad():
-            rec_img_out, img_out, act_out, map_out, rew_out = self.forward(observations, ext_act)
+            rec_img_out, img_out, act_out, map_out, rew_out, new_cache = self.forward(valid_obs, ext_act, cache=cache, need_cache=True)
         # Softmax Sampling
         n_action = torch.multinomial(act_out[:, -1], num_samples=1)
         print("Model decision", act_out[:, -1], n_action)
@@ -192,13 +196,13 @@ class MazeModels(nn.Module):
         if(NT < 2):
             ext_act = n_action
         else:
-            ext_act = torch.cat([actions, n_action], dim=1)
+            ext_act = torch.cat([valid_act, n_action], dim=1)
 
         # Inference Next Observation based on Sampled Action
         with torch.no_grad():
-            rec_img_out, img_out, act_out, map_out, rew_out = self.forward(observations, ext_act)
+            rec_img_out, img_out, act_out, map_out, rew_out, new_cache = self.forward(valid_obs, ext_act, cache=cache, need_cache=True)
 
-        return 255 * img_out[:, -1], n_action.squeeze(1), map_out[:, -1]
+        return 255 * img_out[:, -1], n_action.squeeze(1), map_out[:, -1], cache
         
 
 if __name__=="__main__":
