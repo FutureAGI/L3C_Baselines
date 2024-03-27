@@ -78,6 +78,81 @@ class ARTransformerEncoder(nn.Module):
                     new_cache.append(output.detach())
         return output, new_cache
 
+
+class DecisionTransformer(nn.Module):
+    """
+    Take Observations and actions, output d_models
+    """
+    def __init__(self, observation_size, action_vocab_size, num_layers, d_model, nhead, max_time_step):
+        super().__init__()
+
+        self.d_model = d_model
+        self.max_time_step = max_time_step
+        self.num_layers = num_layers
+
+        # 创建动作编码层
+        self.action_vocab_size = action_vocab_size
+        self.action_embedding = nn.Embedding(action_vocab_size, d_model)
+
+        # 创建Transformer编码器层
+        self.pre_layer = nn.Linear(observation_size, d_model)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, dim_feedforward=4*d_model)
+
+        # 创建位置编码和Query向量[1, NT, 1, C]
+        temporal_embeddings = torch.randn(1, self.max_time_step + 1, 1, d_model)
+        self.temporal_query = nn.Parameter(temporal_embeddings, requires_grad=True)
+
+        # 创建Type向量[1, 1, NP, C]
+        type_embeddings = torch.randn(1, 1, 2, d_model)
+        self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
+
+
+    def forward(self, observations, actions, cache=None, need_cache=True):
+        """
+        Input Size:
+            observations:[B, NT, H], float
+            actions:[B, NT], int 
+            cache: [B, NC, H]
+        """
+        B, NT, H = observations.shape
+        assert actions.shape[0] == B and actions.shape[1] == NT, "The shape of actions should be [%s, %s], but get %s" % (B, NT, actions.shape)
+
+        #calculate cached positions
+        if(cache is None):
+            cache_len = 0
+        else:
+            assert isinstance(list, cache) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
+            cache_len = cache[0].shape[1]
+
+        # Input actions: [B, NT, 1, H]
+        action_in = self.action_embedding(actions).view(B, NT, 1, -1)
+        observation_in = self.pre_layer(observations).view(B, NT, 1, -1)
+
+        # [B, NT, 2, H]
+        outputs = torch.cat([observation_in, action_in], dim=2)
+
+        # Add Temporal Position Embedding
+        outputs = outputs + self.temporal_query[:, cache_len:(NT + cache_len)]
+
+        # Add Type Embedding
+        outputs = outputs + self.type_query
+
+        # Concatenate [s_0, a_0, s_1, a_1, s_2, ...] to acquire the size of [B, NT * 2, H]
+        outputs = outputs.view(B, NT * 2, -1)
+
+        # Temporal Encoders
+        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
+
+        # Acqure Outputs: [a_0, s_1, a_1, ...]
+        outputs = outputs.reshape(B, NT, 2, -1)
+
+        # Predict a_0, a_1, ..., a_t
+        act_output = outputs[:, :, 0]
+        # Predict s_1, s_2, ..., s_{t+1}
+        obs_output = outputs[:, :, 1]
+
+        return obs_output, act_output, new_cache
+
 if __name__=='__main__':
     ART = ARTransformerEncoder(8, 256, 8, 1024, 0.1)
 
@@ -92,3 +167,8 @@ if __name__=='__main__':
     print(output2.shape, len(cache2), cache2[0].shape)
     print(output3.shape, len(cache3), cache3[0].shape)
     print(output4.shape, len(cache4), cache4[0].shape)
+
+    DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
+    input_acts = torch.randint(0, 4, (4, 64))
+    out_obs, out_act, cache = DT(inputs, input_acts)
+    print(out_obs.shape, out_act.shape, len(cache))

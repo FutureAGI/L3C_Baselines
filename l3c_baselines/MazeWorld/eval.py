@@ -44,7 +44,7 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         act_tor = torch.from_numpy(numpy.array(act_arr)).long().to(device).unsqueeze(0)
         obs_tor = obs_tor.permute(0, 1, 4, 2, 3)
         with torch.no_grad():
-            next_obs, next_act, next_rew, cache = model.inference_next(obs_tor, act_tor, cache)
+            rec_obs, next_obs, next_act, next_rew, cache = model.inference_next(obs_tor, act_tor, cache)
         
         next_action = int(next_act.squeeze().item())
         next_obs_gt, next_rew_gt, done, _ = maze_env.step(next_action)
@@ -53,9 +53,11 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         act_arr.append(next_action)
         rew_sum += next_rew_gt
         next_obs_pred = next_obs.squeeze().permute(1, 2, 0).cpu().numpy()
+        rec_obs_pred = rec_obs.squeeze().permute(1, 2, 0).cpu().numpy()
         obs_err = numpy.sqrt(numpy.mean((next_obs_pred - next_obs_gt) ** 2))
-        video_writer.add_image(numpy.concatenate([next_obs_gt, next_obs_pred], axis=1))
-        print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f" % (step, next_rew_gt, rew_sum, obs_err))
+        obs_err_rec = numpy.sqrt(numpy.mean((rec_obs_pred - obs_arr[-2]) ** 2))
+        video_writer.add_image(numpy.transpose(numpy.concatenate([next_obs_gt, rec_obs_pred, next_obs_pred], axis=0), (1, 0, 2)))
+        print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, rew_sum, obs_err, obs_err_rec))
 
         sys.stdout.flush()
 

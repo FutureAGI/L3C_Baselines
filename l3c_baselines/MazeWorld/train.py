@@ -36,7 +36,7 @@ def model_path(save_model_path, epoch_id):
         os.makedirs(directory_path)
     return ('%s/model.pth' % directory_path,'%s/optimizer.pth' % directory_path) 
 
-def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
+def main_epoch(rank, use_gpu, world_size, max_epochs, epoch_repeats, batch_size,
         train_data_path, test_data_path, 
         load_model_path, save_model_path, 
         max_time_step, train_time_step, learning_rate, main_rank):
@@ -100,9 +100,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
     test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
     # Example training loop
     total_iteration = len(train_dataloader)
-    epoch_repeat = 1
     for epoch_id in range(max_epochs):
-        for epoch_repeat_id in range(epoch_repeat):
+        for epoch_repeat_id in range(epoch_repeats):
             for batch_idx, batch in enumerate(train_dataloader):
                 obs, acts, rews, maps = batch
                 obs = obs.to(device)
@@ -111,9 +110,9 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, batch_size,
                 maps = maps.to(device)
                 obs = obs.permute(0, 1, 4, 2, 3)
                 maps = maps.permute(0, 1, 4, 2, 3)
-                with autocast():
-                    lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
-                loss = 2.0 * lrec + lobs + lact + 0.2 * lmap + lrew
+                #with autocast():
+                lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
+                loss = lrec #+ 0.0 * lobs + 0.0 * lact + 0.0 * lmap + 0.0 * lrew
                 prt_loss = (lrec.detach().cpu().numpy(), lobs.detach().cpu().numpy(), lact.detach().cpu().numpy(), lmap.detach().cpu().numpy(), lrew.detach().cpu().numpy())
 
                 optimizer.zero_grad()
@@ -207,9 +206,10 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_data_path', type=str)
     parser.add_argument('--test_data_path', type=str)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=1)
+    parser.add_argument('--epoch_repeats', type=int, default=1)
     parser.add_argument('--max_time_step', type=int, default=1024)
     parser.add_argument('--train_time_step', type=int, default=256)
     parser.add_argument('--save_path', type=str, default='./model/')
@@ -224,8 +224,8 @@ if __name__=='__main__':
         print("Use Parallel CPUs: %s" % world_size)
 
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, args.max_epochs, args.batch_size,
-                    args.train_data_path, args.test_data_path,
+             args=(use_gpu, world_size, args.max_epochs, args.epoch_repeats, 
+                    args.batch_size, args.train_data_path, args.test_data_path,
                     args.load_path, args.save_path,
                     args.max_time_step, args.train_time_step, args.lr, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
