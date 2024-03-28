@@ -7,9 +7,9 @@ class ResBlock(nn.Module):
         super().__init__()
 
         self.conv = nn.Sequential(
-            nn.GELU(),
+            nn.LeakyReLU(),
             nn.Conv2d(in_channel, hidden_size, 3, padding=1),
-            nn.GELU(),
+            nn.LeakyReLU(),
             nn.Conv2d(hidden_size, in_channel, 1),
         )
 
@@ -34,38 +34,38 @@ class Encoder(nn.Module):
 
         blocks = [
             nn.Conv2d(in_channel, channel_b1, 3, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b1, channel_b2, 4, stride=2, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b2, channel_b2, 3, padding=1),
         ]
 
         for i in range(n_res_block):
-            blocks.append(ResBlock(channel_b2, channel_b2))
+            blocks.append(ResBlock(channel_b2, out_channel))
 
         blocks.extend([
             nn.Conv2d(channel_b2, channel_b2, 3, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b2, channel_b3, 4, stride=2, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b3, channel_b3, 3, padding=1),
         ])
 
         for i in range(n_res_block):
-            blocks.append(ResBlock(channel_b3, channel_b3))
+            blocks.append(ResBlock(channel_b3, out_channel))
 
         blocks.extend([
             nn.Conv2d(channel_b3, channel_b3, 3, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b3, channel_b3, 4, stride=2, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Conv2d(channel_b3, channel_b3, 3, padding=1),
         ])
 
         blocks.extend([
             nn.Flatten(start_dim=1, end_dim=-1),
             nn.Linear(fin_channel, out_channel),
-            nn.ReLU(),
+            nn.LeakyReLU(),
         ])
 
         self.blocks = nn.Sequential(*blocks)
@@ -92,23 +92,23 @@ class Decoder(nn.Module):
         self.ini_channel = in_channel // 4
         ini_mapping = self.ini_size * self.ini_size * self.ini_channel
 
-        self.input_mapping = nn.Sequential(nn.Linear(in_channel, ini_mapping), nn.ReLU())
+        self.input_mapping = nn.Sequential(nn.Linear(in_channel, ini_mapping), nn.LeakyReLU())
 
         blocks = [nn.Conv2d(self.ini_channel, channel_b1, 3, padding=1)]
 
         for i in range(n_res_block):
-            blocks.append(ResBlock(channel_b1, channel_b1))
+            blocks.append(ResBlock(channel_b1, in_channel))
 
-        blocks.append(nn.ReLU())
+        blocks.append(nn.LeakyReLU())
 
         blocks.extend(
             [
                 nn.ConvTranspose2d(channel_b1, channel_b1 // 2, 4, stride=2, padding=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.ConvTranspose2d(channel_b1 // 2, channel_b1 // 4, 4, stride=2, padding=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.ConvTranspose2d(channel_b1 // 4, channel_b1 // 8, 4, stride=2, padding=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Conv2d(channel_b1 // 8, out_channel, 3, padding=1),
                 nn.Sigmoid(),
             ]
@@ -171,17 +171,17 @@ class VAE(nn.Module):
         z_log_var = self.layer_var(hidden)
         return z_exp.reshape(nB, nT, self.hidden_size), z_log_var.reshape(nB, nT, self.hidden_size)
 
-    def reconstruct(self, inputs):
+    def reconstruct(self, inputs, _sigma=1.0):
         nB, nT, nC, nW, nH = inputs.shape
         z_exp, z_log_var = self.forward(inputs)
         epsilon = torch.randn_like(z_log_var).to(z_log_var.device)
-        z = z_exp + torch.exp(z_log_var / 2) * epsilon
+        z = z_exp + _sigma * torch.exp(z_log_var / 2) * epsilon
         outputs = self.decoder(z.reshape(nB * nT, self.hidden_size))
         outputs = outputs.reshape(nB, nT, nC, nW, nH)
         return outputs, z_exp, z_log_var
 
-    def loss(self, inputs, _lambda=1.0e-5):
-        outputs, z_exp, z_log_var = self.reconstruct(inputs)
+    def loss(self, inputs, _lambda=1.0e-5, _sigma=1.0):
+        outputs, z_exp, z_log_var = self.reconstruct(inputs, _sigma = _sigma)
         kl_loss = torch.mean(-0.5 * torch.sum(1 + z_log_var - torch.square(z_exp) - torch.exp(z_log_var), axis=1))
         reconstruction_loss = F.mse_loss(outputs, inputs)
 
@@ -199,9 +199,10 @@ def mse_loss_mask(img_out, img_gt, mask = None):
 
     return mse_loss
 
-def ce_loss_mask(act_out, act_gt, mask = None):
-    act_logits = F.one_hot(act_gt, act_out.shape[-1])
-    ce_loss = -torch.mean(torch.log(act_out) * act_logits, dim=-1)
+def ce_loss_mask(act_out, act_gt, mask = None, gamma=2):
+    gt_logits = F.one_hot(act_gt, act_out.shape[-1])
+    preds = torch.log(act_out) * ((1.0 - act_out) ** gamma)
+    ce_loss = -torch.mean(preds * gt_logits, dim=-1)
     if mask is not None:
         ce_loss = ce_loss * mask
         sum_mask = torch.sum(mask)
@@ -217,3 +218,20 @@ def img_pro(observations):
 
 def img_post(observations):
     return observations * 255
+
+class SigmaScheduler(object):
+    def __init__(self, anealing_step):
+        self._anealing_step = anealing_step
+        self._step = 0
+
+    def step(self):
+        self._step += 1
+
+    def __call__(self):
+        return min(max(0.0, (self._step / self._anealing_step - 1.0)), 1.0)
+
+def lr_scheduler(it, warmup_steps):
+    vit = max(it, 1)
+    lr_warm = vit / warmup_steps # warm up steps
+    lr_decay = ((vit / warmup_steps) ** (-0.5))
+    return min(lr_warm, lr_decay)

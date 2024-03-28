@@ -56,7 +56,7 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         rec_obs_pred = rec_obs.squeeze().permute(1, 2, 0).cpu().numpy()
         obs_err = numpy.sqrt(numpy.mean((next_obs_pred - next_obs_gt) ** 2))
         obs_err_rec = numpy.sqrt(numpy.mean((rec_obs_pred - obs_arr[-2]) ** 2))
-        video_writer.add_image(numpy.transpose(numpy.concatenate([next_obs_gt, rec_obs_pred, next_obs_pred], axis=0), (1, 0, 2)))
+        video_writer.add_image(numpy.transpose(numpy.concatenate([obs_arr[-2], rec_obs_pred, next_obs_pred], axis=0), (1, 0, 2)))
         print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, rew_sum, obs_err, obs_err_rec))
 
         sys.stdout.flush()
@@ -82,7 +82,7 @@ if __name__=='__main__':
             commands_sequence = 10000,
             verbose=False)
 
-    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=args.max_time_step)
+    model = MazeModels(image_size=128, map_size=7, action_size=5, max_time_step=args.max_time_step)
     use_gpu = torch.cuda.is_available()
     if(use_gpu):
         device = torch.device(f'cuda:0')

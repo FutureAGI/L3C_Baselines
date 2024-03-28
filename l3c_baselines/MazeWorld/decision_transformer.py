@@ -121,7 +121,7 @@ class DecisionTransformer(nn.Module):
         if(cache is None):
             cache_len = 0
         else:
-            assert isinstance(list, cache) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
+            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
         # Input actions: [B, NT, 1, H]

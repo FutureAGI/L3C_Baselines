@@ -6,13 +6,14 @@ import numpy
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from reader import MazeDataSet
 from models import MazeModels
 from torch.cuda.amp import autocast
+from modules import lr_scheduler, SigmaScheduler
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
@@ -34,9 +35,10 @@ def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
-    return ('%s/model.pth' % directory_path,'%s/optimizer.pth' % directory_path) 
+    return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
-def main_epoch(rank, use_gpu, world_size, max_epochs, epoch_repeats, batch_size,
+def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
+        vae_stop_epoch, main_start_epoch, batch_size_vae, batch_size_seq,
         train_data_path, test_data_path, 
         load_model_path, save_model_path, 
         max_time_step, train_time_step, learning_rate, main_rank):
@@ -59,15 +61,16 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, epoch_repeats, batch_size,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModels(image_size=128, map_size=7, action_size=5, max_steps=max_time_step)
+    model = MazeModels(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
     if(main):
         print("Number of parameters: ", count_parameters(model))
-        print("Number of parameters in Encoder: ", count_parameters(model.encoder))
-        #print("Number of parameters in Temporal Encoder: ", count_parameters(model.temporal_encoder_1) * 3)
-        print("Number of parameters in Observation Decoder: ", count_parameters(model.decoder))
-        print("Number of parameters in Action Decoder: ", count_parameters(model.action_decoder))
+        print("Number of parameters in Main Encoder: ", count_parameters(model.encoder))
+        print("Number of parameters in Main Decoder: ", count_parameters(model.decoder))
+        print("Number of parameters in VAE: ", count_parameters(model.vae))
+        print("Number of parameters in Decision Transformer: ", count_parameters(model.decformer))
+        print("Number of parameters in Action Decoder: ", count_parameters(model.act_decoder))
+        print("Number of parameters in Reward Decoder: ", count_parameters(model.rew_decoder))
         print("Number of parameters in Map Decoder: ", count_parameters(model.map_decoder))
-
 
     model = model.to(device)
 
@@ -87,59 +90,90 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, epoch_repeats, batch_size,
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
+    vae_dataloader = DataLoader(train_dataset, batch_size=batch_size_vae, sampler=train_sampler)
+    seq_dataloader = DataLoader(train_dataset, batch_size=batch_size_seq, sampler=train_sampler)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size_seq, sampler=test_sampler)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=1000, eta_min=1.0e-5)
+    sigma_scheduler = SigmaScheduler(500)
+
+    vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:lr_scheduler(x, 200))
+    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:lr_scheduler(x, 500))
 
     if(load_model_path is not None):
         model.load_state_dict(torch.load('%s/model.pth' % load_model_path))
-        optimizer.load_state_dict(torch.load('%s/optimizer.pth' % load_model_path))
+        vae_optimizer.load_state_dict(torch.load('%s/vae_optimizer.pth' % load_model_path))
+        main_optimizer.load_state_dict(torch.load('%s/seq_optimizer.pth' % load_model_path))
 
+
+    # Perform the first evaluation
     test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
-    # Example training loop
-    total_iteration = len(train_dataloader)
-    for epoch_id in range(max_epochs):
-        for epoch_repeat_id in range(epoch_repeats):
-            for batch_idx, batch in enumerate(train_dataloader):
-                obs, acts, rews, maps = batch
-                obs = obs.to(device)
-                acts = acts.to(device)
-                rews = rews.to(device)
-                maps = maps.to(device)
-                obs = obs.permute(0, 1, 4, 2, 3)
-                maps = maps.permute(0, 1, 4, 2, 3)
-                #with autocast():
-                lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
-                loss = lrec #+ 0.0 * lobs + 0.0 * lact + 0.0 * lmap + 0.0 * lrew
-                prt_loss = (lrec.detach().cpu().numpy(), lobs.detach().cpu().numpy(), lact.detach().cpu().numpy(), lmap.detach().cpu().numpy(), lrew.detach().cpu().numpy())
 
-                optimizer.zero_grad()
-                loss.backward()
-                clip_grad_norm_(model.module.parameters(), 1.0)
+    def vae_round(rid, dataloader):
+        total_iteration = len(dataloader)
+        for batch_idx, batch in enumerate(dataloader):
+            obs, acts, rews, maps = batch
+            obs = obs.to(device)
+            obs = obs.permute(0, 1, 4, 2, 3)
+            vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
 
-                #for name, param in model.module.named_parameters():
-                #    if(param.grad is None):
-                #        prt_grad = None
-                #    else:
-                #        prt_grad = torch.norm(param.grad, torch.inf)
-                #    print(f"Gradient of {name}: {prt_grad}")
+            vae_optimizer.zero_grad()
+            vae_loss.backward()
+            clip_grad_norm_(model.module.parameters(), 1.0)
 
-                optimizer.step()
-                scheduler.step()
-                if(main):
-                    percentage = (batch_idx + 1) / total_iteration * 100
-                    print("Epoch: %s [ %.2f %% ] Iteration: %s LearningRate:%f Loss: Recover: %s, Future Prediction MSE: %s, Action Cross Entropy: %s, Map Prediction MSE: %s, Reward Prediction: %s" % 
-                            ((epoch_id + 1, percentage, batch_idx, scheduler.get_last_lr()[0]) + prt_loss))
-                sys.stdout.flush()
-
+            vae_optimizer.step()
+            vae_scheduler.step()
+            sigma_scheduler.step()
             if(main):
-                mod_path, opt_path = model_path(save_model_path, epoch_id)
-                torch.save(model.state_dict(), mod_path)
-                torch.save(optimizer.state_dict(), opt_path)
+                percentage = (batch_idx + 1) / total_iteration * 100
+                print("Epoch: %s [ %.2f %% ][VAE ROUND] Iteration: %s; Sigma: %f; LearningRate: %f Reconstruction Loss: %.04f" % 
+                        (rid, percentage, batch_idx, sigma_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
+            sys.stdout.flush()
 
-        test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id + 1)
+    def main_round(rid, dataloader):
+        total_iteration = len(dataloader)
+        for batch_idx, batch in enumerate(dataloader):
+            obs, acts, rews, maps = batch
+            obs = obs.to(device)
+            acts = acts.to(device)
+            rews = rews.to(device)
+            maps = maps.to(device)
+            obs = obs.permute(0, 1, 4, 2, 3)
+            maps = maps.permute(0, 1, 4, 2, 3)
+            #with autocast():
+            lobs, lact, lmap, lrew, cnt = model.module.sequential_loss(obs, acts, rews, maps)
+            main_loss = lobs + lact + lmap + lrew
+
+            main_optimizer.zero_grad()
+            main_loss.backward()
+            clip_grad_norm_(model.module.parameters(), 1.0)
+
+            main_optimizer.step()
+            main_scheduler.step()
+            if(main):
+                percentage = (batch_idx + 1) / total_iteration * 100
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction MSE: %s; Action Cross Entropy: %s; Map Prediction MSE: %s; Reward Prediction: %s" % 
+                        (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
+                            float(lobs.detach().cpu().numpy()), float(lact.detach().cpu().numpy()), 
+                            float(lmap.detach().cpu().numpy()), float(lrew.detach().cpu().numpy())))
+            sys.stdout.flush()
+
+    # Example training loop
+    for epoch_id in range(1, max_epochs + 1):
+        if(vae_stop_epoch > epoch_id):
+            vae_round(epoch_id, vae_dataloader)
+        if(epoch_id > main_start_epoch):
+            main_round(epoch_id, seq_dataloader)
+        if(main and epoch_id % eval_interval == 0):
+            mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
+            torch.save(model.state_dict(), mod_path)
+            torch.save(vae_optimizer.state_dict(), opt_path_vae)
+            torch.save(main_optimizer.state_dict(), opt_path_seq)
+
+        # Perform the evaluation according to interval
+        if(epoch_id % eval_interval == 0):
+            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
 
 def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
     # Example training loop
@@ -158,7 +192,9 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         maps = maps.permute(0, 1, 4, 2, 3)
         length = rews.shape[0] * rews.shape[1]
         with torch.no_grad():
-            lrec, lobs, lact, lmap, lrew, cnt = model.module.train_loss(obs, acts, rews, maps)
+            lrec = model.module.vae_loss(obs)
+            lobs, lact, lmap, lrew, cnt = model.module.sequential_loss(obs, acts, rews, maps)
+
             lrec = cnt * lrec
             lobs = cnt * lobs
             lact = cnt * lact
@@ -198,7 +234,7 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     sum_lrew /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; Loss: Recover: %s, Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s, Reward Prediction: %s" % 
+        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s, Reward Prediction: %s" % 
                 (epoch_id, sum_lrec, sum_lobs, sum_lmap, sum_lact, sum_lrew))
         sys.stdout.flush()
 
@@ -207,9 +243,12 @@ if __name__=='__main__':
     parser.add_argument('--train_data_path', type=str)
     parser.add_argument('--test_data_path', type=str)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--max_epochs', type=int, default=1)
-    parser.add_argument('--epoch_repeats', type=int, default=1)
+    parser.add_argument('--vae_batch_size', type=int, default=4)
+    parser.add_argument('--sequential_batch_size', type=int, default=4)
+    parser.add_argument('--max_epochs', type=int, default=10)
+    parser.add_argument('--eval_interval', type=int, default=1)
+    parser.add_argument('--vae_stop_epoch', type=int, default=10)
+    parser.add_argument('--main_start_epoch', type=int, default=-1)
     parser.add_argument('--max_time_step', type=int, default=1024)
     parser.add_argument('--train_time_step', type=int, default=256)
     parser.add_argument('--save_path', type=str, default='./model/')
@@ -224,8 +263,10 @@ if __name__=='__main__':
         print("Use Parallel CPUs: %s" % world_size)
 
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, args.max_epochs, args.epoch_repeats, 
-                    args.batch_size, args.train_data_path, args.test_data_path,
+             args=(use_gpu, world_size, args.max_epochs, args.eval_interval, 
+                    args.vae_stop_epoch, args.main_start_epoch,
+                    args.vae_batch_size, args.sequential_batch_size, 
+                    args.train_data_path, args.test_data_path,
                     args.load_path, args.save_path,
                     args.max_time_step, args.train_time_step, args.lr, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired

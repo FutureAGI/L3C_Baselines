@@ -21,7 +21,7 @@ class MazeModels(nn.Module):
                  hidden_size=512,
                  nhead=16,
                  max_time_step=1024,
-                 n_res_block=4,
+                 n_res_block=2,
                  n_trn_block=12):
         super().__init__()
 
@@ -51,6 +51,7 @@ class MazeModels(nn.Module):
             nn.Linear(4 * hidden_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, action_size),
+            nn.Softmax()
         )
 
     def forward(self, observations, actions, cache=None, need_cache=True):
@@ -88,11 +89,11 @@ class MazeModels(nn.Module):
 
         return pred_obs, pred_act, pred_rew, pred_map, new_cache
 
-    def vae_loss(self, observations, _lambda=1.0e-5):
+    def vae_loss(self, observations, _lambda=1.0e-5, _sigma=1.0):
         self.vae.requires_grad_(True)
         self.encoder.requires_grad_(True)
         self.decoder.requires_grad_(True)
-        return self.vae.loss(img_pro(observations), _lambda=_lambda)
+        return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
     def sequential_loss(self, observations, actions, rewards, local_maps):
         self.encoder.requires_grad_(False)
@@ -119,40 +120,37 @@ class MazeModels(nn.Module):
         add_act = torch.zeros((B, 1), dtype=torch.int).to(device)
         add_obs = torch.zeros((B, 1, C, W, H), dtype=torch.float).to(device)
 
+        if(NT < 2):
+            valid_act = add_act
+        else:
+            valid_act = torch.cat([actions, add_act], dim=1)
+
         if(cache is not None):
             l_cached = cache[0].shape[1] // 2
-            valid_obs = observations[l_cached:]
-            valid_act = actions[l_cached]
+            valid_obs = observations[:, l_cached:]
+            valid_act = valid_act[:, l_cached:]
         else:
             valid_obs = observations
-            valid_act = actions
         valid_obs = img_pro(valid_obs)
         B, NT, C, W, H = valid_obs.shape
 
-        if(NT < 2):
-            ext_act = add_act
-        else:
-            ext_act = torch.cat([valid_act, add_act], dim=1)
 
         # Inference Action First
         with torch.no_grad():
-            pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, ext_act, cache=cache, need_cache=True)
-        # Softmax Sampling
-        n_action = torch.multinomial(act_out[:, -1], num_samples=1)
-        print("Model decision", act_out[:, -1], n_action)
+            print(valid_obs.shape, valid_act.shape)
+            pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            # Softmax Sampling
+            n_action = torch.multinomial(pred_act[:, -1], num_samples=1)
+            #print("Model decision", pred_act[:, -1], n_action)
 
-        if(NT < 2):
-            ext_act = n_action
-        else:
-            ext_act = torch.cat([valid_act, n_action], dim=1)
+            valid_act[:, -1] = n_action
 
-        # Inference Next Observation based on Sampled Action
-        with torch.no_grad():
-            pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, ext_act, cache=cache, need_cache=True)
-            rec_obs, z_exp, z_log_var = self.vae.reconstruct(valid_obs)
-        pred_img = img_out[:, -1] * 255
+            # Inference Next Observation based on Sampled Action
+            print(valid_obs.shape, valid_act.shape)
+            pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            rec_obs, z_exp, z_log_var = self.vae.reconstruct(valid_obs, _sigma=0.0)
 
-        return img_post(rec_obs), img_post(pred_img), n_action.squeeze(1), image_post(map_out[:, -1]), new_cache
+        return img_post(rec_obs), img_post(pred_obs), n_action.squeeze(1), img_post(pred_map[:, -1]), new_cache
         
 
 if __name__=="__main__":
@@ -160,10 +158,10 @@ if __name__=="__main__":
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)
-    local_map = torch.randn(8, 32, 3, 5, 5)
+    local_map = torch.randn(8, 32, 3, 7, 7)
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(observation, action, reward, local_map)
     rec_img, img_out, act_out, map_out, cache = model.inference_next(observation, action)
     print("vae:", vae_loss, "sequential:", losses)
-    print(img_out.shape, act_out.shape, map_out.shape, cache.shape)
+    print(img_out.shape, act_out.shape, map_out.shape, len(cache), cache[0].shape)
