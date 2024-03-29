@@ -5,6 +5,7 @@ import torch
 import numpy
 import gym
 import l3c.mazeworld
+import cv2
 from reader import MazeDataSet
 from models import MazeModels
 import torch.optim as optim
@@ -16,15 +17,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.parallel import DataParallel as DP
 from torch.utils.data import DataLoader, Dataset
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def model_path(save_model_path, epoch_id):
-    directory_path = '%s/%02d/' % (save_model_path, epoch_id)
-    if not os.path.exists(directory_path):
-        os.makedirs(directory_path)
-    return ('%s/model.pth' % directory_path,'%s/optimizer.pth' % directory_path) 
 
 def demo_epoch(maze_env, task, model, device, video_writer):
     # Example training loop
@@ -44,19 +36,27 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         act_tor = torch.from_numpy(numpy.array(act_arr)).long().to(device).unsqueeze(0)
         obs_tor = obs_tor.permute(0, 1, 4, 2, 3)
         with torch.no_grad():
-            rec_obs, next_obs, next_act, next_rew, cache = model.inference_next(obs_tor, act_tor, cache)
+            rec_obs, next_obs, next_act, pred_map, cache = model.inference_next(obs_tor, act_tor, cache)
         
         next_action = int(next_act.squeeze().item())
         next_obs_gt, next_rew_gt, done, _ = maze_env.step(next_action)
+        loc_map = maze_env.maze_core.get_loc_map(7)
         obs_arr.append(next_obs_gt)
         rew_arr.append(next_rew_gt)
         act_arr.append(next_action)
         rew_sum += next_rew_gt
         next_obs_pred = next_obs.squeeze().permute(1, 2, 0).cpu().numpy()
         rec_obs_pred = rec_obs.squeeze().permute(1, 2, 0).cpu().numpy()
+        map_pred = pred_map.squeeze().permute(1, 2, 0).cpu().numpy()
         obs_err = numpy.sqrt(numpy.mean((next_obs_pred - next_obs_gt) ** 2))
         obs_err_rec = numpy.sqrt(numpy.mean((rec_obs_pred - obs_arr[-2]) ** 2))
-        video_writer.add_image(numpy.transpose(numpy.concatenate([obs_arr[-2], rec_obs_pred, next_obs_pred], axis=0), (1, 0, 2)))
+
+        line1 = numpy.transpose(numpy.concatenate([obs_arr[-2], rec_obs_pred, next_obs_pred], axis=0), (1, 0, 2))
+        loc_map = cv2.resize(loc_map, (128, 128), interpolation=cv2.INTER_NEAREST)
+        map_pred = cv2.resize(map_pred, (128, 128), interpolation=cv2.INTER_NEAREST)
+        line2 = numpy.transpose(numpy.concatenate([loc_map, map_pred, obs_arr[-1]], axis=0), (1, 0, 2))
+        video_writer.add_image(numpy.concatenate([line1, line2], axis=0))
+
         print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, rew_sum, obs_err, obs_err_rec))
 
         sys.stdout.flush()
@@ -92,6 +92,6 @@ if __name__=='__main__':
     DP(model).load_state_dict(torch.load('%s/model.pth' % args.load_path))
     model = model.to(device)
 
-    video_writer = VideoWriter("./videos", "demo")
+    video_writer = VideoWriter("./videos", "demo", window_size=(384, 128))
     demo_epoch(maze_env, task, model, device, video_writer)
     video_writer.clear()

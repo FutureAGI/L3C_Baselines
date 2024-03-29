@@ -137,7 +137,6 @@ class MazeModels(nn.Module):
 
         # Inference Action First
         with torch.no_grad():
-            print(valid_obs.shape, valid_act.shape)
             pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
             # Softmax Sampling
             n_action = torch.multinomial(pred_act[:, -1], num_samples=1)
