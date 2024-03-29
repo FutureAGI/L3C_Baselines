@@ -4,16 +4,12 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from modules import Encoder, Decoder, ResBlock, MapDecoder, VAE
-from modules import ce_loss_mask, img_pro, img_post
 from torch.utils.checkpoint import checkpoint  
-from decision_transformer import DecisionTransformer
+from modules import Encoder, Decoder, ResBlock, MapDecoder, VAE
+from modules import DecisionTransformer
+from utils import ce_loss_mask, img_pro, img_post
 
-def print_memory(info="Default"):
-    print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
-
-
-class MazeModels(nn.Module):
+class MazeModelBase(nn.Module):
     def __init__(self, 
                  image_size=128,
                  action_size=5,
@@ -145,7 +141,6 @@ class MazeModels(nn.Module):
             valid_act[:, -1] = n_action
 
             # Inference Next Observation based on Sampled Action
-            print(valid_obs.shape, valid_act.shape)
             pred_obs, pred_act, pred_rew, pred_map, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
             rec_obs, z_exp, z_log_var = self.vae.reconstruct(valid_obs, _sigma=0.0)
 
@@ -153,7 +148,7 @@ class MazeModels(nn.Module):
         
 
 if __name__=="__main__":
-    model = MazeModels()
+    model = MazeModelBase()
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)

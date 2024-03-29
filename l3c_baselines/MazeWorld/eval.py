@@ -40,7 +40,7 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         
         next_action = int(next_act.squeeze().item())
         next_obs_gt, next_rew_gt, done, _ = maze_env.step(next_action)
-        loc_map = maze_env.maze_core.get_loc_map(7)
+        loc_map = maze_env.maze_core.get_loc_map(3)
         obs_arr.append(next_obs_gt)
         rew_arr.append(next_rew_gt)
         act_arr.append(next_action)
@@ -92,6 +92,6 @@ if __name__=='__main__':
     DP(model).load_state_dict(torch.load('%s/model.pth' % args.load_path))
     model = model.to(device)
 
-    video_writer = VideoWriter("./videos", "demo", window_size=(384, 128))
+    video_writer = VideoWriter("./videos", "demo", window_size=(384, 256))
     demo_epoch(maze_env, task, model, device, video_writer)
     video_writer.clear()

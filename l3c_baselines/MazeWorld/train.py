@@ -10,10 +10,10 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
-from reader import MazeDataSet
-from models import MazeModels
 from torch.cuda.amp import autocast
-from modules import lr_scheduler, SigmaScheduler
+from dataloader import MazeDataSet
+from utils import noam_scheduler, SigmaScheduler
+from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
@@ -61,7 +61,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModels(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
+    model = MazeModelBase(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters in Main Encoder: ", count_parameters(model.encoder))

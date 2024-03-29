@@ -153,6 +153,56 @@ class DecisionTransformer(nn.Module):
 
         return obs_output, act_output, new_cache
 
+class ARTransformerStandard(nn.Module):
+    """
+    Take Observations and actions, output d_models
+    """
+    def __init__(self, vocab_size, num_layers, d_model, nhead, max_time_step):
+        super().__init__()
+
+        self.d_model = d_model
+        self.max_time_step = max_time_step
+        self.num_layers = num_layers
+
+        # 创建动作编码层
+        self.vocab_size = vocab_size
+        self.word_embedding = nn.Embedding(vocab_size, d_model)
+
+        # 创建Transformer编码器层
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, dim_feedforward=4*d_model)
+
+        self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
+
+        # 创建位置编码和Query向量[1, NT, 1, C]
+        position_embeddings = torch.randn(1, self.max_time_step + 1, d_model)
+        self.position_embeddings = nn.Parameter(position_embeddings, requires_grad=True)
+
+    def forward(self, inputs, cache=None, need_cache=True):
+        """
+        Input Size:
+            inputs:[B, NT], int
+        """
+        B, NT = inputs.shape
+
+        #calculate cached positions
+        if(cache is None):
+            cache_len = 0
+        else:
+            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
+            cache_len = cache[0].shape[1]
+
+        # Input actions: [B, NT, 1, H]
+        outputs = self.word_embedding(inputs)
+
+        # Add Position Embedding
+        outputs = outputs + self.position_embeddings[:, cache_len:(NT + cache_len)]
+
+        # Temporal Encoders
+        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
+        outputs = self.output_mapping(outputs)
+
+        return outputs, new_cache
+
 if __name__=='__main__':
     ART = ARTransformerEncoder(8, 256, 8, 1024, 0.1)
 
@@ -172,3 +222,10 @@ if __name__=='__main__':
     input_acts = torch.randint(0, 4, (4, 64))
     out_obs, out_act, cache = DT(inputs, input_acts)
     print(out_obs.shape, out_act.shape, len(cache))
+
+
+    inputs2 = torch.randint(0, 1024, (4, 64))
+    ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
+    out_nlp, cache = ART2(inputs2, need_cache=True)
+    out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
+    print(out_nlp.shape, out_nlp2.shape)
