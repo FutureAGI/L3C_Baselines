@@ -82,17 +82,18 @@ class Decoder(nn.Module):
         self, 
         img_size,
         in_channel, 
+        hidden_size,
         out_channel, 
         n_res_block, 
     ):
         super().__init__()
 
-        channel_b1 = in_channel // 2
+        channel_b1 = hidden_size // 2
         self.ini_size = img_size // 8
-        self.ini_channel = in_channel // 4
+        self.ini_channel = hidden_size // 4
         ini_mapping = self.ini_size * self.ini_size * self.ini_channel
 
-        self.input_mapping = nn.Sequential(nn.Linear(in_channel, ini_mapping), nn.LeakyReLU())
+        self.input_mapping = nn.Sequential(nn.Linear(in_channel, hidden_size), nn.LeakyReLU(), nn.Linear(hidden_size, ini_mapping), nn.LeakyReLU())
 
         blocks = [nn.Conv2d(self.ini_channel, channel_b1, 3, padding=1)]
 

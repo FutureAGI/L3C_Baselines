@@ -1,1 +1,1 @@
-from mazeworld_base import MazeModelBase
+from .mazeworld_base import MazeModelBase

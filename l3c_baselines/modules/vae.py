@@ -28,9 +28,14 @@ class VAE(nn.Module):
         z_exp, z_log_var = self.forward(inputs)
         epsilon = torch.randn_like(z_log_var).to(z_log_var.device)
         z = z_exp + _sigma * torch.exp(z_log_var / 2) * epsilon
-        outputs = self.decoder(z.reshape(nB * nT, self.hidden_size))
-        outputs = outputs.reshape(nB, nT, nC, nW, nH)
+        outputs = self.decoding(z)
         return outputs, z_exp, z_log_var
+
+    def decoding(self, z):
+        nB, nT, nH = z.shape
+        outputs = self.decoder(z.reshape(nB * nT, nH))
+        outputs = outputs.reshape(nB, nT, *outputs.shape[1:])
+        return outputs
 
     def loss(self, inputs, _lambda=1.0e-5, _sigma=1.0):
         outputs, z_exp, z_log_var = self.reconstruct(inputs, _sigma = _sigma)

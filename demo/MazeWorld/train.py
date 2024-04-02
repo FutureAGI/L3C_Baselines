@@ -69,8 +69,6 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Number of parameters in VAE: ", count_parameters(model.vae))
         print("Number of parameters in Decision Transformer: ", count_parameters(model.decformer))
         print("Number of parameters in Action Decoder: ", count_parameters(model.act_decoder))
-        print("Number of parameters in Reward Decoder: ", count_parameters(model.rew_decoder))
-        print("Number of parameters in Map Decoder: ", count_parameters(model.map_decoder))
 
     model = model.to(device)
 
@@ -98,8 +96,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:lr_scheduler(x, 200))
-    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:lr_scheduler(x, 500))
+    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 200))
+    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500))
 
     if(load_model_path is not None):
         model.load_state_dict(torch.load('%s/model.pth' % load_model_path))
@@ -137,13 +135,13 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             acts = acts.to(device)
-            rews = rews.to(device)
-            maps = maps.to(device)
+            #rews = rews.to(device)
+            #maps = maps.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            maps = maps.permute(0, 1, 4, 2, 3)
+            #maps = maps.permute(0, 1, 4, 2, 3)
             #with autocast():
-            lobs, lact, lmap, lrew, cnt = model.module.sequential_loss(obs, acts, rews, maps)
-            main_loss = lobs + lact + lmap + lrew
+            lobs, lact, cnt = model.module.sequential_loss(obs, acts)
+            main_loss = lobs + lact
 
             main_optimizer.zero_grad()
             main_loss.backward()
@@ -153,10 +151,9 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             main_scheduler.step()
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction MSE: %s; Action Cross Entropy: %s; Map Prediction MSE: %s; Reward Prediction: %s" % 
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction MSE: %s; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
-                            float(lobs.detach().cpu().numpy()), float(lact.detach().cpu().numpy()), 
-                            float(lmap.detach().cpu().numpy()), float(lrew.detach().cpu().numpy())))
+                            float(lobs.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
             sys.stdout.flush()
 
     # Example training loop
@@ -186,29 +183,26 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         obs,acts,rews,maps = batch
         obs = obs.to(device)
         acts = acts.to(device)
-        rews = rews.to(device)
-        maps = maps.to(device)
         obs = obs.permute(0, 1, 4, 2, 3)
-        maps = maps.permute(0, 1, 4, 2, 3)
-        length = rews.shape[0] * rews.shape[1]
+        length = acts.shape[0] * acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lobs, lact, lmap, lrew, cnt = model.module.sequential_loss(obs, acts, rews, maps)
+            lobs, lact, cnt = model.module.sequential_loss(obs, acts)
 
             lrec = cnt * lrec
             lobs = cnt * lobs
             lact = cnt * lact
-            lmap = cnt * lmap
-            lrew = cnt * lrew
+            #lmap = cnt * lmap
+            #lrew = cnt * lrew
 
         dist.all_reduce(lrec.data)
         dist.all_reduce(lobs.data)
         dist.all_reduce(lact.data)
-        dist.all_reduce(lmap.data)
-        dist.all_reduce(lrew.data)
+        #dist.all_reduce(lmap.data)
+        #dist.all_reduce(lrew.data)
         dist.all_reduce(cnt.data)
 
-        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), lmap.cpu(), lrew.cpu(), cnt.cpu()))
+        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), cnt.cpu()))
 
         if(main):
             show_bar((batch_idx + 1) / all_length, 100)
@@ -217,25 +211,25 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     sum_lrec = 0
     sum_lobs = 0
     sum_lact = 0
-    sum_lrew = 0
-    sum_lmap = 0
+    #sum_lrew = 0
+    #sum_lmap = 0
     sum_cnt = 0
-    for lrec, lobs, lact, lmap, lrew, cnt in results:
+    for lrec, lobs, lact, cnt in results:
         sum_lrec += lrec
         sum_lobs += lobs
         sum_lact += lact
-        sum_lmap += lmap
-        sum_lrew += lrew
+        #sum_lmap += lmap
+        #sum_lrew += lrew
         sum_cnt += cnt
     sum_lobs /= sum_cnt
     sum_lrec /= sum_cnt
     sum_lact /= sum_cnt
-    sum_lmap /= sum_cnt
-    sum_lrew /= sum_cnt
+    #sum_lmap /= sum_cnt
+    #sum_lrew /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction MSE: %s, Map Prediction MSE: %s, Action Cross Entropy: %s, Reward Prediction: %s" % 
-                (epoch_id, sum_lrec, sum_lobs, sum_lmap, sum_lact, sum_lrew))
+        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction MSE: %s, Action Cross Entropy: %s;" % 
+                (epoch_id, sum_lrec, sum_lobs, sum_lact))
         sys.stdout.flush()
 
 if __name__=='__main__':
