@@ -78,7 +78,6 @@ class ARTransformerEncoder(nn.Module):
                     new_cache.append(output.detach())
         return output, new_cache
 
-
 class DecisionTransformer(nn.Module):
     """
     Take Observations and actions, output d_models
@@ -105,7 +104,6 @@ class DecisionTransformer(nn.Module):
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
-
 
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
