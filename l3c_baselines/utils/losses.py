@@ -14,9 +14,9 @@ def mse_loss_mask(img_out, img_gt, mask = None):
 
     return mse_loss
 
-def ce_loss_mask(act_out, act_gt, mask = None, gamma=2):
+def ce_loss_mask(act_out, act_gt, mask = None, gamma=1):
     gt_logits = F.one_hot(act_gt, act_out.shape[-1])
-    preds = torch.log(act_out) * ((1.0 - act_out) ** gamma)
+    preds = torch.log(act_out) * ((1.0 - act_out.detach()) ** gamma)
     ce_loss = -torch.mean(preds * gt_logits, dim=-1)
     if mask is not None:
         ce_loss = ce_loss * mask

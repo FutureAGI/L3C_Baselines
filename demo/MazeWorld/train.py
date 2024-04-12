@@ -12,7 +12,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
 from dataloader import MazeDataSet
-from utils import noam_scheduler, SigmaScheduler
+from utils import custom_load_model, noam_scheduler, LinearScheduler
 from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -68,7 +68,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Number of parameters in Main Decoder: ", count_parameters(model.decoder))
         print("Number of parameters in VAE: ", count_parameters(model.vae))
         print("Number of parameters in Decision Transformer: ", count_parameters(model.decformer))
-        print("Number of parameters in Action Decoder: ", count_parameters(model.act_decoder))
+        print("Number of parameters in Action Decoder: ", count_parameters(model.act_decoder_1))
 
     model = model.to(device)
 
@@ -92,17 +92,18 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     seq_dataloader = DataLoader(train_dataset, batch_size=batch_size_seq, sampler=train_sampler)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size_seq, sampler=test_sampler)
 
-    sigma_scheduler = SigmaScheduler(500)
+    sigma_scheduler = LinearScheduler(500, [0, 0, 0.5, 1.0])
+    lambda_scheduler = LinearScheduler(500, [0, 1.0e-8, 1.0e-7, 1.0e-6])
 
     vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 200))
-    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500))
+    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500))
+    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 1000))
 
     if(load_model_path is not None):
-        model.load_state_dict(torch.load('%s/model.pth' % load_model_path))
-        vae_optimizer.load_state_dict(torch.load('%s/vae_optimizer.pth' % load_model_path))
-        main_optimizer.load_state_dict(torch.load('%s/seq_optimizer.pth' % load_model_path))
+        model = custom_load_model(model, f'{load_model_path}/model.pth')
+        #vae_optimizer.load_state_dict(torch.load('%s/vae_optimizer.pth' % load_model_path))
+        #main_optimizer.load_state_dict(torch.load('%s/seq_optimizer.pth' % load_model_path))
 
 
     # Perform the first evaluation
@@ -114,7 +115,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
+            vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
 
             vae_optimizer.zero_grad()
             vae_loss.backward()
@@ -123,10 +124,11 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             vae_optimizer.step()
             vae_scheduler.step()
             sigma_scheduler.step()
+            lambda_scheduler.step()
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][VAE ROUND] Iteration: %s; Sigma: %f; LearningRate: %f Reconstruction Loss: %.04f" % 
-                        (rid, percentage, batch_idx, sigma_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
+                print("Epoch: %s [ %.2f %% ][VAE ROUND] Iteration: %s; Hyperparameter: sigma:%f, lambda:%f; LearningRate: %f Reconstruction Loss: %.04f" % 
+                        (rid, percentage, batch_idx, sigma_scheduler(), lambda_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
             sys.stdout.flush()
 
     def main_round(rid, dataloader):
@@ -140,8 +142,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs = obs.permute(0, 1, 4, 2, 3)
             #maps = maps.permute(0, 1, 4, 2, 3)
             #with autocast():
-            lobs, lact, cnt = model.module.sequential_loss(obs, acts)
-            main_loss = lobs + lact
+            lz, lact, cnt = model.module.sequential_loss(obs, acts)
+            main_loss = lz + 0.1 * lact
 
             main_optimizer.zero_grad()
             main_loss.backward()
@@ -151,13 +153,14 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             main_scheduler.step()
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction MSE: %s; Action Cross Entropy: %s;" % 
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s; z: %s; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
-                            float(lobs.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
+                            float(lz.detach().cpu().numpy()), float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
             sys.stdout.flush()
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):
+        model.train()
         if(vae_stop_epoch > epoch_id):
             vae_round(epoch_id, vae_dataloader)
         if(epoch_id > main_start_epoch):
@@ -168,6 +171,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             torch.save(vae_optimizer.state_dict(), opt_path_vae)
             torch.save(main_optimizer.state_dict(), opt_path_seq)
 
+        model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % eval_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
@@ -187,49 +191,46 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         length = acts.shape[0] * acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lobs, lact, cnt = model.module.sequential_loss(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss(obs, acts)
 
             lrec = cnt * lrec
-            lobs = cnt * lobs
+            lz = cnt * lz
             lact = cnt * lact
-            #lmap = cnt * lmap
-            #lrew = cnt * lrew
 
         dist.all_reduce(lrec.data)
-        dist.all_reduce(lobs.data)
+        dist.all_reduce(lz.data)
         dist.all_reduce(lact.data)
-        #dist.all_reduce(lmap.data)
-        #dist.all_reduce(lrew.data)
         dist.all_reduce(cnt.data)
 
-        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), cnt.cpu()))
+        results.append((lrec.cpu(), lz.cpu(), lact.cpu(), cnt.cpu()))
 
         if(main):
             show_bar((batch_idx + 1) / all_length, 100)
             sys.stdout.flush()
 
     sum_lrec = 0
-    sum_lobs = 0
+    sum_lz = 0
     sum_lact = 0
-    #sum_lrew = 0
-    #sum_lmap = 0
     sum_cnt = 0
-    for lrec, lobs, lact, cnt in results:
+    for lrec, lz, lact, cnt in results:
+        if(torch.isinf(lrec).any() or torch.isnan(lrec).any()
+                or torch.isinf(lz).any() or torch.isnan(lz).any()
+                or torch.isinf(lact).any() or torch.isnan(lact).any()
+                or torch.isinf(cnt).any() or torch.isnan(cnt).any()):
+            print("[Warning]: NAN encountered in Evaluation")
+            continue
         sum_lrec += lrec
-        sum_lobs += lobs
+        sum_lz += lz
         sum_lact += lact
-        #sum_lmap += lmap
-        #sum_lrew += lrew
         sum_cnt += cnt
-    sum_lobs /= sum_cnt
+    sum_cnt = max(1, sum_cnt)
     sum_lrec /= sum_cnt
+    sum_lz /= sum_cnt
     sum_lact /= sum_cnt
-    #sum_lmap /= sum_cnt
-    #sum_lrew /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction MSE: %s, Action Cross Entropy: %s;" % 
-                (epoch_id, sum_lrec, sum_lobs, sum_lact))
+        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction Image: %s; Action Cross Entropy: %s;" % 
+                (epoch_id, sum_lrec, sum_lz, sum_lact))
         sys.stdout.flush()
 
 if __name__=='__main__':

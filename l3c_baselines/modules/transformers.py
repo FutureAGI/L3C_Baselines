@@ -24,15 +24,17 @@ class ARTransformerEncoderLayer(nn.Module):
         """
 
         # Norm first always
-        output = self.norm1(src)
 
         # Self Attention
         if cache is not None:
-            kv = torch.cat([src, cache], dim=1)
-            output, _ = self.self_attn(output, kv, kv, attn_mask=attn_mask)
+            kv = self.norm1(torch.cat([cache, src], dim=1))
+            output = kv[:, cache.shape[1]:]
         else:
-            output, _ = self.self_attn(output, output, output, attn_mask=attn_mask)
+            output = self.norm1(src)
+            kv = output
         
+        output, _ = self.self_attn(output, kv, kv, attn_mask=attn_mask)
+
         # Residual Connection
         output = src + output
 
@@ -71,7 +73,7 @@ class ARTransformerEncoder(nn.Module):
             if(cache is not None):
                 output = layer(output, attn_mask, cache[i]) 
                 if(need_cache):
-                    new_cache.append(torch.cat([cache[0], output.detach()], dim=1))
+                    new_cache.append(torch.cat([cache[i + 1], output.detach()], dim=1))
             else:
                 output = layer(output, attn_mask)
                 if(need_cache):
@@ -202,28 +204,33 @@ class ARTransformerStandard(nn.Module):
         return outputs, new_cache
 
 if __name__=='__main__':
-    ART = ARTransformerEncoder(8, 256, 8, 1024, 0.1)
+    ART = ARTransformerEncoder(2, 256, 8, 1024, 0.0)
 
     inputs = torch.randn((4, 64, 256))
-    # Test ART without Cache
-    output1, cache1 = ART(inputs)
-    print(output1.shape, cache1)
     # Test ART adding Cache 
-    output2, cache2 = ART(inputs, need_cache=True)
-    output3, cache3 = ART(inputs, cache=cache2, need_cache=True)
-    output4, cache4 = ART(inputs, cache=cache3, need_cache=True)
-    print(output2.shape, len(cache2), cache2[0].shape)
-    print(output3.shape, len(cache3), cache3[0].shape)
-    print(output4.shape, len(cache4), cache4[0].shape)
+    output1, cache1 = ART(inputs[:, :48], need_cache=True)
+    output2, cache2 = ART(inputs[:, 48:], cache=cache1, need_cache=True)
+    output3, cache3 = ART(inputs, need_cache=True)
+    print(output1 - output3[:, :48])
+    print(output2 - output3[:, 48:])
+    print(cache2[1] - cache3[1])
+    print(cache2[1][:, :48] - cache1[1])
+    #print(output2.shape, len(cache2), cache2[0].shape)
+    #print(output3.shape, len(cache3), cache3[0].shape)
+    #print(output4.shape, len(cache4), cache4[0].shape)
 
-    DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
-    input_acts = torch.randint(0, 4, (4, 64))
-    out_obs, out_act, cache = DT(inputs, input_acts)
-    print(out_obs.shape, out_act.shape, len(cache))
+    #DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
+    #input_acts = torch.randint(0, 4, (4, 64))
+    #out_obs_1, out_act_1, cache_1 = DT(inputs[:, :48], input_acts[:, :48], need_cache=True)
+    #out_obs_2, out_act_2, cache_2 = DT(inputs[:, 48:], input_acts[:, 48:], cache=cache_1, need_cache=True)
+    #out_obs_3, out_act_3, cache_3 = DT(inputs, input_acts, need_cache=True)
+    #print(out_obs_3[:, 48:] - out_obs_2)
+    #print(out_act_3[:, 48:] - out_act_2)
+    #print(cache_3 - cache_2)
 
 
-    inputs2 = torch.randint(0, 1024, (4, 64))
-    ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
-    out_nlp, cache = ART2(inputs2, need_cache=True)
-    out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
-    print(out_nlp.shape, out_nlp2.shape)
+    #inputs2 = torch.randint(0, 1024, (4, 64))
+    #ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
+    #out_nlp, cache = ART2(inputs2, need_cache=True)
+    #out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
+    #print(out_nlp.shape, out_nlp2.shape)

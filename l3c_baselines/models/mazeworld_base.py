@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from modules import Encoder, Decoder, ResBlock, MapDecoder, VAE
 from modules import DecisionTransformer
+from modules import DiffusionLayers
 from utils import ce_loss_mask, img_pro, img_post
 
 class MazeModelBase(nn.Module):
@@ -14,8 +15,8 @@ class MazeModelBase(nn.Module):
                  image_size=128,
                  action_size=5,
                  map_size=7,
-                 latent_size=4,
-                 hidden_size=512,
+                 latent_size=128,
+                 hidden_size=768,
                  nhead=16,
                  max_time_step=1024,
                  n_res_block=2,
@@ -33,14 +34,26 @@ class MazeModelBase(nn.Module):
 
         self.decformer = DecisionTransformer(latent_size, action_size, n_trn_block, hidden_size, nhead, max_time_step)
 
-        self.act_decoder = nn.Sequential(
+        self.act_decoder_1 = nn.Sequential(
+            nn.LayerNorm(hidden_size, eps=1.0e-5),
             nn.Linear(hidden_size, 4 * hidden_size),
             nn.GELU(),
-            nn.Linear(4 * hidden_size, action_size),
-            nn.Softmax()
+            nn.Dropout(0.10),
+            nn.Linear(4 * hidden_size, hidden_size),
+            nn.GELU(),
         )
 
-        self.z_decoder = nn.Linear(hidden_size, latent_size)
+        self.act_decoder_2 = nn.Sequential(
+            nn.Linear(hidden_size, action_size),
+            nn.Softmax(dim=-1)
+        )
+
+        self.z_decoder = DiffusionLayers(
+            24, # T
+            latent_size, # hidden size
+            hidden_size, # condition size
+            2 * hidden_size, # inner hidden size
+        )
 
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
@@ -56,19 +69,13 @@ class MazeModelBase(nn.Module):
             z_rec, _ = self.vae(observations)
 
         # Temporal Encoders
-        obs_output, act_output, new_cache = checkpoint(lambda x:self.decformer(x[0], x[1], cache=cache, need_cache=need_cache), (z_rec, actions))
+        obs_output, act_output, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache)
+        #obs_output, act_output, new_cache = checkpoint(lambda x:self.decformer(x[0], x[1], cache=cache, need_cache=need_cache), (z_rec, actions))
 
-        # Decode Observation [B, N_T, C, W, H]
-        # Pass the gradients without adjust the weights of self.decoder
-        z_pred = self.z_decoder(obs_output)
-        pred_obs = self.decoder(z_pred.reshape(B * NT, -1))
-        _, n_c, n_w, n_h = pred_obs.shape
-        pred_obs = pred_obs.reshape(B, NT, n_c, n_w, n_h)
+        # Decode Action [B, N_T, action_size]
+        pred_act = self.act_decoder_2(act_output + self.act_decoder_1(act_output))
 
-        # Decode Action [B, N_T, action_size], without softmax!
-        pred_act = self.act_decoder(act_output)
-
-        return z_rec, z_pred, pred_obs, pred_act, new_cache
+        return z_rec, obs_output, pred_act, new_cache
 
     def vae_loss(self, observations, _lambda=1.0e-5, _sigma=1.0):
         self.vae.requires_grad_(True)
@@ -76,23 +83,24 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(True)
         return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
-    def sequential_loss(self, observations, actions, _lambda=0.01):
+    def sequential_loss(self, observations, actions):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.decformer.requires_grad_(True)
-        self.act_decoder.requires_grad_(True)
+        self.act_decoder_1.requires_grad_(True)
+        self.act_decoder_2.requires_grad_(True)
         self.z_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_pred, pred_obs, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
 
-        lmse_obs = _lambda * F.mse_loss(pred_obs, inputs[:, 1:]) + F.mse_loss(z_rec[:, 1:], z_pred[:, :-1])
+        lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1])
         lce_act = ce_loss_mask(pred_act, actions)
         #lmse_map = F.mse_loss(pred_map, img_pro(local_maps))
         #lmse_rew = F.mse_loss(rewards, pred_rew.squeeze(-1))
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
-        return lmse_obs, lce_act, cnt
+        return lmse_z, lce_act, cnt
 
     def inference_next(self, observations, actions, cache=None):
         """
@@ -119,15 +127,22 @@ class MazeModelBase(nn.Module):
 
         # Inference Action First
         with torch.no_grad():
-            z_rec, z_pred, pred_obs, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
             n_action = torch.multinomial(pred_act[:, -1], num_samples=1).squeeze(1)
             valid_act[:, -1] = n_action
+            print("Decision:", pred_act, n_action)
 
             # Inference Next Observation based on Sampled Action
-            z_rec, z_pred, pred_obs, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            # Latent Diffusion
+            z_pred_list = self.z_decoder.inference(z_raw)
+            pred_obs = []
+            for z_pred in z_pred_list:
+                pred_obs.append(img_post(self.vae.decoding(z_pred)))
+            # Image Decoding
             rec_obs = self.vae.decoding(z_rec)
 
-        return img_post(rec_obs), img_post(pred_obs), n_action, new_cache
+        return img_post(rec_obs), pred_obs, n_action, new_cache
         
 
 if __name__=="__main__":
@@ -138,7 +153,7 @@ if __name__=="__main__":
     local_map = torch.randn(8, 32, 3, 7, 7)
 
     vae_loss = model.vae_loss(observation)
-    losses = model.sequential_loss(observation, action, reward, local_map)
+    losses = model.sequential_loss(observation, action)
     rec_img, img_out, act_out, cache = model.inference_next(observation, action)
     print("vae:", vae_loss, "sequential:", losses)
     print(img_out.shape, act_out.shape, len(cache), cache[0].shape)
