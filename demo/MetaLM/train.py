@@ -1,424 +1,185 @@
-import sys
-import numpy
-import paddle.distributed.fleet as fleet
-import paddle
-import argparse
 import os
-import paddle.profiler as profiler
-import time
-import l3c
-from l3c_baselines.utils import metalm_loss_func
-from l3c_baselines.utils import detached_memory, linear_segments, EpochStat, formulate_numpyarray
-from l3c_baselines.utils import load_model, save_model
-from l3c_baselines.utils import debug_print_norm, debug_print_grad, debug_print_para
-from l3c_baselines.LSTM_block import AutoRegressiveLSTM
-from l3c_baselines.RMT_block import AutoRegressiveRMT
-from l3c_baselines.RMT2_block import AutoRegressiveRMT2
-from l3c_baselines.TRN_block import AutoRegressiveTRN
-from l3c.metalm import MetaLMv1, MetaLMv2
+import sys
+import argparse
+import torch
+import numpy
+import torch.optim as optim
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.optim.lr_scheduler import LambdaLR
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.utils import clip_grad_norm_
+from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import autocast
+from dataloader import MazeDataSet
+from utils import custom_load_model, noam_scheduler, LinearScheduler
+from utils import show_bar, count_parameters, model_path
+from models import LMBase
 
-if os.name == 'nt':
-    import win32api, win32con
-def file_is_hidden(p):
-    if os.name== 'nt':
-        attribute = win32api.GetFileAttributes(p)
-        return attribute & (win32con.FILE_ATTRIBUTE_HIDDEN | win32con.FILE_ATTRIBUTE_SYSTEM)
+os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
+os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
+
+
+def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
+        batch_size, vocab_size, train_data_path, test_data_path, 
+        load_model_path, save_model_path, 
+        max_time_step, train_time_step, learning_rate, main_rank):
+    if use_gpu:
+        torch.cuda.set_device(rank)  # Set the current GPU to be used
+        device = torch.device(f'cuda:{rank}')
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
     else:
-        return p.startswith('.') #linux-osx
+        device = torch.device('cpu')
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
-class FileManager(object):
-    def __init__(self, file_dir, worker_num, worker_index):
-        if(os.path.isfile(file_dir)):
-            self.file_name = [file_dir]
-            self.cur_index = 0
-        else:
-            self.file_name = [f for f in os.listdir(file_dir) if not file_is_hidden(f)]
-            self.file_name = list(map(lambda x:os.path.join(file_dir, x), self.file_name))
-            self.worker_num = worker_num
-            self.cur_index = worker_index
-        self.previous_file_name = None
-
-    def get_file(self):
-        file_name = self.file_name[self.cur_index]
-        self.cur_index += 1
-        self.cur_index = self.cur_index % len(self.file_name)
-        if(self.previous_file_name == file_name):
-            is_same = True
-        else:
-            is_same = False
-        self.previous_file_name = file_name
-        return file_name, is_same
-
-class FileDataset(object):
-    def __init__(self, file_name, pad_id):
-        self.data_list = []
-        self.data_len_list = []
-        n_line = 0
-        f_in = open(file_name, "r")
-        for line in f_in:
-            all_tokens = line.strip().split("\t")
-            data = numpy.asarray(list(map(lambda x:list(map(int, x.split(","))), all_tokens)), dtype="int32")
-            self.data_list.append(data)
-            self.data_len_list.append(data.shape[0])
-            n_line += 1
-        f_in.close()
-        self.sample_nums = n_line
-        self.data_len_list = numpy.asarray(self.data_len_list, dtype="int32")
-        self.pad_id = pad_id
-
-    def reset(self, batch_size):
-        self.shuf_idx = numpy.arange(self.sample_nums)
-        numpy.random.shuffle(self.shuf_idx)
-        self.cur_idx = 0
-        self.batch_size = batch_size
-
-    def batch(self):
-        b_idx = self.cur_idx
-        e_idx = min(self.batch_size + self.cur_idx, self.sample_nums)
-        if(e_idx >= self.sample_nums):
-            is_end = True
-        else:
-            is_end = False
-        self.cur_idx = e_idx
-
-        real_batch_size = e_idx - b_idx
-        if(real_batch_size < 1):
-            raise Exception("Iteration reaches the end, need reset before sampling batch")
-
-        batch_idxes = self.shuf_idx[b_idx : e_idx]
-        sel_lens = self.data_len_list[batch_idxes]
-
-        # Must Synchronize Lengths across all workers
-        max_len = numpy.max(sel_lens)
-
-        features = numpy.full((real_batch_size, max_len), self.pad_id)
-        labels = numpy.full((real_batch_size, max_len), self.pad_id)
-        for i, idx in enumerate(batch_idxes.tolist()):
-            features[i][:sel_lens[i]] = self.data_list[idx][:,0]
-            labels[i][:sel_lens[i]] = self.data_list[idx][:,1]
-
-        return features, labels, is_end
-
-    def __getitem__(self, idx):
-        return self.data_list[idx]
-
-    def __len__(self):
-        return self.n_line
-
-def INNER_ITERATOR(fea, lab, segment_size, pad_id):
-    b_idx = 0
-    seg_idx = 0
-    max_len = fea.shape[1]
-    bsz = fea.shape[0]
-    while b_idx < max_len:
-        seg_idx += 1
-        e_idx = min(b_idx + segment_size, max_len)
-        if(e_idx <= b_idx):
-            return
-        seg_toks = (e_idx - b_idx) * bsz
-        yield b_idx, e_idx, fea[:, b_idx:e_idx], lab[:, b_idx:e_idx], seg_toks
-        b_idx = e_idx
-
-def train_batch(
-        data_generator, 
-        model, 
-        pad_id,
-        worker_index,
-        loss_weights=None,
-        seg_size=256, 
-        opt=None, 
-        detach_segments=4, 
-        batch_size=64,
-        is_train=True):
-
-    if(opt is None and is_train):
-        raise Exception("Must set opt when is_train == True")
-    if(isinstance(data_generator, FileDataset)):
-        feas, labs, is_end = data_generator.batch()
-    elif(isinstance(data_generator, MetaLMv1) or isinstance(data_generator, MetaLMv2)):
-        seed = int(10 * time.time() + worker_index * 1000000) % 4294967295
-        feas, labs = data_generator.batch_generator(batch_size, seed=seed)
-        is_end = False
-    elif(isinstance(data_generator, list)):
-        feas, labs = data_generator
-        is_end = False
+    if(main_rank is None):
+        main = False
+    elif(main_rank == "all" or main_rank == rank):
+        main = True
     else:
-        raise Exception("Unknown data_generator type:", data_generator)
-    mem = None
-    acc_loss = []
-    batch_loss = []
-    batch_ppl = []
-    batch_toks = []
-    seg_idx = 0
+        main = False
 
-    #prof = profiler.Profiler(targets=[profiler.ProfilerTarget.GPU], 
-    #        profile_memory=True, timer_only=True)
-    for b_idx, e_idx, fea, lab, seg_toks in INNER_ITERATOR(feas, labs, seg_size, pad_id):
-        seg_idx += 1
-        #print("Worker index", worker_index, "Memory allocated before:", paddle.device.cuda.memory_allocated())
-        (loss, mem) = metalm_loss_func(model,
-                paddle.to_tensor(fea, dtype="int32"), 
-                paddle.to_tensor(lab, dtype="int32"), 
-                mems=mem)
-        #print("loss.shape", loss.shape, "seg_toks", seg_toks, "from", b_idx, "to", e_idx)
-        #debug_print_norm(mem)
-        ppl = paddle.sum(loss)
-        batch_ppl.append(ppl.numpy()[0])
-        batch_toks.append(seg_toks)
-        batch_loss.append(numpy.asarray(loss))
-        if(is_train):
-            if(loss_weights is None):
-                acc_loss.append([seg_toks, paddle.sum(loss)])
-            else:
-                acc_loss.append([seg_toks, paddle.sum(loss * loss_weights[b_idx:e_idx])])
-            if(seg_idx % detach_segments == 0):
-                sum_loss = 0
-                sum_toks = 0
+    if(main):
+        print("Main gpu", use_gpu, "rank:", rank, device)
 
-                for toks, loss in acc_loss:
-                    sum_loss += loss
-                    sum_toks += toks
-                sum_loss = (1.0 / (max(sum_toks, 1.0))) * sum_loss
+    # Create model and move it to GPU with id `gpu`
+    model = LMBase(vocab_size=vocab_size,
+                hidden_size=768,
+                nhead=16,
+                max_time_step=max_time_step,
+                n_trn_block=12)
 
-                sum_loss.backward()
-                #debug_print_grad(model)
-                opt.step()
-                opt.clear_grad()
-                acc_loss = []
-                mem = detached_memory(mem)
-        else:
-            mem = detached_memory(mem)
+    model = model.to(device)
 
-    if(len(acc_loss) > 0):
-        sum_loss = 0
-        sum_toks = 0
-
-        for toks, loss in acc_loss:
-            sum_loss += loss
-            sum_toks += toks
-        sum_loss = (1.0 / (max(sum_toks, 1.0))) * sum_loss
-
-        sum_loss.backward()
-        opt.step()
-        opt.clear_grad()
-
-    acc_loss = []
-    pos_loss = numpy.mean(numpy.concatenate(batch_loss, axis=-1), axis=0)
-    mem = detached_memory(mem)
-    #debug_print_para(model)
-
-    return numpy.asarray(batch_ppl), numpy.asarray(batch_toks), pos_loss, is_end
-
-if __name__=="__main__":
-    fleet.init(is_collective=True)
-
-    parser = argparse.ArgumentParser(description='Training L3C Baselines')
-    parser.add_argument('--version', type=str, default='v1')
-    parser.add_argument('--vocab_size', type=int, default=64)
-    parser.add_argument('--embedding_size', type=int, default=16)
-    parser.add_argument('--n_gram', type=int, default=3)
-    parser.add_argument('--hidden_size', type=int, default=16)
-    parser.add_argument('--elements_length', type=int, default=64)
-    parser.add_argument('--elements_number', type=int, default=10)
-    parser.add_argument('--error_rate', type=float, default=0.05)
-    parser.add_argument('--sequence_length', type=int, default=4096)
-    parser.add_argument('--train_segment', type=int, default=128)
-    parser.add_argument('--eval_segment', type=int, default=128)
-    parser.add_argument('--model_type', type=str, default="LSTM")
-    parser.add_argument('--model_layer_num', type=int, default=1)
-    parser.add_argument('--model_hidden_size', type=int, default=512)
-    parser.add_argument('--model_head_num', type=int, default=16)
-    parser.add_argument('--model_memory_size', type=int, default=256)
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--detach_segments', type=int, default=1)
-    parser.add_argument('--opt_learning_rate', type=float, default=1.0e-4)
-    parser.add_argument('--opt_warmup_steps', type=float, default=2000)
-    parser.add_argument('--model_load_path', type=str, default=None)
-    parser.add_argument('--train_max_epochs', type=int, default=200)
-    parser.add_argument('--train_epoch_max_iterations', type=int, default=500)
-    parser.add_argument('--train_warmup_steps', type=int, default=None)
-    parser.add_argument('--train_intermediate_steps', type=int, default=None)
-    parser.add_argument('--evaluation_data_path', type=str, default=None)
-
-    args = parser.parse_args()
-
-    train_segment = args.train_segment
-    eval_segment = args.eval_segment
-    max_segment = max(train_segment, eval_segment)
-    V = args.vocab_size
-    n = args.elements_number
-    l = args.elements_length
-    L = args.sequence_length
-    e = args.error_rate
-    ng = args.n_gram
-    nh = args.hidden_size
-    ne = args.embedding_size
-    version = args.version
-    detach_segments = args.detach_segments
-    
-    model_type = args.model_type
-    n_layer = args.model_layer_num
-    n_hidden = args.model_hidden_size
-    n_head = args.model_head_num
-    n_mem = args.model_memory_size
-    load_model_path = args.model_load_path
-    eval_dataset = args.evaluation_data_path
-    batch_size = args.batch_size
-    opt_lr = args.opt_learning_rate
-    opt_steps = args.opt_warmup_steps
-
-    train_warmup_steps = args.train_warmup_steps
-    train_intermediate_steps = args.train_intermediate_steps
-    
-    train_max_epochs = args.train_max_epochs
-    train_epoch_max_iterations = args.train_epoch_max_iterations
-
-    worker_num = fleet.worker_num()
-    worker_index = fleet.worker_index()
-
-    if(version == 'v1'):
-        DataGen = MetaLMv1(V, n, l, e, L)
-        pad_id = DataGen.PaddingID
-        vocab_size = DataGen.VocabSize
-    elif(version == 'v2'):
-        DataGen = MetaLMv2(V, ng, ne, nh, e, L)
-        pad_id = DataGen.PaddingID
-        vocab_size = DataGen.VocabSize
-    elif(version == 'debug'):
-        DataGen = FileDataset(eval_dataset, 0)
-        pad_id = 0
-        vocab_size = V
+    if use_gpu:
+        model = DDP(model, device_ids=[rank])
     else:
-        raise Exception("no such version %s"%version)
+        model = DDP(model)
 
+    # Example dataset and dataloader
+    if(main):
+        print("Initializing Training Dataset...")
+    train_dataset = LMDataSet(train_data_path, train_time_step, verbose=main)
+    if(main):
+        print("Initializing Testing Dataset...")
+    test_dataset = LMDataSet(test_data_path, train_time_step, verbose=main)
 
-    if(worker_index == 0):
-        eval_loader = FileDataset(eval_dataset, pad_id)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
 
-    if(model_type == "LSTM"):
-        model = AutoRegressiveLSTM(
-            vocab_size, 
-            n_hidden,
-            n_layer)
-    elif(model_type == "RMT"):
-        model = AutoRegressiveRMT(
-            vocab_size, 
-            n_hidden, 
-            n_layer, 
-            n_head,
-            seg_len=max_segment,
-            mem_len=n_mem
-            )
-    elif(model_type == "RMT2"):
-        model = AutoRegressiveRMT2(
-            vocab_size, 
-            n_hidden, 
-            n_layer, 
-            n_head,
-            seg_len=max_segment,
-            mem_len=n_mem
-            )
-    elif(model_type == "TRN"):
-        model = AutoRegressiveTRN(
-            vocab_size, 
-            n_hidden, 
-            n_layer, 
-            n_head,
-            seg_len=max_segment,
-            )
-    else:
-        raise Exception("No such model type: %s" % model_type)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
 
-    #model_info = paddle.summary(model, input_size=(1, 256), dtypes="int32", input=None)
-    #print(model_info)
-    #debug_print_para(model)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    model = paddle.DataParallel(model, find_unused_parameters=True)
-
-    lr = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=opt_lr, T_max=10, eta_min=1.0e-3 * opt_lr, verbose=True)
-    #lr = paddle.optimizer.lr.CyclicLR(base_learning_rate=2.0e-3, max_learning_rate=5.0e-5, step_size_up=10)
-    #lr = paddle.optimizer.lr.InverseTimeDecay(learning_rate=5.0e-3, gamma=0.25, last_epoch=-1)
-    #lr = paddle.optimizer.lr.NoamDecay(d_model=n_hidden, warmup_steps=opt_steps)
-
-    opt = paddle.optimizer.AdamW(learning_rate=lr, parameters=model.parameters(),
-            grad_clip=paddle.nn.ClipGradByGlobalNorm(1.0),
-            )
-    opt = fleet.distributed_optimizer(opt)
-
-    #load model
     if(load_model_path is not None):
-        load_model(model, opt, load_model_path)
+        model = custom_load_model(model, f'{load_model_path}/model.pth')
 
+    # Perform the first evaluation
+    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
 
-    #Add inner loss weights
-    if(train_warmup_steps is not None):
-        inner_loss_weights = linear_segments(L + 1, warmup_steps=train_warmup_steps, intermediate_steps=train_intermediate_steps)
-    else:
-        inner_loss_weights = None
+    def main_round(rid, dataloader):
+        total_iteration = len(dataloader)
+        for batch_idx, (feature, label) in enumerate(train_dataloader):
+            feature = feature.to(device)
+            label = label.to(device)
+            #with autocast():
+            loss = model.module.perplexity(feature, label)
 
-    print("Loss weights:", inner_loss_weights)
-    epoch = 0
+            optimizer.zero_grad()
+            loss.backward()
+            clip_grad_norm_(model.module.parameters(), 1.0)
 
-
-    while epoch < train_max_epochs:
-        batch_idx = 0
-        epoch += 1
-        epoch_loss = None
-        epoch_toks = None
-        # Training
-        is_end = False
-        train_stat = EpochStat()
-        if(isinstance(DataGen, FileDataset)):
-            DataGen.reset(batch_size)
-        while batch_idx < train_epoch_max_iterations and not is_end:
-            model.train()
-            batch_idx += 1
-            batch_loss, batch_toks, pos_loss, is_end = train_batch(
-                    DataGen, 
-                    model, 
-                    pad_id,
-                    worker_index,
-                    batch_size=batch_size,
-                    opt=opt,
-                    loss_weights=inner_loss_weights,
-                    seg_size=train_segment,
-                    detach_segments=detach_segments,
-                    is_train=True
-                    )
-            train_stat.add_batch(batch_toks, batch_loss, pos_loss, None)
-            print("Epoch: %d, batch %d, learning rate: %f, average loss: %s"%(epoch, batch_idx, opt.get_lr(), formulate_numpyarray(batch_loss / batch_toks)))
+            optimizer.step()
+            if(main):
+                percentage = (batch_idx + 1) / total_iteration * 100
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; Perplexity: %s;" % 
+                        (rid, percentage, batch_idx, float(loss.detach().cpu().numpy())))
             sys.stdout.flush()
-        lr.step()
-        epoch_loss, pos_loss, _ = train_stat.get_statistics()
-        print("[TRAINING] Epoch: %d, training loss: %s"%(epoch, formulate_numpyarray(epoch_loss)))
-        print("[TRAINING]" + "\t".join(map(lambda x:"%.3f"%x, pos_loss.tolist())))
+
+    # Example training loop
+    for epoch_id in range(1, max_epochs + 1):
+        model.train()
+        main_round(epoch_id, vae_dataloader)
+        if(epoch_id > main_start_epoch):
+            main_round(epoch_id, seq_dataloader)
+        if(main and epoch_id % eval_interval == 0):
+            mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
+            torch.save(model.state_dict(), mod_path)
+            torch.save(optimizer.state_dict(), opt_path_vae)
+
+        model.eval()
+        # Perform the evaluation according to interval
+        if(epoch_id % eval_interval == 0):
+            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
+
+def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
+    # Example training loop
+    results = []
+    all_length = len(test_dataloader)
+
+    if(main):
+        print("[EVALUATION] Epochs: %s..." % epoch_id)
+
+    for batch_idx, (feature, label) in enumerate(train_dataloader):
+        feature = feature.to(device)
+        label = label.to(device)
+        #with autocast():
+        with torch.no_grad():
+            loss = model.module.perplexity(feature, label)
+            length = torch.tensor(feature.shape[0] * feature.shape[1]).to(loss.device)
+
+            loss = loss * length
+
+        dist.all_reduce(loss.data)
+        dist.all_reduce(length.data)
+
+        results.append((loss.cpu(), length.cpu()))
+
+        if(main):
+            show_bar((batch_idx + 1) / all_length, 100)
+            sys.stdout.flush()
+
+    sum_loss = 0
+    sum_cnt = 0
+    for loss, cnt in results:
+        sum_loss += loss
+        sum_cnt += cnt
+    sum_cnt = max(1, sum_cnt)
+    sum_loss /= sum_cnt
+
+    if(main):
+        print("\n[EVALUATION] Epochs: %s; Perplexity: %s\n"
+                (epoch_id, sum_loss))
         sys.stdout.flush()
 
-        if(worker_index == 0):
-            save_model(model, opt, "checkpoint.%s/epoch"%model_type, epoch)
-        
-        # Testing
-        if(worker_index == 0):
-            eval_loader.reset(batch_size)
-            is_end = False
-            epoch_loss = None
-            epoch_toks = None
-            model.eval()
-            eval_stat = EpochStat()
-            while not is_end:
-                batch_loss, batch_toks, pos_loss, is_end = train_batch(
-                        eval_loader, 
-                        model, 
-                        pad_id,
-                        worker_index,
-                        batch_size=batch_size,
-                        seg_size=eval_segment,
-                        is_train=False
-                        )
-                #print(batch_loss, batch_toks)
-                eval_stat.add_batch(batch_toks, batch_loss, pos_loss, None)
-            epoch_loss, pos_loss, _ = eval_stat.get_statistics()
-            print("[EVALUATING] Epoch: %d, evaluation ppl: %s"%(epoch, formulate_numpyarray(epoch_loss)))
-            print("[EVALUATING]" + "\t".join(map(lambda x:"%.3f"%x, pos_loss.tolist())))
-            sys.stdout.flush()
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train_data_path', type=str)
+    parser.add_argument('--test_data_path', type=str)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--max_epochs', type=int, default=10)
+    parser.add_argument('--eval_interval', type=int, default=1)
+    parser.add_argument('--max_time_step', type=int, default=1024)
+    parser.add_argument('--train_time_step', type=int, default=256)
+    parser.add_argument('--vocab_size', type=int, default=64)
+    parser.add_argument('--save_path', type=str, default='./model/')
+    parser.add_argument('--load_path', type=str, default=None)
+    args = parser.parse_args()
 
+    use_gpu = torch.cuda.is_available()
+    world_size = torch.cuda.device_count() if use_gpu else os.cpu_count()
+    if(use_gpu):
+        print("Use Parallel GPUs: %s" % world_size)
+    else:
+        print("Use Parallel CPUs: %s" % world_size)
+
+    mp.spawn(main_epoch,
+             args=(use_gpu, world_size, args.max_epochs, args.eval_interval, 
+                    args.batch_size, args.vocab_size,
+                    args.train_data_path, args.test_data_path,
+                    args.load_path, args.save_path,
+                    args.max_time_step, args.train_time_step, args.lr, 0),
+             nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
+             join=True)

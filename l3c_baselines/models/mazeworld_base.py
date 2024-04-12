@@ -114,6 +114,7 @@ class MazeModelBase(nn.Module):
         if(NT < 2):
             valid_act = add_act
         else:
+            print(observations.shape, actions.shape)
             valid_act = torch.cat([actions, add_act], dim=1)
 
         if(cache is not None):
