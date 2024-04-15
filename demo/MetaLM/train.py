@@ -11,13 +11,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
-from dataloader import MazeDataSet
+from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
+os.environ['MASTER_PORT'] = '12343'        # Example port, choose an available port
 
 
 def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
@@ -59,10 +59,10 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     # Example dataset and dataloader
     if(main):
         print("Initializing Training Dataset...")
-    train_dataset = LMDataSet(train_data_path, train_time_step, verbose=main)
+    train_dataset = LMDataSet(train_data_path, 1000, verbose=main)
     if(main):
         print("Initializing Testing Dataset...")
-    test_dataset = LMDataSet(test_data_path, train_time_step, verbose=main)
+    test_dataset = LMDataSet(test_data_path, 1000, verbose=main)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
@@ -71,18 +71,19 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, 1000))
 
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth')
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
-        for batch_idx, (feature, label) in enumerate(train_dataloader):
-            feature = feature.to(device)
-            label = label.to(device)
+        for batch_idx, (feature, label) in enumerate(dataloader):
+            feature = feature[:, :max_time_step].to(device)
+            label = label[:, :max_time_step].to(device)
             #with autocast():
             loss = model.module.perplexity(feature, label)
 
@@ -91,29 +92,28 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             clip_grad_norm_(model.module.parameters(), 1.0)
 
             optimizer.step()
+            scheduler.step()
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; Perplexity: %s;" % 
-                        (rid, percentage, batch_idx, float(loss.detach().cpu().numpy())))
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; Learning_Rate:%s; Perplexity: %s;" % 
+                        (rid, percentage, batch_idx, scheduler.get_last_lr()[0], float(loss.detach().cpu().numpy())))
             sys.stdout.flush()
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):
         model.train()
-        main_round(epoch_id, vae_dataloader)
-        if(epoch_id > main_start_epoch):
-            main_round(epoch_id, seq_dataloader)
+        main_round(epoch_id, train_dataloader)
         if(main and epoch_id % eval_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
-            torch.save(optimizer.state_dict(), opt_path_vae)
+            torch.save(optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % eval_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
+            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id, max_time_step)
 
-def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id, max_time_step):
     # Example training loop
     results = []
     all_length = len(test_dataloader)
@@ -121,9 +121,9 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
 
-    for batch_idx, (feature, label) in enumerate(train_dataloader):
-        feature = feature.to(device)
-        label = label.to(device)
+    for batch_idx, (feature, label) in enumerate(test_dataloader):
+        feature = feature[:, :max_time_step].to(device)
+        label = label[:, :max_time_step].to(device)
         #with autocast():
         with torch.no_grad():
             loss = model.module.perplexity(feature, label)
@@ -150,7 +150,7 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
 
     if(main):
         print("\n[EVALUATION] Epochs: %s; Perplexity: %s\n"
-                (epoch_id, sum_loss))
+                % (epoch_id, sum_loss))
         sys.stdout.flush()
 
 if __name__=='__main__':

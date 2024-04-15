@@ -53,7 +53,6 @@ if __name__=='__main__':
     parser.add_argument('--error_rate', type=float, default=0.20)
     parser.add_argument('--n_gram', type=float, default=3)
     parser.add_argument('--sequence_length', type=int, default=4096)
-    parser.add_argument('--samples', type=int, default=100)
     parser.add_argument('--file_size', type=int, default=1000)
     parser.add_argument('--file_number', type=int, default=1024)
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")

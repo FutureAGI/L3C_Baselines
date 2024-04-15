@@ -170,6 +170,7 @@ class ARTransformerStandard(nn.Module):
 
         # 创建Transformer编码器层
         self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, dim_feedforward=4*d_model)
+        self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
         self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
 
@@ -199,7 +200,7 @@ class ARTransformerStandard(nn.Module):
 
         # Temporal Encoders
         outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
-        outputs = self.output_mapping(outputs)
+        outputs = self.output_mapping(self.norm(outputs))
 
         return outputs, new_cache
 

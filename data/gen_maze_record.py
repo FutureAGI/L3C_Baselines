@@ -55,7 +55,6 @@ def run_maze_epoch(n=15,
     while not done:
         action = agent.step(observation, reward)
         action_list.append(action)
-        print(action)
         observation, reward, done, info = maze_env.step(action)
         loc_map = maze_env.maze_core.get_loc_map(map_range=3)
         reward_list.append(reward)

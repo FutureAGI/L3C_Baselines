@@ -13,29 +13,12 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
 from dataloader import MazeDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
+from utils import show_bar, count_parameters, model_path
 from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
 
-def show_bar(fraction, bar):
-    percentage = int(bar * fraction)
-    empty = bar - percentage
-    sys.stdout.write("\r") 
-    sys.stdout.write("[") 
-    sys.stdout.write("=" * percentage)
-    sys.stdout.write(" " * empty)
-    sys.stdout.write("]") 
-    sys.stdout.write("%.2f %%" % (percentage * 100 / bar))
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def model_path(save_model_path, epoch_id):
-    directory_path = '%s/%02d/' % (save_model_path, epoch_id)
-    if not os.path.exists(directory_path):
-        os.makedirs(directory_path)
-    return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
 def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
         vae_stop_epoch, main_start_epoch, batch_size_vae, batch_size_seq,
@@ -153,9 +136,9 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             main_scheduler.step()
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s; z: %s; Action Cross Entropy: %s;" % 
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
-                            float(lz.detach().cpu().numpy()), float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
+                            float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
             sys.stdout.flush()
 
     # Example training loop

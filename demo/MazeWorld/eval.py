@@ -45,11 +45,12 @@ def demo_epoch(maze_env, task, model, device, video_writer):
     done = False
     step = 0
     cache = None
+    act_tor = None
     while not done:
         step += 1
         obs_tor = torch.from_numpy(numpy.array(obs_arr)).float().to(device).unsqueeze(0)
-        act_tor = torch.from_numpy(numpy.array(act_arr)).long().to(device).unsqueeze(0)
         obs_tor = obs_tor.permute(0, 1, 4, 2, 3)
+        act_tor = torch.from_numpy(numpy.array(act_arr)).long().to(device).unsqueeze(0)
         with torch.no_grad():
             rec_obs, next_obs_list, next_act, cache = model.inference_next(obs_tor, act_tor, cache)
         
@@ -76,11 +77,14 @@ def demo_epoch(maze_env, task, model, device, video_writer):
         raw_img = numpy.concatenate([line1, line2], axis=0)
         img = postprocess_image(raw_img, 3, (
             ((10, 10), "Observation t"),
-            ((64, 20), action_text(act_arr[-1])),
+            ((20, 64), action_text(act_arr[-1])),
             ((138, 10), "Reconstruction t"),
             ((266, 10), "Observation t + 1"),
             ((394, 10), "Local Map"),
-            ((394, 138), "Predict Observation t + 1"),
+            ((10, 138), "Predict t+1 x_T"),
+            ((138, 138), "Predict t+1 x_2T/3"),
+            ((266, 138), "Predict t+1 x_T/3"),
+            ((394, 138), "Predict t+1 x_0"),
             ))
         
         video_writer.add_image(img)

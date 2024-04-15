@@ -33,7 +33,7 @@ class LMBase(nn.Module):
 
     def perplexity(self, inputs, outputs):
         logits, new_cache = self.forward(inputs, need_cache=False)
-        return ce_loss_mask(logits, outputs)
+        return ce_loss_mask(logits, outputs, gamma=0)
 
     def inference_seg(self, inputs, L, cache=None):
         with torch.no_grad():

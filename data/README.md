@@ -16,6 +16,16 @@ python gen_maze_record.py
 ```
 
 ## Output
-```
-bash gen_metalm_data.sh
+```shell
+python gen_lm_data.py 
+	--version v1/v2
+	--vocab_size 64
+	--embedding_size 16
+	--n_gram 3
+	--file_size 1000
+	--file_number 100
+	--output_path PATH_TO_DIR
+	--sequence_length 2048 
+	--file_number 16
+	--workers 4
 ```
