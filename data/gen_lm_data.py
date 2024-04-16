@@ -18,23 +18,28 @@ import sys
 import argparse
 import multiprocessing
 import numpy
+import random
 from l3c.metalm import MetaLMv1
 from l3c.metalm import MetaLMv2
 
 def dump_data(path, idxes, args):
+    vocab_size = random.choice(list(map(int, args.vocab_size.split(","))))
+    n_gram = random.choice(list(map(int, args.n_gram.split(","))))
+    embedding_size = random.choice(list(map(int, args.embedding_size.split(","))))
+    hidden_size = random.choice(list(map(int, args.hidden_size.split(","))))
     if(args.version == 'v1'):
         dataset = MetaLMv1(
-                V=args.vocab_size,
+                V=vocab_size,
                 n=args.elements_number,
                 l=args.elements_length,
                 e=args.error_rate,
                 L=args.sequence_length)
     elif(args.version == 'v2'):
         dataset = MetaLMv2(
-                V=args.vocab_size,
-                n=args.n_gram,
-                d=args.embedding_size,
-                N=args.hidden_size,
+                V=vocab_size,
+                n=n_gram,
+                d=embedding_size,
+                N=hidden_size,
                 e=args.error_rate,
                 L=args.sequence_length)
     for idx in idxes:
@@ -45,13 +50,13 @@ def dump_data(path, idxes, args):
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Generating Pseudo-Training Data')
     parser.add_argument('--version', type=str, default='v1')
-    parser.add_argument('--vocab_size', type=int, default=64)
-    parser.add_argument('--embedding_size', type=int, default=16)
-    parser.add_argument('--hidden_size', type=int, default=16)
+    parser.add_argument('--vocab_size', type=str, default="64, 128")
+    parser.add_argument('--embedding_size', type=str, default="16, 32")
+    parser.add_argument('--hidden_size', type=str, default="16, 32, 64")
     parser.add_argument('--elements_length', type=int, default=64)
     parser.add_argument('--elements_number', type=int, default=10)
     parser.add_argument('--error_rate', type=float, default=0.20)
-    parser.add_argument('--n_gram', type=float, default=3)
+    parser.add_argument('--n_gram', type=str, default="2,3,4,5")
     parser.add_argument('--sequence_length', type=int, default=4096)
     parser.add_argument('--file_size', type=int, default=1000)
     parser.add_argument('--file_number', type=int, default=1024)
