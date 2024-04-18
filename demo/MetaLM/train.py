@@ -59,10 +59,10 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     # Example dataset and dataloader
     if(main):
         print("Initializing Training Dataset...")
-    train_dataset = LMDataSet(train_data_path, 1000, verbose=main)
+    train_dataset = LMDataSet(train_data_path, 500, verbose=main)
     if(main):
         print("Initializing Testing Dataset...")
-    test_dataset = LMDataSet(test_data_path, 1000, verbose=main)
+    test_dataset = LMDataSet(test_data_path, 500, verbose=main)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
