@@ -42,7 +42,6 @@ class LMBase(nn.Module):
             for _ in range(L):
                 logits, cache = self.forward(sampled_outputs, cache=cache, need_cache=True)
                 sampled_outputs = torch.multinomial(logits[:, -1], num_samples=1)
-                print(sampled_outputs.shape)
                 outputs = torch.cat([outputs, sampled_outputs], dim=-1)
         return outputs
 
