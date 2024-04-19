@@ -79,7 +79,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         model = custom_load_model(model, f'{load_model_path}/model.pth')
 
     # Perform the first evaluation
-    #test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
+    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)

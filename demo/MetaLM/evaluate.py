@@ -17,12 +17,12 @@ from utils import show_bar, count_parameters, model_path
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12343'        # Example port, choose an available port
+os.environ['MASTER_PORT'] = '12342'        # Example port, choose an available port
 
 
-def main_epoch(rank, use_gpu,
-        batch_size, vocab_size, test_data_path, load_model_path, 
-        max_time_step, train_time_step):
+def main_epoch(rank, use_gpu, world_size,
+        batch_size, vocab_size, data_path, load_model_path, 
+        max_time_step, test_time_step):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -30,9 +30,6 @@ def main_epoch(rank, use_gpu,
     else:
         device = torch.device('cpu')
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
-
-    if(main):
-        print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
     model = LMBase(vocab_size=vocab_size,
@@ -49,12 +46,10 @@ def main_epoch(rank, use_gpu,
         model = DDP(model)
 
     # Example dataset and dataloader
-    dataset = LMDataSet(data_path, 1000, verbose=main)
+    dataset = LMDataSet(data_path, 500, verbose=True)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, 1000))
+    all_length = len(dataloader)
 
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth')
@@ -63,22 +58,24 @@ def main_epoch(rank, use_gpu,
 
     results = []
     for batch_idx, (feature, label) in enumerate(dataloader):
-        feature = feature[:, :max_time_step].to(device)
-        label = label[:, :max_time_step].to(device)
+        feature = feature[:, :test_time_step].to(device)
+        label = label[:, :test_time_step].to(device)
         #with autocast():
         with torch.no_grad():
-            loss = model.module.perplexity(feature, label, reduce=None)
+            loss = model.module.perplexity_array(feature, label)
         results.append(loss)
-    results=torch.mean((torch.cat(results, dim=0), dim=0).cpu().tolist()
+        show_bar((batch_idx + 1) / all_length, 100)
+        sys.stdout.flush()
+    results=torch.mean(torch.stack(results, dim=0), dim=0).cpu().tolist()
 
-    print('\t'.join(map(str, results))
+    print('\n'.join(map(str, results)))
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=str)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--train_time_step', type=int, default=256)
+    parser.add_argument('--test_time_step', type=int, default=256)
     parser.add_argument('--vocab_size', type=int, default=64)
     parser.add_argument('--load_path', type=str, default=None)
     args = parser.parse_args()
@@ -91,12 +88,12 @@ if __name__=='__main__':
         print("Use Parallel CPUs: %s" % world_size)
 
     mp.spawn(main_epoch,
-             args=(use_gpu,
+             args=(use_gpu, world_size,
                     args.batch_size, 
                     args.vocab_size,
                     args.data_path,
                     args.load_path,
                     args.max_time_step, 
-                    args.train_time_step),
+                    args.test_time_step),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
