@@ -1,0 +1,11 @@
+python gen_lm_data.py \
+  --version v2 \
+  --vocab_size 16 \
+  --embedding_size 32 \
+  --hidden_size 64 \
+  --n_gram 2 \
+  --sequence_length 4096 \
+  --file_size 500 \
+  --file_number 8 \
+  --workers 8 \
+  --output_path /root/workspace/data/lm_data_demo.16.2
