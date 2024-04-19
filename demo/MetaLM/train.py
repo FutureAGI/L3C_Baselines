@@ -44,10 +44,12 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     # Create model and move it to GPU with id `gpu`
     model = LMBase(vocab_size=vocab_size,
-                hidden_size=768,
+                hidden_size=1024,
                 nhead=16,
                 max_time_step=max_time_step,
                 n_trn_block=12)
+    if(main):
+        print("Model parameters:", count_parameters(model))
 
     model = model.to(device)
 
@@ -77,13 +79,13 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         model = custom_load_model(model, f'{load_model_path}/model.pth')
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
+    #test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, (feature, label) in enumerate(dataloader):
-            feature = feature[:, :max_time_step].to(device)
-            label = label[:, :max_time_step].to(device)
+            feature = feature[:, :train_time_step].to(device)
+            label = label[:, :train_time_step].to(device)
             #with autocast():
             loss = model.module.perplexity(feature, label)
 

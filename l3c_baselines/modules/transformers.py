@@ -1,12 +1,12 @@
 import copy
 import torch
 import torch.nn as nn
-from rope_mha import RoPEMultiheadAttention
+from .rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
 
 class ARTransformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, nhead, max_steps, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
         super(ARTransformerEncoderLayer, self).__init__()
-        self.self_attn = RoPEMultiheadAttention(d_model, nhead, max_steps, dropout=dropout)
+        self.self_attn = RoPEMultiheadAttention(d_model, nhead, dropout=dropout)
 
         # Define other layers (e.g., Feedforward, LayerNorm, Dropout) here
         # Norm First = True
@@ -18,7 +18,11 @@ class ARTransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model, eps=1.0e-5)
         self.activation = nn.GELU()
 
-    def forward(self, src, attn_mask, cache=None):
+    def forward(self, 
+                src : torch.Tensor, 
+                rope : torch.Tensor, 
+                attn_mask : torch.Tensor, 
+                cache=None):
         """
         Cache: B, NT, H
         SRC: Other Parts
@@ -36,7 +40,7 @@ class ARTransformerEncoderLayer(nn.Module):
             output = self.norm1(src)
             kv = output
         
-        output = self.self_attn(output, kv, kv, attn_mask=attn_mask, q0_pos=q0_pos)
+        output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
 
         # Residual Connection
         output = src + output
@@ -48,11 +52,24 @@ class ARTransformerEncoderLayer(nn.Module):
         return output
 
 class ARTransformerEncoder(nn.Module):
-    def __init__(self, num_layers, d_model, nhead, max_steps, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, 
+            num_layers : int, 
+            d_model : int, 
+            nhead : int, 
+            max_steps : int,
+            dim_feedforward : int=2048, 
+            dropout : float=0.10):
         super(ARTransformerEncoder, self).__init__()
-        ar_layer = ARTransformerEncoderLayer(d_model, nhead, max_steps, dim_feedforward=dim_feedforward, dropout=dropout)
+        ar_layer = ARTransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
         self.num_layers = num_layers
+        self.d_head = d_model // nhead
+        self.max_steps = max_steps
+
+        attn_mask = (torch.triu(torch.ones(max_steps, max_steps)) == 1).transpose(1, 0)
+        attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
+        self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
+        self.register_buffer('attn_mask', attn_mask)
 
     def forward(self, src, cache=None, need_cache=False):
         # Calculate Cache Size
@@ -62,10 +79,8 @@ class ARTransformerEncoder(nn.Module):
         else:
             s = l + cache[0].shape[1]
             
-        attn_mask = (torch.triu(torch.ones(s, s)) == 1).transpose(1, 0)[-l:]
-        attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
-        attn_mask = attn_mask.to(src.device)
         new_cache = None
+
         output=src
         if(need_cache):
             if(cache is not None):
@@ -74,11 +89,11 @@ class ARTransformerEncoder(nn.Module):
                 new_cache = [output.detach()]
         for i, layer in enumerate(self.layers):
             if(cache is not None):
-                output = layer(output, attn_mask, cache[i]) 
+                output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:], cache[i]) 
                 if(need_cache):
                     new_cache.append(torch.cat([cache[i + 1], output.detach()], dim=1))
             else:
-                output = layer(output, attn_mask)
+                output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:])
                 if(need_cache):
                     new_cache.append(output.detach())
         return output, new_cache
@@ -166,7 +181,7 @@ class ARTransformerStandard(nn.Module):
         self.word_embedding = nn.Embedding(vocab_size, d_model)
 
         # 创建Transformer编码器层
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step + 1, dim_feedforward=4*d_model, dropout=dropout)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
         self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
@@ -195,17 +210,17 @@ class ARTransformerStandard(nn.Module):
         return outputs, new_cache
 
 if __name__=='__main__':
-    ART = ARTransformerEncoder(1, 256, 2, 1024, dropout=0.0)
+    #ART = ARTransformerEncoder(1, 256, 2, dropout=0.0)
 
-    inputs = torch.randn((1, 1024, 256))
+    #inputs = torch.randn((1, 1024, 256))
     # Test ART adding Cache 
-    output1, cache1 = ART(inputs[:, :128], need_cache=True)
-    output2, cache2 = ART(inputs[:, 128:], cache=cache1, need_cache=True)
-    output3, cache3 = ART(inputs, need_cache=True)
-    print("output diff betteen cache and none cache 1", output1 - output3[:, :128])
-    print("output diff between cache and none cache 2", output2 - output3[:, 128:])
-    print("cache diff", cache2[1] - cache3[1])
-    print("cache diff", cache2[1][:, :128] - cache1[1])
+    #output1, cache1 = ART(inputs[:, :128], need_cache=True)
+    #output2, cache2 = ART(inputs[:, 128:], cache=cache1, need_cache=True)
+    #output3, cache3 = ART(inputs, need_cache=True)
+    #print("output diff betteen cache and none cache 1", output1 - output3[:, :128])
+    #print("output diff between cache and none cache 2", output2 - output3[:, 128:])
+    #print("cache diff", cache2[1] - cache3[1])
+    #print("cache diff", cache2[1][:, :128] - cache1[1])
     #print(output2.shape, len(cache2), cache2[0].shape)
     #print(output3.shape, len(cache3), cache3[0].shape)
     #print(output4.shape, len(cache4), cache4[0].shape)
@@ -220,8 +235,8 @@ if __name__=='__main__':
     #print(cache_3 - cache_2)
 
 
-    #inputs2 = torch.randint(0, 1024, (4, 64))
-    #ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
-    #out_nlp, cache = ART2(inputs2, need_cache=True)
-    #out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
-    #print(out_nlp.shape, out_nlp2.shape)
+    inputs2 = torch.randint(0, 1024, (4, 64))
+    ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
+    out_nlp, cache = ART2(inputs2, need_cache=True)
+    out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
+    print(out_nlp.shape, out_nlp2.shape)

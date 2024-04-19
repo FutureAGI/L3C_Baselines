@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-def mse_loss_mask(img_out, img_gt, mask = None, reduce="mean"):
+def mse_loss_mask(img_out, img_gt, mask=None, reduce="mean"):
     """
     input shape: (B, T, C, H, W)
     mask shape: (B, T)
@@ -12,11 +12,12 @@ def mse_loss_mask(img_out, img_gt, mask = None, reduce="mean"):
     if mask is not None:
         mse_loss = mse_loss * mask
         if reduce == "mean":
-            sum_mask = torch.sum(mask)
-            sum_loss = torch.sum(mse_loss)
+            sum_mask = torch.mean(mask)
+            sum_loss = torch.mean(mse_loss)
+            print(sum_mask, sum_loss)
         else:
-            sum_mask = torch.sum(mask, dim=0)
-            sum_loss = torch.sum(mse_loss, dim=0)
+            sum_mask = torch.mean(mask, dim=0)
+            sum_loss = torch.mean(mse_loss, dim=0)
         mse_loss = sum_loss / sum_mask
     else:
         if reduce == "mean":
@@ -39,11 +40,11 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
     if mask is not None:
         ce_loss = ce_loss * mask
         if reduce == "mean":
-            sum_mask = torch.sum(mask)
-            sum_loss = torch.sum(ce_loss)
+            sum_mask = torch.mean(mask)
+            sum_loss = torch.mean(ce_loss)
         else:
-            sum_mask = torch.sum(mask, dim=0)
-            sum_loss = torch.sum(ce_loss, dim=0)
+            sum_mask = torch.mean(mask, dim=0)
+            sum_loss = torch.mean(ce_loss, dim=0)
         ce_loss = sum_loss / sum_mask
     else:
         if reduce == "mean":

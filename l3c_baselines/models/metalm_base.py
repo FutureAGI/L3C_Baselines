@@ -14,10 +14,15 @@ class LMBase(nn.Module):
                 hidden_size=768,
                 nhead=16,
                 max_time_step=1024,
-                n_trn_block=12):
+                n_trn_block=12,
+                ):
         super().__init__()
 
+        context_warmup = max_time_step // 2
         self.transformer = ARTransformerStandard(vocab_size, n_trn_block, hidden_size, nhead, max_time_step)
+        self.loss_mask = torch.cat((
+                torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
+                torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
 
 
     def forward(self, inputs, cache=None, need_cache=True):
@@ -31,9 +36,16 @@ class LMBase(nn.Module):
 
         return output, new_cache
 
-    def perplexity(self, inputs, outputs, reduce="mean"):
+    def perplexity(self, inputs, outputs):
+        seq_len = inputs.shape[1]
         logits, new_cache = self.forward(inputs, need_cache=False)
-        return ce_loss_mask(logits, outputs, gamma=0, reduce=reduce)
+        mask = self.loss_mask[:, :seq_len].to(inputs.device)
+        return ce_loss_mask(logits, outputs, gamma=0, mask=mask)
+
+    def perplexity_array(self, inputs, outputs):
+        seq_len = inputs.shape[1]
+        logits, new_cache = self.forward(inputs, need_cache=False)
+        return ce_loss_mask(logits, outputs, gamma=0, reduce=None)
 
     def inference_seg(self, inputs, L, cache=None):
         with torch.no_grad():
