@@ -20,9 +20,10 @@ class LMBase(nn.Module):
 
         context_warmup = max_time_step // 2
         self.transformer = ARTransformerStandard(vocab_size, n_trn_block, hidden_size, nhead, max_time_step)
-        self.loss_mask = torch.cat((
+        loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
                 torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
+        self.register_buffer('loss_mask', loss_mask)
 
 
     def forward(self, inputs, cache=None, need_cache=True):
@@ -39,8 +40,7 @@ class LMBase(nn.Module):
     def perplexity(self, inputs, outputs):
         seq_len = inputs.shape[1]
         logits, new_cache = self.forward(inputs, need_cache=False)
-        mask = self.loss_mask[:, :seq_len].to(inputs.device)
-        return ce_loss_mask(logits, outputs, gamma=0, mask=mask)
+        return ce_loss_mask(logits, outputs, gamma=0, mask=self.loss_mask[:, :seq_len])
 
     def perplexity_array(self, inputs, outputs):
         seq_len = inputs.shape[1]

@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from modules import Encoder, Decoder, ResBlock, MapDecoder, VAE
+from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, VAE
 from modules import DecisionTransformer
 from modules import DiffusionLayers
 from utils import ce_loss_mask, img_pro, img_post
@@ -24,6 +24,7 @@ class MazeModelBase(nn.Module):
         super().__init__()
 
         self.hidden_size = hidden_size
+
         self.latent_size = latent_size
 
         self.encoder = Encoder(image_size, 3, hidden_size, n_res_block)
@@ -34,19 +35,13 @@ class MazeModelBase(nn.Module):
 
         self.decformer = DecisionTransformer(latent_size, action_size, n_trn_block, hidden_size, nhead, max_time_step)
 
-        self.act_decoder_1 = nn.Sequential(
-            nn.LayerNorm(hidden_size, eps=1.0e-5),
-            nn.Linear(hidden_size, 4 * hidden_size),
-            nn.GELU(),
-            nn.Dropout(0.10),
-            nn.Linear(4 * hidden_size, hidden_size),
-            nn.GELU(),
-        )
+        self.act_decoder = ActionDecoder(hidden_size, 4 * hidden_size, action_size, dropout=0.10)
 
-        self.act_decoder_2 = nn.Sequential(
-            nn.Linear(hidden_size, action_size),
-            nn.Softmax(dim=-1)
-        )
+        context_warmup = 256
+        loss_mask = torch.cat((
+                torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
+                torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
+        self.register_buffer('loss_mask', loss_mask)
 
         self.z_decoder = DiffusionLayers(
             24, # T
@@ -70,10 +65,9 @@ class MazeModelBase(nn.Module):
 
         # Temporal Encoders
         obs_output, act_output, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache)
-        #obs_output, act_output, new_cache = checkpoint(lambda x:self.decformer(x[0], x[1], cache=cache, need_cache=need_cache), (z_rec, actions))
 
         # Decode Action [B, N_T, action_size]
-        pred_act = self.act_decoder_2(act_output + self.act_decoder_1(act_output))
+        pred_act = self.act_decoder(act_output)
 
         return z_rec, obs_output, pred_act, new_cache
 
@@ -88,18 +82,16 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.decformer.requires_grad_(True)
-        self.act_decoder_1.requires_grad_(True)
-        self.act_decoder_2.requires_grad_(True)
+        self.act_decoder.requires_grad_(True)
         self.z_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
         z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
 
         lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1])
-        lce_act = ce_loss_mask(pred_act, actions)
-        #lmse_map = F.mse_loss(pred_map, img_pro(local_maps))
-        #lmse_rew = F.mse_loss(rewards, pred_rew.squeeze(-1))
+        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]])
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
+
         return lmse_z, lce_act, cnt
 
     def inference_next(self, observations, actions, cache=None):
@@ -114,7 +106,6 @@ class MazeModelBase(nn.Module):
         if(NT < 2):
             valid_act = add_act
         else:
-            print(observations.shape, actions.shape)
             valid_act = torch.cat([actions, add_act], dim=1)
 
         if(cache is not None):

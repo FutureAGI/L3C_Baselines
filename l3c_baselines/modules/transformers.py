@@ -225,9 +225,10 @@ if __name__=='__main__':
     #print(output3.shape, len(cache3), cache3[0].shape)
     #print(output4.shape, len(cache4), cache4[0].shape)
 
-    #DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
-    #input_acts = torch.randint(0, 4, (4, 64))
-    #out_obs_1, out_act_1, cache_1 = DT(inputs[:, :48], input_acts[:, :48], need_cache=True)
+    DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
+    inputs_obs = torch.randn((4, 64, 256))
+    input_acts = torch.randint(0, 4, (4, 64))
+    out_obs_1, out_act_1, cache_1 = DT(inputs_obs, input_acts, need_cache=True)
     #out_obs_2, out_act_2, cache_2 = DT(inputs[:, 48:], input_acts[:, 48:], cache=cache_1, need_cache=True)
     #out_obs_3, out_act_3, cache_3 = DT(inputs, input_acts, need_cache=True)
     #print(out_obs_3[:, 48:] - out_obs_2)
@@ -235,8 +236,8 @@ if __name__=='__main__':
     #print(cache_3 - cache_2)
 
 
-    inputs2 = torch.randint(0, 1024, (4, 64))
-    ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
-    out_nlp, cache = ART2(inputs2, need_cache=True)
-    out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
-    print(out_nlp.shape, out_nlp2.shape)
+    #inputs2 = torch.randint(0, 1024, (4, 64))
+    #ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
+    #out_nlp, cache = ART2(inputs2, need_cache=True)
+    #out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
+    #print(out_nlp.shape, out_nlp2.shape)

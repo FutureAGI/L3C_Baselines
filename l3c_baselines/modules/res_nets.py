@@ -150,3 +150,30 @@ class MapDecoder(nn.Module):
         out = out.view(-1, self.map_size, self.map_size, self.hidden)
         out = self.blocks(out).permute(0, 3, 1, 2)
         return out
+
+class ActionDecoder(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        dropout=0.10
+    ):
+        super().__init__()
+
+        self.act_decoder_pre = nn.Sequential(
+            nn.LayerNorm(input_size, eps=1.0e-5),
+            nn.Linear(input_size, hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, input_size),
+            nn.GELU())
+
+        self.act_decoder_post = nn.Sequential(
+            nn.Linear(input_size, output_size),
+            nn.Softmax(dim=-1))
+
+    def forward(self, input):
+        out = self.act_decoder_pre(input)
+        out = self.act_decoder_post(out + input)
+        return out
