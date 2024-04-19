@@ -1,11 +1,12 @@
 import copy
 import torch
 import torch.nn as nn
+from rope_mha import RoPEMultiheadAttention
 
 class ARTransformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, nhead, max_steps, dim_feedforward=2048, dropout=0.1):
         super(ARTransformerEncoderLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.self_attn = RoPEMultiheadAttention(d_model, nhead, max_steps, dropout=dropout)
 
         # Define other layers (e.g., Feedforward, LayerNorm, Dropout) here
         # Norm First = True
@@ -27,13 +28,15 @@ class ARTransformerEncoderLayer(nn.Module):
 
         # Self Attention
         if cache is not None:
+            q0_pos=cache.shape[1]
             kv = self.norm1(torch.cat([cache, src], dim=1))
-            output = kv[:, cache.shape[1]:]
+            output = kv[:, q0_pos:]
         else:
+            q0_pos=0
             output = self.norm1(src)
             kv = output
         
-        output, _ = self.self_attn(output, kv, kv, attn_mask=attn_mask)
+        output = self.self_attn(output, kv, kv, attn_mask=attn_mask, q0_pos=q0_pos)
 
         # Residual Connection
         output = src + output
@@ -45,9 +48,9 @@ class ARTransformerEncoderLayer(nn.Module):
         return output
 
 class ARTransformerEncoder(nn.Module):
-    def __init__(self, num_layers, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, num_layers, d_model, nhead, max_steps, dim_feedforward=2048, dropout=0.1):
         super(ARTransformerEncoder, self).__init__()
-        ar_layer = ARTransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
+        ar_layer = ARTransformerEncoderLayer(d_model, nhead, max_steps, dim_feedforward=dim_feedforward, dropout=dropout)
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
         self.num_layers = num_layers
 
@@ -84,7 +87,7 @@ class DecisionTransformer(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, observation_size, action_vocab_size, num_layers, d_model, nhead, max_time_step):
+    def __init__(self, observation_size, action_vocab_size, num_layers, d_model, nhead, max_time_step, dropout=0.1):
         super().__init__()
 
         self.d_model = d_model
@@ -97,11 +100,8 @@ class DecisionTransformer(nn.Module):
 
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, dim_feedforward=4*d_model)
-
-        # 创建位置编码和Query向量[1, NT, 1, C]
-        temporal_embeddings = torch.randn(1, self.max_time_step + 1, 1, d_model)
-        self.temporal_query = nn.Parameter(temporal_embeddings, requires_grad=True)
+        max_seq_len = 2 * max_time_step + 1
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
 
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
@@ -131,9 +131,6 @@ class DecisionTransformer(nn.Module):
         # [B, NT, 2, H]
         outputs = torch.cat([observation_in, action_in], dim=2)
 
-        # Add Temporal Position Embedding
-        outputs = outputs + self.temporal_query[:, cache_len:(NT + cache_len)]
-
         # Add Type Embedding
         outputs = outputs + self.type_query
 
@@ -157,7 +154,7 @@ class ARTransformerStandard(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, vocab_size, num_layers, d_model, nhead, max_time_step):
+    def __init__(self, vocab_size, num_layers, d_model, nhead, max_time_step, dropout=0.10):
         super().__init__()
 
         self.d_model = d_model
@@ -169,14 +166,10 @@ class ARTransformerStandard(nn.Module):
         self.word_embedding = nn.Embedding(vocab_size, d_model)
 
         # 创建Transformer编码器层
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, dim_feedforward=4*d_model)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step + 1, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
         self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
-
-        # 创建位置编码和Query向量[1, NT, 1, C]
-        position_embeddings = torch.randn(1, self.max_time_step + 1, d_model)
-        self.position_embeddings = nn.Parameter(position_embeddings, requires_grad=True)
 
     def forward(self, inputs, cache=None, need_cache=True):
         """
@@ -195,9 +188,6 @@ class ARTransformerStandard(nn.Module):
         # Input actions: [B, NT, 1, H]
         outputs = self.word_embedding(inputs)
 
-        # Add Position Embedding
-        outputs = outputs + self.position_embeddings[:, cache_len:(NT + cache_len)]
-
         # Temporal Encoders
         outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
         outputs = self.output_mapping(self.norm(outputs))
@@ -205,17 +195,17 @@ class ARTransformerStandard(nn.Module):
         return outputs, new_cache
 
 if __name__=='__main__':
-    ART = ARTransformerEncoder(2, 256, 8, 1024, 0.0)
+    ART = ARTransformerEncoder(1, 256, 2, 1024, dropout=0.0)
 
-    inputs = torch.randn((4, 64, 256))
+    inputs = torch.randn((1, 1024, 256))
     # Test ART adding Cache 
-    output1, cache1 = ART(inputs[:, :48], need_cache=True)
-    output2, cache2 = ART(inputs[:, 48:], cache=cache1, need_cache=True)
+    output1, cache1 = ART(inputs[:, :128], need_cache=True)
+    output2, cache2 = ART(inputs[:, 128:], cache=cache1, need_cache=True)
     output3, cache3 = ART(inputs, need_cache=True)
-    print(output1 - output3[:, :48])
-    print(output2 - output3[:, 48:])
-    print(cache2[1] - cache3[1])
-    print(cache2[1][:, :48] - cache1[1])
+    print("output diff betteen cache and none cache 1", output1 - output3[:, :128])
+    print("output diff between cache and none cache 2", output2 - output3[:, 128:])
+    print("cache diff", cache2[1] - cache3[1])
+    print("cache diff", cache2[1][:, :128] - cache1[1])
     #print(output2.shape, len(cache2), cache2[0].shape)
     #print(output3.shape, len(cache3), cache3[0].shape)
     #print(output4.shape, len(cache4), cache4[0].shape)

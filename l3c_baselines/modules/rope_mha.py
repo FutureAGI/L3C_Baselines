@@ -44,7 +44,6 @@ def apply_rotary_emb(
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
     xqm_ = freqs_cis[:, q0_pos:(q0_pos + q_len)]
     xkm_ = freqs_cis[:, k0_pos:(k0_pos + k_len)]
-    print(xqm_.shape, xq_.shape)
     xq_out = torch.view_as_real(xq_ * xqm_).flatten(3)
     xk_out = torch.view_as_real(xk_ * xkm_).flatten(3)
 
@@ -64,7 +63,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 
 class RoPEMultiheadAttention(nn.Module):
-    def __init__(self, d_model, nheads, max_steps, dropout):
+    def __init__(self, d_model, nheads, max_steps, dropout=0.10):
         super().__init__()
 
         self.drop_p = dropout
@@ -73,17 +72,17 @@ class RoPEMultiheadAttention(nn.Module):
         self.max_seq_len = max_steps
 
         # Attention
-        self.q = nn.Linear(
+        self.qlayer = nn.Linear(
             in_features=d_model,
             out_features=d_model,
             bias=False,
         )
-        self.k = nn.Linear(
+        self.klayer = nn.Linear(
             in_features=d_model,
             out_features=d_model,
             bias=False,
         )
-        self.v = nn.Linear(
+        self.vlayer = nn.Linear(
             in_features=d_model,
             out_features=d_model,
             bias=False,
@@ -94,20 +93,21 @@ class RoPEMultiheadAttention(nn.Module):
         )
         self.resid_dropout = nn.Dropout(dropout)
         self.freqs_cis = precompute_freqs_cis(self.d_head, max_steps)
-        print(self.freqs_cis.shape)
 
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor):
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attn_mask=None, q0_pos=0, k0_pos=0):
         """
         x_shape: [bs, seq, hidden]
         """
-        batch_size, seq_len, _ = x.shape
-        xq, xk, xv = self.q(x), self.k(x), self.v(x)
+        batch_size, q_len, _ = q.shape
+        batch_size, k_len, _ = k.shape
+        batch_size, v_len, _ = v.shape
+        xq, xk, xv = self.qlayer(q), self.klayer(k), self.vlayer(v)
 
         # Reshape for rotary embeddings
-        xq = xq.view(batch_size, seq_len, self.n_heads, self.d_head)
-        xk = xk.view(batch_size, seq_len, self.n_heads, self.d_head)
-        xv = xv.view(batch_size, seq_len, self.n_heads, self.d_head)
-        xq, xk = apply_rotary_emb(xq, xk, self.freqs_cis)
+        xq = xq.view(batch_size, q_len, self.n_heads, self.d_head)
+        xk = xk.view(batch_size, k_len, self.n_heads, self.d_head)
+        xv = xv.view(batch_size, v_len, self.n_heads, self.d_head)
+        xq, xk = apply_rotary_emb(xq, xk, self.freqs_cis, q0_pos=q0_pos, k0_pos=k0_pos)
 
         # Reshape for attention calculation: (b_sz, n_head, s_len, d_head)
         xq = xq.transpose(1, 2)
@@ -133,13 +133,14 @@ class RoPEMultiheadAttention(nn.Module):
 
         # Shape (b_sz, s_len, n_head, d_head)
         out = att.transpose(1, 2).contiguous()
-        out = out.view(batch_size, seq_len, self.n_heads * self.d_head)
+        out = out.view(batch_size, q_len, self.n_heads * self.d_head)
 
         return self.resid_dropout(self.att_proj_linear(out))
 
 if __name__=="__main__":
     rmha = RoPEMultiheadAttention(128, 8, 1024, 0.10)
-    inputs = torch.randn(4, 1024, 128)
-    attn_mask = torch.randn(1024, 1024)
-    output = rmha(inputs, attn_mask)
+    q = torch.randn(4, 512, 128)
+    k = torch.randn(4, 1024, 128)
+    v = torch.randn(4, 1024, 128)
+    output = rmha(q, k, v, attn_mask=None, q0_pos=512, k0_pos=0)
     print(output.shape)
