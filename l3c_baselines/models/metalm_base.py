@@ -47,13 +47,17 @@ class LMBase(nn.Module):
         logits, new_cache = self.forward(inputs, need_cache=False)
         return ce_loss_mask(logits, outputs, gamma=0, reduce=None)
 
-    def inference_seg(self, inputs, L, cache=None):
+    def inference_seg(self, inputs, L, T=1, cache=None):
         with torch.no_grad():
             sampled_outputs = inputs
             outputs = inputs
             for _ in range(L):
                 logits, cache = self.forward(sampled_outputs, cache=cache, need_cache=True)
-                sampled_outputs = torch.multinomial(logits[:, -1], num_samples=1)
+                logp = torch.log(logits[:, -1])
+                logp = logp / T
+                logits = F.softmax(logp, dim=-1)
+                sampled_outputs = torch.multinomial(logits, num_samples=1)
+                #sampled_outputs = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
                 outputs = torch.cat([outputs, sampled_outputs], dim=-1)
         return outputs
 

@@ -161,8 +161,9 @@ class ActionDecoder(nn.Module):
     ):
         super().__init__()
 
+        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
+
         self.act_decoder_pre = nn.Sequential(
-            nn.LayerNorm(input_size, eps=1.0e-5),
             nn.Linear(input_size, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -174,6 +175,7 @@ class ActionDecoder(nn.Module):
             nn.Softmax(dim=-1))
 
     def forward(self, input):
-        out = self.act_decoder_pre(input)
-        out = self.act_decoder_post(out + input)
+        src = self.layer_norm(input)
+        out = self.act_decoder_pre(src)
+        out = self.act_decoder_post(out + src)
         return out

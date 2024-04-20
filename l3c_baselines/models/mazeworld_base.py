@@ -16,7 +16,7 @@ class MazeModelBase(nn.Module):
                  action_size=5,
                  map_size=7,
                  latent_size=128,
-                 hidden_size=768,
+                 hidden_size=1024,
                  nhead=16,
                  max_time_step=1024,
                  n_res_block=2,

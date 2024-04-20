@@ -19,16 +19,22 @@ from models import LMBase
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12342'        # Example port, choose an available port
 
+english_vocab = ['a', 'b', 'c', 'd', 'e',
+    'f', 'g', 'h', 'i', 'j',
+    'k', 'l', 'm', 'n', 'o',
+    'p', 'q', 'r', 's', 't',
+    'u', 'v', 'w', 'x', 'y',
+    'z', ' ', '.', ',', '\n',
+    '<', '>']
+math_vocab = ['1', '2', '3', '4',
+    '5', '6', '7', '8',
+    '9', '0', '+', '-',
+    '=', ';', ' ', '\n']
 
-class EnglishTokenizer(object):
+class Tokenizer(object):
     def __init__(self):
-        self.inverse_dict=['a', 'b', 'c', 'd', 'e',
-            'f', 'g', 'h', 'i', 'j',
-            'k', 'l', 'm', 'n', 'o',
-            'p', 'q', 'r', 's', 't',
-            'u', 'v', 'w', 'x', 'y',
-            'z', ' ', '.', ',', '\n',
-            '<', '>']
+        self.inverse_dict = math_vocab
+        #self.inverse_dict = english_vocab
         self.vocab_dict = dict()
         for i, cha in enumerate(self.inverse_dict):
             self.vocab_dict[cha] = i
@@ -76,7 +82,7 @@ def main_epoch(rank, use_gpu, world_size,
     tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
 
     with torch.no_grad():
-        outputs = model.module.inference_seg(tokens, 512)
+        outputs = model.module.inference_seg(tokens, 512, T=0.4)
     outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
     print("\n\nTHE OUTPUT IS:\n%s\n\n" % outputs)
 
@@ -95,7 +101,7 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
-    tokenizer = EnglishTokenizer()
+    tokenizer = Tokenizer()
     with open(args.input_text, 'r') as f_reader:
         data = f_reader.read().strip()
         print("\nTHE INPUT IS:\n%s\n" % data)
