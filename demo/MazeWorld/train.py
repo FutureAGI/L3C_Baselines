@@ -47,11 +47,10 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     model = MazeModelBase(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
     if(main):
         print("Number of parameters: ", count_parameters(model))
-        print("Number of parameters in Main Encoder: ", count_parameters(model.encoder))
-        print("Number of parameters in Main Decoder: ", count_parameters(model.decoder))
-        print("Number of parameters in VAE: ", count_parameters(model.vae))
-        print("Number of parameters in Decision Transformer: ", count_parameters(model.decformer))
-        print("Number of parameters in Action Decoder: ", count_parameters(model.act_decoder_1))
+        print("Number of parameters decision transformer: ", count_parameters(model.decformer))
+        print("Number of parameters action decoder: ", count_parameters(model.act_decoder))
+        print("Number of parameters encoder: ", count_parameters(model.encoder))
+        print("Number of parameters decoder: ", count_parameters(model.decoder))
 
     model = model.to(device)
 
@@ -120,10 +119,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             acts = acts.to(device)
-            #rews = rews.to(device)
-            #maps = maps.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            #maps = maps.permute(0, 1, 4, 2, 3)
             #with autocast():
             lz, lact, cnt = model.module.sequential_loss(obs, acts)
             main_loss = lz + 0.1 * lact
@@ -196,11 +192,17 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     sum_lact = 0
     sum_cnt = 0
     for lrec, lz, lact, cnt in results:
-        if(torch.isinf(lrec).any() or torch.isnan(lrec).any()
-                or torch.isinf(lz).any() or torch.isnan(lz).any()
-                or torch.isinf(lact).any() or torch.isnan(lact).any()
-                or torch.isinf(cnt).any() or torch.isnan(cnt).any()):
-            print("[Warning]: NAN encountered in Evaluation")
+        if torch.isinf(lrec).any() or torch.isnan(lrec).any():
+            print("[WARNING] lrec = NAN")
+            continue
+        if torch.isinf(lz).any() or torch.isnan(lz).any():
+            print("[WARNING] lz = NAN")
+            continue
+        if torch.isinf(lact).any() or torch.isnan(lact).any():
+            print("[WARNING] lact = NAN")
+            continue
+        if torch.isinf(cnt).any() or torch.isnan(cnt).any():
+            print("[Warning]: cnt = NAN")
             continue
         sum_lrec += lrec
         sum_lz += lz
