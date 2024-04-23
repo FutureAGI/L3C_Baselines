@@ -17,6 +17,7 @@ class MazeModelBase(nn.Module):
                  map_size=7,
                  latent_size=128,
                  hidden_size=1024,
+                 image_encoder_size=256,
                  nhead=16,
                  max_time_step=1024,
                  n_res_block=2,
@@ -27,9 +28,9 @@ class MazeModelBase(nn.Module):
 
         self.latent_size = latent_size
 
-        self.encoder = Encoder(image_size, 3, hidden_size, n_res_block)
+        self.encoder = Encoder(image_size, 3, image_encoder_size, n_res_block)
 
-        self.decoder = Decoder(image_size, latent_size, hidden_size, 3, n_res_block)
+        self.decoder = Decoder(image_size, latent_size, image_encoder_size, 3, n_res_block)
 
         self.vae = VAE(latent_size, self.encoder, self.decoder) 
 
