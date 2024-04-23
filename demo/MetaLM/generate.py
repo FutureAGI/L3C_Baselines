@@ -17,19 +17,20 @@ from utils import show_bar, count_parameters, model_path
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12342'        # Example port, choose an available port
+os.environ['MASTER_PORT'] = '12340'        # Example port, choose an available port
 
-english_vocab = ['a', 'b', 'c', 'd', 'e',
+english_vocab = [';', 
+    'a', 'b', 'c', 'd', 'e',
     'f', 'g', 'h', 'i', 'j',
     'k', 'l', 'm', 'n', 'o',
     'p', 'q', 'r', 's', 't',
     'u', 'v', 'w', 'x', 'y',
-    'z', ' ', '.', ',', '\n',
-    '<', '>']
-math_vocab = ['1', '2', '3', '4',
+    'z', ' ', '.', ',', '\n', '\t']
+math_vocab = [';',
+    '1', '2', '3', '4',
     '5', '6', '7', '8',
     '9', '0', '+', '-',
-    '=', ';', ' ', '\n']
+    '=', ' ', '\n']
 
 class Tokenizer(object):
     def __init__(self):
@@ -41,7 +42,7 @@ class Tokenizer(object):
 
     def tokenize(self, input_str):
         output = []
-        for cha in input_str:
+        for cha in input_str.lower():
             output.append(self.vocab_dict[cha])
         return output
 
@@ -80,11 +81,15 @@ def main_epoch(rank, use_gpu, world_size,
 
     model.eval()
     tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
+    print("\n\nTHE OUTPUT SAMPLING:\n\n")
 
-    with torch.no_grad():
-        outputs = model.module.inference_seg(tokens, 512, T=0.4)
+    T_setting_math = {0: 0.8, 13:0.01}
+    T_setting_eng = {0: 1.0}
+    l = 512
+
+    outputs = model.module.inference_seg(tokens, l, T_default=0.30, T_setting=T_setting_math)
     outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
-    print("\n\nTHE OUTPUT IS:\n%s\n\n" % outputs)
+    print(outputs[-l:])
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

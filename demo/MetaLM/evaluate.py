@@ -17,7 +17,6 @@ from utils import show_bar, count_parameters, model_path
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12342'        # Example port, choose an available port
 
 
 def main_epoch(rank, use_gpu, world_size,
@@ -77,6 +76,7 @@ if __name__=='__main__':
     parser.add_argument('--max_time_step', type=int, default=1024)
     parser.add_argument('--test_time_step', type=int, default=256)
     parser.add_argument('--vocab_size', type=int, default=64)
+    parser.add_argument('--port', type=str, default='12340')
     parser.add_argument('--load_path', type=str, default=None)
     args = parser.parse_args()
 
@@ -87,6 +87,7 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
+    os.environ['MASTER_PORT'] = args.port        # Example port, choose an available port
     mp.spawn(main_epoch,
              args=(use_gpu, world_size,
                     args.batch_size, 
