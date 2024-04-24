@@ -79,8 +79,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500))
-    main_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 1000))
+    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
+    main_scheduler = LambdaLR(main_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
 
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth')

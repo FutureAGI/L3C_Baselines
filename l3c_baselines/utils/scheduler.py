@@ -26,8 +26,8 @@ class LinearScheduler(object):
         else:
             return (1 - unit_d) * self._unit_values[unit_i] + unit_d * self._unit_values[unit_i + 1]
 
-def noam_scheduler(it, warmup_steps):
+def noam_scheduler(it, warmup_steps, low=0.0):
     vit = max(it, 1)
     lr_warm = vit / warmup_steps # warm up steps
     lr_decay = ((vit / warmup_steps) ** (-0.5))
-    return min(lr_warm, lr_decay)
+    return min(lr_warm, lr_decay) + low

@@ -36,24 +36,16 @@ action_texts = ["STOP", "TURN LEFT", "TURN RIGHT", "BACKWARD", "FORWARD"]
 def action_text(action):
     return "Actions:" + action_texts[action]
 
-def reward_smoothing(rewards):
-    last_i = -1
-    acc_r = 0.0
-    smth_arr = []
-    avg_reward = None
-    for i, reward in enumerate(rewards):
-        acc_r += reward
-        if(reward > 0):
-            n = i - last_i
-            avg_reward = acc_r / n
-            smth_arr.append([avg_reward] * n)
-            last_i = i
-    if(last_i < len(reward) - 1):
-        n = len(reward) - 1 - last_i
-        if(avg_reward is None):
-            avg_reward = acc_r / n
-        smth_arr.append([avg_reward] * n)
-    return smth_arr
+def reward_smoothing(rewards, kernel_size=32):
+    def gaussian_kernel(size=36, sigma=6):
+        """ Returns a 1D Gaussian kernel array """
+        size = int(size) // 2
+        x = numpy.linspace(-size, size, 2*size+1)
+        gauss = numpy.exp(-0.5 * (x / sigma) ** 2)
+        return gauss / gauss.sum()
+    # +0.01 and -0.01 to avoid boundary effects
+    data_convolved = numpy.convolve(numpy.array(rewards) + 0.01, gaussian_kernel(), mode='same') - 0.01
+    return data_convolved
 
 def model_epoch(maze_env, task, model, device, video_writer=None):
     # Example training loop
@@ -110,7 +102,7 @@ def model_epoch(maze_env, task, model, device, video_writer=None):
             
             video_writer.add_image(img)
 
-            print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, rew_sum, obs_err, obs_err_rec))
+            print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, numpy.sum(rew_arr), obs_err, obs_err_rec))
 
         sys.stdout.flush()
     return reward_smoothing(rew_arr)
@@ -139,7 +131,7 @@ if __name__=='__main__':
     parser.add_argument('--load_path', type=str)
     parser.add_argument('--max_time_step', type=int, default=1024)
     parser.add_argument('--test_time_step', type=int, default=256)
-    parser.add_argument('--scale', type=int, default=15)
+    parser.add_argument('--scale', type=int, default=25)
     parser.add_argument('--density', type=int, default=0.36)
     parser.add_argument('--test_epochs', type=int, default=1)
     parser.add_argument('--n_landmarks', type=int, default=8)
@@ -178,6 +170,11 @@ if __name__=='__main__':
         maze_env.save_trajectory(f'./videos/traj_agent_{idx}.jpg')
 
     video_writer.clear()
+    reward_model = numpy.array(reward_model)
+    reward_agent = numpy.array(reward_agent)
     reward_model = numpy.mean(numpy.array(reward_model), axis=0)
     reward_agent = numpy.mean(numpy.array(reward_agent), axis=0)
-    print("Model Reward: %s ; Agent Reward: %s"%(reward_model, reward_agent))
+    print("Model:")
+    print(numpy.array2string(reward_model, precision=3, separator='\t'))
+    print("Agent:")
+    print(numpy.array2string(reward_agent, precision=3, separator='\t'))
