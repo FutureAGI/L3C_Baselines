@@ -1,2 +1,3 @@
-from .mazeworld_dataloader import MazeDataSet
-from .metalm_dataloader import LMDataSet
+from .mazeworld_dataset import MazeDataSet
+from .metalm_dataset import LMDataSet
+from .prefetch_dataloader import PrefetchDataLoader

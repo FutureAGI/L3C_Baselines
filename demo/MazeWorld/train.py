@@ -6,12 +6,13 @@ import numpy
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import time
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
-from dataloader import MazeDataSet
+from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
 from models import MazeModelBase
@@ -67,12 +68,10 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Initializing Testing Dataset...")
     test_dataset = MazeDataSet(test_data_path, train_time_step, verbose=main)
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
+    vae_dataloader = PrefetchDataLoader(train_dataset, batch_size=batch_size_vae)
+    seq_dataloader = PrefetchDataLoader(train_dataset, batch_size=batch_size_seq)
 
-    vae_dataloader = DataLoader(train_dataset, batch_size=batch_size_vae, sampler=train_sampler)
-    seq_dataloader = DataLoader(train_dataset, batch_size=batch_size_seq, sampler=train_sampler)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size_seq, sampler=test_sampler)
+    test_dataloader = PrefetchDataLoader(test_dataset, batch_size=batch_size_seq)
 
     sigma_scheduler = LinearScheduler(500, [0, 0, 0.5, 1.0])
     lambda_scheduler = LinearScheduler(500, [0, 1.0e-8, 1.0e-7, 1.0e-6])
@@ -84,12 +83,9 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth')
-        #vae_optimizer.load_state_dict(torch.load('%s/vae_optimizer.pth' % load_model_path))
-        #main_optimizer.load_state_dict(torch.load('%s/seq_optimizer.pth' % load_model_path))
-
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
+    #test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
 
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
@@ -115,12 +111,14 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
+        t1 = time.time()
         for batch_idx, batch in enumerate(dataloader):
+            t2 = time.time()
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             acts = acts.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            #with autocast():
+            t3 = time.time()
             lz, lact, cnt = model.module.sequential_loss(obs, acts)
             main_loss = lz + 0.1 * lact
 
@@ -130,12 +128,16 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
             main_optimizer.step()
             main_scheduler.step()
+
+            t4 = time.time()
+            print(t2-t1, t3-t2, t4-t3)
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
                 print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
                             float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
             sys.stdout.flush()
+            t1 = time.time()
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):

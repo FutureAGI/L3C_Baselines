@@ -13,30 +13,31 @@ class MazeDataSet(Dataset):
         self.file_list = os.listdir(directory)
         self.file_list = [os.path.join(directory, file) for file in self.file_list]
         self.time_step = time_step
-        self.reset()
         if(verbose):
-            print("...finished initializing data set, number of samples: %s\n" % len(self.index_inverse_list))
+            print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
 
     def reset(self):
         random.shuffle(self.file_list)
-        self.index_inverse_list = []
-        for file in self.file_list:
-            seq_len = np.load(file + '/actions.npy').shape[0]
-            n = seq_len // self.time_step
-            self.index_inverse_list.extend([(file, i * self.time_step) for i in range(n)])
 
     def __getitem__(self, index):
-        path, sub_index = self.index_inverse_list[index]
+        path = self.file_list[index]
 
         observations = np.load(path + '/observations.npy')
         actions = np.load(path + '/actions.npy')
         rewards = np.load(path + '/rewards.npy')
         maps = np.load(path + '/maps.npy')
-        assert actions.shape[0] == rewards.shape[0] == maps.shape[0] == observations.shape[0] - 1, \
-                "The shape of actions = rewards = maps = observations - 1, but get %s, %s, %s and %s" % (actions.shape[0], rewards.shape[0], maps.shape[0], observations.shape[0])
+        max_t = actions.shape[0]
+        assert max_t == rewards.shape[0] and max_t == maps.shape[0] and max_t + 1 == observations.shape[0], \
+                "The 0 dimension shape of actions == rewards == maps == observations - 1, but get %s, %s, %s and %s" % \
+                (max_t, rewards.shape[0], maps.shape[0], observations.shape[0])
 
-        n_b = sub_index
-        n_e = sub_index + self.time_step
+        if(self.time_step > max_t):
+            print('[Warning] Load samples from {path} that is shorter ({max_t}) than specified time step ({self.time_step})')
+            n_b = 0
+            n_e = max_t
+        else:
+            n_b = random.randint(0, max_t - self.time_step)
+            n_e = n_b + self.time_step
         obs_arr = torch.from_numpy(observations[n_b:(n_e + 1)]).float() 
         act_arr = torch.from_numpy(actions[n_b:n_e]).long() 
         rew_arr = torch.from_numpy(rewards[n_b:n_e]).float()
@@ -45,7 +46,7 @@ class MazeDataSet(Dataset):
         return obs_arr, act_arr, rew_arr, map_arr
 
     def __len__(self):
-        return len(self.index_inverse_list)
+        return len(self.file_list)
 
 
 # Test Maze Data Set
