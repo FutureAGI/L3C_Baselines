@@ -19,37 +19,27 @@ import argparse
 import multiprocessing
 import numpy
 import random
-from l3c.metalm import MetaLMv1
-from l3c.metalm import MetaLMv2
+from l3c.metalang import MetaLangV1
+from l3c.metalang import MetaLangV2
 
 def dump_data(path, idxes, args):
     vocab_size = random.choice(list(map(int, args.vocab_size.split(","))))
     n_gram = random.choice(list(map(int, args.n_gram.split(","))))
     embedding_size = random.choice(list(map(int, args.embedding_size.split(","))))
     hidden_size = random.choice(list(map(int, args.hidden_size.split(","))))
-    if(args.version == 'v1'):
-        dataset = MetaLMv1(
-                V=vocab_size,
-                n=args.elements_number,
-                l=args.elements_length,
-                e=args.error_rate,
-                L=args.sequence_length)
-    elif(args.version == 'v2'):
-        dataset = MetaLMv2(
-                V=vocab_size,
-                n=n_gram,
-                d=embedding_size,
-                N=hidden_size,
-                e=args.error_rate,
-                L=args.sequence_length)
+    dataset = MetaLangV2(
+            V=vocab_size,
+            n=n_gram,
+            d=embedding_size,
+            N=hidden_size,
+            e=args.error_rate,
+            L=args.sequence_length)
     for idx in idxes:
-        batch_fea, batch_lab = dataset.batch_generator(args.file_size)
-        numpy.save("%s/lm_%05d.npy"%(path, idx), numpy.array([batch_fea, batch_lab]))
+        tokens = dataset.generate_npy(args.file_size, "%s/lm_%05d.npy"%(path, idx))
     
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Generating Pseudo-Training Data')
-    parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--vocab_size', type=str, default="64, 128")
     parser.add_argument('--embedding_size', type=str, default="16, 32")
     parser.add_argument('--hidden_size', type=str, default="16, 32, 64")

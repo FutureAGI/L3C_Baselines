@@ -17,8 +17,7 @@ python gen_maze_record.py
 
 ## Output
 ```shell
-python gen_lm_data.py 
-	--version v1/v2
+python gen_metalang.py 
 	--vocab_size 64
 	--embedding_size 16
 	--n_gram 3

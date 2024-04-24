@@ -27,7 +27,7 @@ class LMDataSet(Dataset):
         path, sub_index = self.index_inverse_list[index]
         data = np.load(path)
 
-        return torch.from_numpy(data[0][sub_index]).to(torch.int64), torch.from_numpy(data[1][sub_index]).to(torch.int64)
+        return torch.from_numpy(data[sub_index][:, :-1]).to(torch.int64), torch.from_numpy(data[sub_index][:, 1:]).to(torch.int64)
 
     def __len__(self):
         return len(self.index_inverse_list)

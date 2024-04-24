@@ -36,6 +36,25 @@ action_texts = ["STOP", "TURN LEFT", "TURN RIGHT", "BACKWARD", "FORWARD"]
 def action_text(action):
     return "Actions:" + action_texts[action]
 
+def reward_smoothing(rewards):
+    last_i = -1
+    acc_r = 0.0
+    smth_arr = []
+    avg_reward = None
+    for i, reward in enumerate(rewards):
+        acc_r += reward
+        if(reward > 0):
+            n = i - last_i
+            avg_reward = acc_r / n
+            smth_arr.append([avg_reward] * n)
+            last_i = i
+    if(last_i < len(reward) - 1):
+        n = len(reward) - 1 - last_i
+        if(avg_reward is None):
+            avg_reward = acc_r / n
+        smth_arr.append([avg_reward] * n)
+    return smth_arr
+
 def model_epoch(maze_env, task, model, device, video_writer=None):
     # Example training loop
     maze_env.set_task(task)
@@ -43,7 +62,6 @@ def model_epoch(maze_env, task, model, device, video_writer=None):
     obs_arr = [obs]
     act_arr = []
     rew_arr = []
-    rew_sum = 0
 
     done = False
     step = 0
@@ -63,7 +81,6 @@ def model_epoch(maze_env, task, model, device, video_writer=None):
         obs_arr.append(next_obs_gt)
         rew_arr.append(next_rew_gt)
         act_arr.append(next_action)
-        rew_sum += next_rew_gt
 
         next_obs_pred_list = []
         for next_obs in next_obs_list:
@@ -96,7 +113,7 @@ def model_epoch(maze_env, task, model, device, video_writer=None):
             print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, rew_sum, obs_err, obs_err_rec))
 
         sys.stdout.flush()
-    return rew_sum
+    return reward_smoothing(rew_arr)
 
 
 def agent_epoch(maze_env, task):
@@ -108,14 +125,14 @@ def agent_epoch(maze_env, task):
     done = False
     step = 0
     cache = None
-    rew_sum = 0
+    rew_arr = []
     reward = 0
     while not done:
         step += 1
         action = agent.step(observation, reward)
         observation, reward, done, _ = maze_env.step(action)
-        rew_sum += reward
-    return rew_sum
+        rew_arr.append(reward)
+    return reward_smoothing(rew_arr)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -159,7 +176,8 @@ if __name__=='__main__':
 
         reward_agent.append(agent_epoch(maze_env, task))
         maze_env.save_trajectory(f'./videos/traj_agent_{idx}.jpg')
-        print("Model Reward: %s ; Agent Reward: %s"%(reward_model[-1], reward_agent[-1]))
 
     video_writer.clear()
-    print("Model Reward: %s ; Agent Reward: %s"%(numpy.mean(reward_model), numpy.mean(reward_agent)))
+    reward_model = numpy.mean(numpy.array(reward_model), axis=0)
+    reward_agent = numpy.mean(numpy.array(reward_agent), axis=0)
+    print("Model Reward: %s ; Agent Reward: %s"%(reward_model, reward_agent))

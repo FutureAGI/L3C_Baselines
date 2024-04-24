@@ -1,5 +1,9 @@
-python gen_lm_data.py \
-  --version v2 \
+if [[ $# -lt 1 ]]; then
+	echo "Usage: $1 output_directory"
+	exit 1
+fi
+echo "Output to $1"
+python gen_metalang.py \
   --vocab_size 16 \
   --embedding_size 16,32 \
   --hidden_size 16,32,64 \
@@ -8,4 +12,4 @@ python gen_lm_data.py \
   --file_size 500 \
   --file_number 8 \
   --workers 8 \
-  --output_path /root/paddlejob/workspace/env_run/data_wg/wangfan/lm_data/lm_data_demo.simp.16.3
+  --output_path $1
