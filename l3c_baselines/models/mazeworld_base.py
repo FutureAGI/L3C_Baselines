@@ -15,7 +15,7 @@ class MazeModelBase(nn.Module):
                  image_size=128,
                  action_size=5,
                  map_size=7,
-                 latent_size=384,
+                 latent_size=1024,
                  hidden_size=1024,
                  image_encoder_size=384,
                  nhead=16,

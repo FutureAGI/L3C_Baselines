@@ -111,16 +111,13 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
-        t1 = time.time()
         for batch_idx, batch in enumerate(dataloader):
-            t2 = time.time()
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             acts = acts.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            t3 = time.time()
             lz, lact, cnt = model.module.sequential_loss(obs, acts)
-            main_loss = lz + 0.1 * lact
+            main_loss = 0.9 * lz + 0.1 * lact
 
             main_optimizer.zero_grad()
             main_loss.backward()
@@ -129,15 +126,12 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             main_optimizer.step()
             main_scheduler.step()
 
-            t4 = time.time()
-            print(t2-t1, t3-t2, t4-t3)
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
                 print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
                             float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
             sys.stdout.flush()
-            t1 = time.time()
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):

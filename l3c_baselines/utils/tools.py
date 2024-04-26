@@ -22,7 +22,7 @@ def model_path(save_model_path, epoch_id):
         os.makedirs(directory_path)
     return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
-def custom_load_model(model, state_dict_path):  
+def custom_load_model(model, state_dict_path, max_norm_allowed=100.0):  
     # 加载保存的模型参数  
     saved_state_dict = torch.load(state_dict_path)  
       
@@ -40,8 +40,13 @@ def custom_load_model(model, state_dict_path):
             model_param_shape = model_state_dict[param_name].shape  
               
             # 检查形状是否一致  
-            if model_param_shape == param_tensor.shape:  
+            valid = torch.isfinite(param_tensor).all()
+            norm_valid = (torch.norm(param_tensor, p='fro') < max_norm_allowed)
+
+            if model_param_shape == param_tensor.shape and valid and norm_valid:  
                 matched_state_dict[param_name] = param_tensor  
+            elif not valid or not norm_valid:
+                print(f"NAN or INF encountered for parameter {param_name}. Skipping loading")
             else:  
                 print(f"Shape mismatch for parameter {param_name}. Skipping loading.")  
         else:  
