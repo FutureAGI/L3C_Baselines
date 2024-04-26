@@ -2,6 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from .rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
+from torch.utils.checkpoint import checkpoint
 
 class ARTransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
@@ -116,7 +117,9 @@ class DecisionTransformer(nn.Module):
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
         max_seq_len = 2 * max_time_step + 1
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
+        self.split_layers = num_layers // 2
+        self.encoder_1 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
+        self.encoder_2 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
 
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
@@ -136,7 +139,7 @@ class DecisionTransformer(nn.Module):
         if(cache is None):
             cache_len = 0
         else:
-            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
+            assert isinstance(cache, list) and len(cache) == 2 * self.split_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
         # Input actions: [B, NT, 1, H]
@@ -153,7 +156,18 @@ class DecisionTransformer(nn.Module):
         outputs = outputs.view(B, NT * 2, -1)
 
         # Temporal Encoders
-        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
+        if(cache is None):
+            cache_1 = None
+            cache_2 = None
+        else:
+            cache_1 = cache[:self.split_layers + 1]
+            cache_2 = cache[self.split_layers:]
+        outputs, new_cache_1 = checkpoint(lambda x: self.encoder_1(x, cache = cache_1, need_cache=need_cache), outputs)
+        outputs, new_cache_2 = checkpoint(lambda x: self.encoder_2(x, cache = cache_2, need_cache=need_cache), outputs)
+        if(new_cache_1 is not None and new_cache_2 is not None):
+            new_cache = new_cache_1[:-1] + new_cache_2
+        else:
+            new_cache = None
 
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
@@ -225,15 +239,20 @@ if __name__=='__main__':
     #print(output3.shape, len(cache3), cache3[0].shape)
     #print(output4.shape, len(cache4), cache4[0].shape)
 
-    DT = DecisionTransformer(256, 5, 8, 128, 8, 1024)
-    inputs_obs = torch.randn((4, 64, 256))
-    input_acts = torch.randint(0, 4, (4, 64))
-    out_obs_1, out_act_1, cache_1 = DT(inputs_obs, input_acts, need_cache=True)
-    #out_obs_2, out_act_2, cache_2 = DT(inputs[:, 48:], input_acts[:, 48:], cache=cache_1, need_cache=True)
-    #out_obs_3, out_act_3, cache_3 = DT(inputs, input_acts, need_cache=True)
-    #print(out_obs_3[:, 48:] - out_obs_2)
-    #print(out_act_3[:, 48:] - out_act_2)
-    #print(cache_3 - cache_2)
+    DT = DecisionTransformer(256, 5, 2, 64, 8, 64, dropout=0.0)
+    inputs_obs = torch.randn((1, 64, 256))
+    input_acts = torch.randint(0, 4, (1, 64))
+    out_obs_1, out_act_1, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
+    out_obs_2, out_act_2, cache_2 = DT(inputs_obs[:, 32:], input_acts[:, 32:], cache=cache_1, need_cache=True)
+    out_obs_3, out_act_3, cache_3 = DT(inputs_obs, input_acts, need_cache=True)
+    print(out_obs_3[:, :32] - out_obs_1)
+    print(out_act_3[:, :32] - out_act_1)
+    print(out_obs_3[:, 32:] - out_obs_2)
+    print(out_act_3[:, 32:] - out_act_2)
+    print(cache_3[0][:, :64] - cache_1[0])
+    print(cache_3[0] - cache_2[0])
+    print(cache_3[1][:, :64] - cache_1[1])
+    print(cache_3[1] - cache_2[1])
 
 
     #inputs2 = torch.randint(0, 1024, (4, 64))

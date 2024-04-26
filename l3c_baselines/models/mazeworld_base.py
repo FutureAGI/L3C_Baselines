@@ -8,20 +8,20 @@ from torch.utils.checkpoint import checkpoint
 from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, VAE
 from modules import DecisionTransformer
 from modules import DiffusionLayers
-from utils import ce_loss_mask, img_pro, img_post
+from utils import ce_loss_mask, entropy_loss, img_pro, img_post
 
 class MazeModelBase(nn.Module):
     def __init__(self, 
                  image_size=128,
                  action_size=5,
                  map_size=7,
-                 latent_size=256,
+                 latent_size=384,
                  hidden_size=1024,
-                 image_encoder_size=256,
+                 image_encoder_size=384,
                  nhead=16,
                  max_time_step=1024,
                  n_res_block=2,
-                 n_trn_block=12):
+                 n_trn_block=24):
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -90,7 +90,7 @@ class MazeModelBase(nn.Module):
         z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
 
         lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1])
-        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]])
+        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]]) - 1.0e-5 * entropy_loss(pred_act)
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
 
         return lmse_z, lce_act, cnt
