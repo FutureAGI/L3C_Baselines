@@ -121,6 +121,8 @@ class DecisionTransformer(nn.Module):
         self.encoder_1 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
         self.encoder_2 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
 
+        self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
+
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
@@ -170,6 +172,7 @@ class DecisionTransformer(nn.Module):
             new_cache = None
 
         # Acqure Outputs: [a_0, s_1, a_1, ...]
+        outputs = self.norm(outputs)
         outputs = outputs.reshape(B, NT, 2, -1)
 
         # Predict a_0, a_1, ..., a_t
