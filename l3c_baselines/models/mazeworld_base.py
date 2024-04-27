@@ -90,7 +90,7 @@ class MazeModelBase(nn.Module):
         z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
 
         lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1])
-        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]]) - 1.0e-5 * entropy_loss(pred_act)
+        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]])
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
 
         return lmse_z, lce_act, cnt
