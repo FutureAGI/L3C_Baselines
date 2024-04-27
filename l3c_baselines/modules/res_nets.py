@@ -170,12 +170,11 @@ class ActionDecoder(nn.Module):
             nn.Linear(hidden_size, input_size),
             nn.GELU())
 
-        self.act_decoder_post = nn.Sequential(
-            nn.Linear(input_size, output_size),
-            nn.Softmax(dim=-1))
+        self.act_decoder_post = nn.Linear(input_size, output_size)
+        self.act_decoder_output = nn.Softmax(dim=-1)
 
     def forward(self, input):
         src = self.layer_norm(input)
         out = self.act_decoder_pre(src)
         out = self.act_decoder_post(out + src)
-        return out
+        return self.act_decoder_output(out), torch.mean(torch.norm(out, p=2, dim=-1))

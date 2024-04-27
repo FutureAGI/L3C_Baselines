@@ -8,7 +8,7 @@ from torch.utils.checkpoint import checkpoint
 from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, VAE
 from modules import DecisionTransformer
 from modules import DiffusionLayers
-from utils import ce_loss_mask, entropy_loss, img_pro, img_post
+from utils import ce_loss_mask, img_pro, img_post
 
 class MazeModelBase(nn.Module):
     def __init__(self, 
@@ -68,9 +68,9 @@ class MazeModelBase(nn.Module):
         obs_output, act_output, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache)
 
         # Decode Action [B, N_T, action_size]
-        pred_act = self.act_decoder(act_output)
+        pred_act, act_norm = self.act_decoder(act_output)
 
-        return z_rec, obs_output, pred_act, new_cache
+        return z_rec, obs_output, pred_act, act_norm, new_cache
 
     def vae_loss(self, observations, _lambda=1.0e-5, _sigma=1.0):
         self.vae.requires_grad_(True)
@@ -87,10 +87,10 @@ class MazeModelBase(nn.Module):
         self.z_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        z_rec, z_raw, pred_act, act_norm, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
 
         lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1])
-        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]])
+        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]]) + 1.0e-5 * act_norm
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
 
         return lmse_z, lce_act, cnt
@@ -120,13 +120,13 @@ class MazeModelBase(nn.Module):
 
         # Inference Action First
         with torch.no_grad():
-            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            z_rec, z_raw, pred_act, act_norm, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
             n_action = torch.multinomial(pred_act[:, -1], num_samples=1).squeeze(1)
             valid_act[:, -1] = n_action
             print("Decision:", pred_act, n_action)
 
             # Inference Next Observation based on Sampled Action
-            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            z_rec, z_raw, pred_act, act_norm, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
             # Latent Diffusion
             z_pred_list = self.z_decoder.inference(z_raw)
             pred_obs = []
