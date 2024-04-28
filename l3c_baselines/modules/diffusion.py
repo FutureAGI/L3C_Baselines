@@ -11,9 +11,9 @@ class DiffusionLayers(nn.Module):
 
         self.condition_size = condition_size
         self.hidden_size = hidden_size
-        self.input_size = hidden_size + condition_size
+        self.input_size = 2 * hidden_size + condition_size
+        self.pre_diffusion_norm = nn.LayerNorm(self.hidden_size, eps=1.0e-5)
         self.diffusion_layers_1 = nn.Sequential(
-            nn.LayerNorm(self.input_size, eps=1.0e-5),
             nn.Linear(self.input_size, inner_hidden_size), 
             nn.GELU(),
             nn.Dropout(0.10),
@@ -30,8 +30,8 @@ class DiffusionLayers(nn.Module):
         cond: [B, NT, HC], float
         """
         assert cond.shape[:2] == xt.shape[:2] and cond.shape[2] == self.condition_size
-        t_emb = self.t_embedding(t - 1)
-        outputs = torch.cat([xt + t_emb, cond], dim=-1)
+        t_emb = self.pre_diffusion_norm(self.t_embedding(t - 1))
+        outputs = torch.cat([xt, t_emb, cond], dim=-1)
         outputs = self.diffusion_layers_1(outputs) + xt
         outputs = self.diffusion_layers_2(outputs)
 

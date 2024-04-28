@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
 from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
-from utils import show_bar, count_parameters, model_path
+from utils import show_bar, count_parameters, check_model_validity, model_path
 from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -25,7 +25,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         vae_stop_epoch, main_start_epoch, batch_size_vae, batch_size_seq,
         train_data_path, test_data_path, 
         load_model_path, save_model_path, 
-        max_time_step, train_time_step, learning_rate, main_rank):
+        max_time_step, train_vae_time_step, 
+        train_seq_time_step, learning_rate, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -63,13 +64,15 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     # Example dataset and dataloader
     if(main):
         print("Initializing Training Dataset...")
-    train_dataset = MazeDataSet(train_data_path, train_time_step, verbose=main)
+    train_vae_dataset = MazeDataSet(train_data_path, train_vae_time_step, verbose=main)
+    train_seq_dataset = MazeDataSet(train_data_path, train_seq_time_step, verbose=main)
+
     if(main):
         print("Initializing Testing Dataset...")
-    test_dataset = MazeDataSet(test_data_path, train_time_step, verbose=main)
+    test_dataset = MazeDataSet(test_data_path, train_seq_time_step, verbose=main)
 
-    vae_dataloader = PrefetchDataLoader(train_dataset, batch_size=batch_size_vae)
-    seq_dataloader = PrefetchDataLoader(train_dataset, batch_size=batch_size_seq)
+    vae_dataloader = PrefetchDataLoader(train_vae_dataset, batch_size=batch_size_vae)
+    seq_dataloader = PrefetchDataLoader(train_seq_dataset, batch_size=batch_size_seq)
 
     test_dataloader = PrefetchDataLoader(test_dataset, batch_size=batch_size_seq)
 
@@ -78,11 +81,12 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
     vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
     main_scheduler = LambdaLR(main_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
 
     if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth')
+        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={"module.z_decoder.t_embedding.weight":0})
 
     # Perform the first evaluation
     #test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
@@ -140,6 +144,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             vae_round(epoch_id, vae_dataloader)
         if(epoch_id > main_start_epoch):
             main_round(epoch_id, seq_dataloader)
+        if(main):  # Check whether model is still valid
+            check_model_validity(model.module)
         if(main and epoch_id % eval_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
@@ -244,6 +250,7 @@ if __name__=='__main__':
                     args.vae_batch_size, args.sequential_batch_size, 
                     args.train_data_path, args.test_data_path,
                     args.load_path, args.save_path,
-                    args.max_time_step, args.train_time_step, args.lr, 0),
+                    args.max_time_step, args.train_time_step // 2, args.train_time_step,
+                    args.lr, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
