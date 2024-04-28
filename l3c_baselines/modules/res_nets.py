@@ -177,4 +177,4 @@ class ActionDecoder(nn.Module):
         src = self.layer_norm(input)
         out = self.act_decoder_pre(src)
         out = self.act_decoder_post(out + src)
-        return self.act_decoder_output(out), torch.mean(torch.norm(out, p=2, dim=-1))
+        return self.act_decoder_output(out)
