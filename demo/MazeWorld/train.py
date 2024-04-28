@@ -56,6 +56,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     model = model.to(device)
 
+
     if use_gpu:
         model = DDP(model, device_ids=[rank])
     else:
@@ -63,17 +64,13 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     # Example dataset and dataloader
     if(main):
-        print("Initializing Training Dataset...")
+        print("Initializing Training and Testing Datasets...")
     train_vae_dataset = MazeDataSet(train_data_path, train_vae_time_step, verbose=main)
     train_seq_dataset = MazeDataSet(train_data_path, train_seq_time_step, verbose=main)
-
-    if(main):
-        print("Initializing Testing Dataset...")
     test_dataset = MazeDataSet(test_data_path, train_seq_time_step, verbose=main)
 
     vae_dataloader = PrefetchDataLoader(train_vae_dataset, batch_size=batch_size_vae)
     seq_dataloader = PrefetchDataLoader(train_seq_dataset, batch_size=batch_size_seq)
-
     test_dataloader = PrefetchDataLoader(test_dataset, batch_size=batch_size_seq)
 
     sigma_scheduler = LinearScheduler(500, [0, 0, 0.5, 1.0])
@@ -89,7 +86,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={"module.z_decoder.t_embedding.weight":0})
 
     # Perform the first evaluation
-    #test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
 
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
@@ -113,9 +110,11 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
                         (rid, percentage, batch_idx, sigma_scheduler(), lambda_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
             sys.stdout.flush()
 
-    def main_round(rid, dataloader):
+    def main_round(rid, dataloader, max_acc_iter=-1):
+        acc_iter = 0
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
+            acc_iter += 1
             obs, acts, rews, maps = batch
             obs = obs.to(device)
             acts = acts.to(device)
@@ -135,7 +134,12 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
                 print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
                             float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
-            sys.stdout.flush()
+                if(acc_iter > max_acc_iter and max_acc_iter > 0):
+                    acc_iter = 0
+                    print("Check current validity and save model for safe...")
+                    check_model_validity(model.module)
+                    mod_path, _, _ = model_path(save_model_path, epoch_id)
+                    torch.save(model.state_dict(), mod_path)
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):
@@ -143,14 +147,15 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         if(vae_stop_epoch > epoch_id):
             vae_round(epoch_id, vae_dataloader)
         if(epoch_id > main_start_epoch):
-            main_round(epoch_id, seq_dataloader)
+            # To save the model within an epoch to prevent failure at the end of the epoch
+            main_round(epoch_id, seq_dataloader, max_acc_iter=3000)
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
         if(main and epoch_id % eval_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
-            torch.save(vae_optimizer.state_dict(), opt_path_vae)
-            torch.save(main_optimizer.state_dict(), opt_path_seq)
+            #torch.save(vae_optimizer.state_dict(), opt_path_vae)
+            #torch.save(main_optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
@@ -178,6 +183,16 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
             lz = cnt * lz
             lact = cnt * lact
 
+        if torch.isinf(lrec).any() or torch.isnan(lrec).any():
+            print(f"[WARNING] {device} reconstruction loss = NAN/INF, {lrec}")
+            lrec.fill_(0.0)
+        if torch.isinf(lz).any() or torch.isnan(lz).any():
+            print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
+            lz.fill_(0.0)
+        if torch.isinf(lact).any() or torch.isnan(lact).any():
+            print("[WARNING] {device} action loss = NAN/INF, {lact}")
+            lact.fill_(0.0)
+
         dist.all_reduce(lrec.data)
         dist.all_reduce(lz.data)
         dist.all_reduce(lact.data)
@@ -194,18 +209,6 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     sum_lact = 0
     sum_cnt = 0
     for lrec, lz, lact, cnt in results:
-        if torch.isinf(lrec).any() or torch.isnan(lrec).any():
-            print("[WARNING] lrec = NAN")
-            continue
-        if torch.isinf(lz).any() or torch.isnan(lz).any():
-            print("[WARNING] lz = NAN")
-            continue
-        if torch.isinf(lact).any() or torch.isnan(lact).any():
-            print("[WARNING] lact = NAN")
-            continue
-        if torch.isinf(cnt).any() or torch.isnan(cnt).any():
-            print("[Warning]: cnt = NAN")
-            continue
         sum_lrec += lrec
         sum_lz += lz
         sum_lact += lact
