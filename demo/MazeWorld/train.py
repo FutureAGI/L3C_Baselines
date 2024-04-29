@@ -15,7 +15,7 @@ from torch.cuda.amp import autocast
 from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
-from models import MazeModelBase
+from models import MazeModelBase1, MazeModelBase2
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
@@ -46,7 +46,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModelBase(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
+    model = MazeModelBase2(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters decision transformer: ", count_parameters(model.decformer))
@@ -119,7 +119,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs = obs.to(device)
             acts = acts.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            lz, lact, cnt = model.module.sequential_loss_latent_reg(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss(obs, acts)
             main_loss = 0.9 * lz + 0.1 * lact
 
             main_optimizer.zero_grad()
@@ -177,7 +177,7 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         length = acts.shape[0] * acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lz, lact, cnt = model.module.sequential_loss_latent_reg(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss(obs, acts)
 
             lrec = cnt * lrec
             lz = cnt * lz

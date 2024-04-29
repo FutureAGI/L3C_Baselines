@@ -198,7 +198,9 @@ class ARTransformerStandard(nn.Module):
         self.word_embedding = nn.Embedding(vocab_size, d_model)
 
         # 创建Transformer编码器层
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
+        self.split_layers = num_layers // 2
+        self.encoder_1 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
+        self.encoder_2 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
         self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
@@ -214,14 +216,26 @@ class ARTransformerStandard(nn.Module):
         if(cache is None):
             cache_len = 0
         else:
-            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
+            assert isinstance(cache, list) and len(cache) == 2 * self.split_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
         # Input actions: [B, NT, 1, H]
         outputs = self.word_embedding(inputs)
 
         # Temporal Encoders
-        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
+        if(cache is None):
+            cache_1 = None
+            cache_2 = None
+        else:
+            cache_1 = cache[:self.split_layers + 1]
+            cache_2 = cache[self.split_layers:]
+        outputs, new_cache_1 = checkpoint(lambda x: self.encoder_1(x, cache = cache_1, need_cache=need_cache), outputs)
+        outputs, new_cache_2 = checkpoint(lambda x: self.encoder_2(x, cache = cache_2, need_cache=need_cache), outputs)
+        if(new_cache_1 is not None and new_cache_2 is not None):
+            new_cache = new_cache_1[:-1] + new_cache_2
+        else:
+            new_cache = None
+
         outputs = self.output_mapping(self.norm(outputs))
 
         return outputs, new_cache
@@ -242,24 +256,24 @@ if __name__=='__main__':
     #print(output3.shape, len(cache3), cache3[0].shape)
     #print(output4.shape, len(cache4), cache4[0].shape)
 
-    DT = DecisionTransformer(256, 5, 2, 64, 8, 64, dropout=0.0)
-    inputs_obs = torch.randn((1, 64, 256))
-    input_acts = torch.randint(0, 4, (1, 64))
-    out_obs_1, out_act_1, _, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
-    out_obs_2, out_act_2, _, cache_2 = DT(inputs_obs[:, 32:], input_acts[:, 32:], cache=cache_1, need_cache=True)
-    out_obs_3, out_act_3, _, cache_3 = DT(inputs_obs, input_acts, need_cache=True)
-    print(out_obs_3[:, :32] - out_obs_1)
-    print(out_act_3[:, :32] - out_act_1)
-    print(out_obs_3[:, 32:] - out_obs_2)
-    print(out_act_3[:, 32:] - out_act_2)
-    print(cache_3[0][:, :64] - cache_1[0])
-    print(cache_3[0] - cache_2[0])
-    print(cache_3[1][:, :64] - cache_1[1])
-    print(cache_3[1] - cache_2[1])
+    #DT = DecisionTransformer(256, 5, 2, 64, 8, 64, dropout=0.0)
+    #inputs_obs = torch.randn((1, 64, 256))
+    #input_acts = torch.randint(0, 4, (1, 64))
+    #out_obs_1, out_act_1, _, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
+    #out_obs_2, out_act_2, _, cache_2 = DT(inputs_obs[:, 32:], input_acts[:, 32:], cache=cache_1, need_cache=True)
+    #out_obs_3, out_act_3, _, cache_3 = DT(inputs_obs, input_acts, need_cache=True)
+    #print(out_obs_3[:, :32] - out_obs_1)
+    #print(out_act_3[:, :32] - out_act_1)
+    #print(out_obs_3[:, 32:] - out_obs_2)
+    #print(out_act_3[:, 32:] - out_act_2)
+    #print(cache_3[0][:, :64] - cache_1[0])
+    #print(cache_3[0] - cache_2[0])
+    #print(cache_3[1][:, :64] - cache_1[1])
+    #print(cache_3[1] - cache_2[1])
 
 
-    #inputs2 = torch.randint(0, 1024, (4, 64))
-    #ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
-    #out_nlp, cache = ART2(inputs2, need_cache=True)
-    #out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
-    #print(out_nlp.shape, out_nlp2.shape)
+    inputs2 = torch.randint(0, 1024, (4, 64))
+    ART2 = ARTransformerStandard(1024, 8, 128, 8, 1024)
+    out_nlp, cache = ART2(inputs2, need_cache=True)
+    out_nlp2, cache = ART2(inputs2, cache=cache, need_cache=True)
+    print(out_nlp.shape, out_nlp2.shape)

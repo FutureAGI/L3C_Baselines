@@ -10,7 +10,7 @@ from modules import DecisionTransformer
 from modules import DiffusionLayers
 from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
 
-class MazeModelBase(nn.Module):
+class MazeModelBase2(nn.Module):
     def __init__(self, 
                  image_size=128,
                  action_size=5,
@@ -46,14 +46,6 @@ class MazeModelBase(nn.Module):
                 torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
         self.register_buffer('loss_mask', loss_mask)
 
-        #self.z_decoder = DiffusionLayers(
-        #    24, # T
-        #    latent_size, # hidden size
-        #    hidden_size, # condition size
-        #    2 * hidden_size, # inner hidden size
-        #)
-
-
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
         Input Size:
@@ -82,24 +74,7 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(True)
         return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
-    def sequential_loss(self, observations, actions, reduce='mean', t=None):
-        self.encoder.requires_grad_(False)
-        self.decoder.requires_grad_(False)
-        self.vae.requires_grad_(False)
-        self.decformer.requires_grad_(True)
-        self.act_decoder.requires_grad_(True)
-        self.z_decoder.requires_grad_(True)
-
-        inputs = img_pro(observations)
-        z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
-
-        lmse_z = self.z_decoder.loss(z_rec[:, 1:], z_raw[:, :-1], reduce=reduce, t=t)
-        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]], reduce=reduce)
-        cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
-
-        return lmse_z, lce_act, cnt
-
-    def sequential_loss_latent_reg(self, observations, actions, reduce='mean', t=None):
+    def sequential_loss(self, observations, actions, reduce='mean'):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -123,20 +98,17 @@ class MazeModelBase(nn.Module):
         self.vae.requires_grad_(False)
         self.decformer.requires_grad_(True)
         self.act_decoder.requires_grad_(True)
-        self.z_decoder.requires_grad_(True)
+        self.lat_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_raw, pred_act, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        obs_pred = self.vae.decoding(z_pred)
 
-        # Latent Diffusion
-        z_pred_list = self.z_decoder.inference(z_raw)
-        pred_obs = self.vae.decoding(z_pred_list[-1])
-        lmse = mse_loss_mask(pred_obs, inputs[:, 1:], reduce=reduce)
-
-        lce_act = ce_loss_mask(pred_act, actions, mask=self.loss_mask[:, :pred_act.shape[1]], reduce=reduce)
+        lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], reduce=reduce)
+        lce_act = ce_loss_mask(a_pred, actions, reduce=reduce)
         cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
 
-        return lmse, lce_act, cnt
+        return lmse_obs, lce_act, cnt
 
     def inference_next(self, observations, actions, cache=None):
         """
@@ -162,26 +134,26 @@ class MazeModelBase(nn.Module):
 
         # Inference Action First
         with torch.no_grad():
-            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
-            n_action = torch.multinomial(pred_act[:, -1], num_samples=1).squeeze(1)
+            z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+            n_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
             valid_act[:, -1] = n_action
-            print("Decision:", pred_act, n_action)
+            print("Decision:", a_pred, n_action)
 
             # Inference Next Observation based on Sampled Action
-            z_rec, z_raw, pred_act, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
-            # Latent Diffusion
-            z_pred_list = self.z_decoder.inference(z_raw)
-            pred_obs = []
-            for z_pred in z_pred_list:
-                pred_obs.append(img_post(self.vae.decoding(z_pred)))
-            # Image Decoding
+            z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+
+            # Decode the prediction
+            pred_obs = self.vae.decoding(z_pred)
             rec_obs = self.vae.decoding(z_rec)
+
+            pred_obs = [img_post(pred_obs)] * 4
+            # Image Decoding
 
         return img_post(rec_obs), pred_obs, n_action, new_cache
         
 
 if __name__=="__main__":
-    model = MazeModelBase()
+    model = MazeModelBase2()
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)
@@ -191,4 +163,6 @@ if __name__=="__main__":
     losses = model.sequential_loss(observation, action)
     rec_img, img_out, act_out, cache = model.inference_next(observation, action)
     print("vae:", vae_loss, "sequential:", losses)
-    print(img_out.shape, act_out.shape, len(cache), cache[0].shape)
+    print(img_out[0].shape, act_out.shape)
+    print(len(cache))
+    print(cache[0].shape)
