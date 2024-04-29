@@ -55,6 +55,8 @@ def run_maze_epoch(n=15,
 
     while not done:
         action = agent.step(observation, reward)
+        if(random.random() < 0.01):
+            action = random.randint(0,4)
         action_list.append(action)
         observation, reward, done, info = maze_env.step(action)
         loc_map = maze_env.maze_core.get_loc_map(map_range=3)
@@ -107,7 +109,7 @@ if __name__=="__main__":
     parser.add_argument("--task_type", type=str, default="NAVIGATION", help="task type, NAVIGATION/SURVIVAL, default:NAVIGATION")
     parser.add_argument("--maze_type", type=str, default="Discrete3D", help="maze type, Discrete2D/Discrete3D/Continuous3D, default:Discrete3D")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
-    parser.add_argument("--scale", type=str, default="9,15,25,35", help="a list of scales separated with comma to randomly choose")
+    parser.add_argument("--scale", type=str, default="9,15,21,25,31,35", help="a list of scales separated with comma to randomly choose")
     parser.add_argument("--density", type=str, default="0.20,0.34,0.36,0.38,0.45", help="density:a list of float")
     parser.add_argument("--landmarks", type=str, default="5,6,7,8,9,10", help="landmarks:a list of number of landmarks")
     parser.add_argument("--memory_keep", type=str, default="0.25, 0.50, 1.0", help="random select memory keep ratio from this list")
