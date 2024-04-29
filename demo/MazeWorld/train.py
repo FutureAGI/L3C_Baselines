@@ -73,8 +73,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     seq_dataloader = PrefetchDataLoader(train_seq_dataset, batch_size=batch_size_seq)
     test_dataloader = PrefetchDataLoader(test_dataset, batch_size=batch_size_seq)
 
-    sigma_scheduler = LinearScheduler(500, [0, 0, 0.5, 1.0])
-    lambda_scheduler = LinearScheduler(500, [0, 1.0e-8, 1.0e-7, 1.0e-6])
+    sigma_scheduler = LinearScheduler(500, [1.0, 1.0, 1.0, 1.0])
+    lambda_scheduler = LinearScheduler(500, [1.0e-4, 1.0e-4, 1.0e-4, 1.0e-4])
 
     vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -83,7 +83,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
     main_scheduler = LambdaLR(main_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
 
     if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={"module.z_decoder.t_embedding.weight":0})
+        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={})
 
     # Perform the first evaluation
     test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
@@ -119,7 +119,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
             obs = obs.to(device)
             acts = acts.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            lz, lact, cnt = model.module.sequential_loss(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss_latent_reg(obs, acts)
             main_loss = 0.9 * lz + 0.1 * lact
 
             main_optimizer.zero_grad()
@@ -177,7 +177,7 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
         length = acts.shape[0] * acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lz, lact, cnt = model.module.sequential_loss(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss_latent_reg(obs, acts)
 
             lrec = cnt * lrec
             lz = cnt * lz

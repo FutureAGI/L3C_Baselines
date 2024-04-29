@@ -1,13 +1,13 @@
 import os
 import numpy as np
+import cv2
+import matplotlib.pyplot as plt
 
 def create_folder(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
 class VideoWriter(object):
-    import cv2
-    import matplotlib.pyplot as plt
     def __init__(self, 
             dir_name,
             file_name,

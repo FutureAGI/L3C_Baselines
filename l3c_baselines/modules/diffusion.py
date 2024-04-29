@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from utils import mse_loss_mask
+
 class DiffusionLayers(nn.Module):
     def __init__(self, T, hidden_size, condition_size, inner_hidden_size, beta=(0.05, 0.20)):
         super().__init__()
@@ -37,11 +39,14 @@ class DiffusionLayers(nn.Module):
 
         return outputs
     
-    def loss(self, x0, cond):
-        t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
-        x_t, eps = self._forward(x0, t)
-        eps_t = self.forward(x_t, t, cond)
-        loss = F.mse_loss(eps_t, eps)
+    def loss(self, x0, cond, mask=None, reduce='mean', t=None):
+        if(t is None):
+            _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
+        else:
+            _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
+        x_t, eps = self._forward(x0, _t)
+        eps_t = self.forward(x_t, _t, cond)
+        loss = mse_loss_mask(eps_t, eps, mask=mask, reduce=reduce)
         return loss
 
     def _forward(self, x0, t):
@@ -53,22 +58,28 @@ class DiffusionLayers(nn.Module):
     def inference(self, cond):
         assert cond.shape[2] == self.condition_size
         z_list = []
-        steps = [self.T, 2 * self.T // 3, self.T // 3, 1]
+        steps = [2 * self.T // 3, self.T // 3, 1]
         with torch.no_grad():
             x_T = torch.randn(*cond.shape[:2], self.hidden_size)
             x_t = x_T.to(cond.device)
+            z_list.append(x_t.detach())
             for t in range(self.T, 0, -1):
                 _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
                 a_t = self._alphas[t]
                 a_t_ = self._alphas[t-1]
                 b_t = self.betas[t]
 
+                # DDPM
                 #eps = torch.randn_like(x_t)
                 #if(t == 1):
                 #    eps = eps * 0
                 #x_t = 1.0 / torch.sqrt(1 - b_t) * (x_t - (b_t / torch.sqrt(1 - a_t)) * self.forward(x_t, _t, cond)) + torch.sqrt(b_t) * eps
+
+                # DDIM
+                eps_z = torch.randn_like(x_t)
                 eps_t = self.forward(x_t, _t, cond)
-                x_t = torch.sqrt(a_t_ / a_t) * (x_t - torch.sqrt(1 - a_t) * eps_t) + torch.sqrt(1 - a_t_) * eps_t
+                sigma_t = 0.01 * torch.sqrt((1 - a_t_) / (1 - a_t)) * torch.sqrt(1 - a_t/a_t_)
+                x_t = torch.sqrt(a_t_ / a_t) * (x_t - torch.sqrt(1 - a_t) * eps_t) + torch.sqrt(1 - a_t_ - sigma_t ** 2) * eps_t + sigma_t * eps_z
                 if(t in steps):
                     z_list.append(x_t.detach())
         return z_list

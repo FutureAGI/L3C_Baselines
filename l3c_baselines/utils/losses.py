@@ -4,17 +4,18 @@ from torch.nn import functional as F
 
 def mse_loss_mask(img_out, img_gt, mask=None, reduce="mean"):
     """
-    input shape: (B, T, C, H, W)
+    input shape: (B, T, *)
     mask shape: (B, T)
     reduce for dim=1
     """
-    mse_loss = torch.mean(((img_out - img_gt / 255)) ** 2, dim=[2, 3, 4])
+    dim = img_out.dim()
+    assert dim >= 3 and dim == img_gt.dim(), "Input must be at least 3 dimension (bsz, time, *) and the label and prediction must be equal"
+    mse_loss = torch.mean(((img_out - img_gt)) ** 2, dim=[i for i in range(2, dim)])
     if mask is not None:
         mse_loss = mse_loss * mask
         if reduce == "mean":
             sum_mask = torch.mean(mask)
             sum_loss = torch.mean(mse_loss)
-            print(sum_mask, sum_loss)
         else:
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(mse_loss, dim=0)

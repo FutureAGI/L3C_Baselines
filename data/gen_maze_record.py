@@ -18,6 +18,7 @@ def run_maze_epoch(n=15,
         max_steps=1000, 
         task_type="NAVIGATION",
         density=0.40,
+        memory_keep_ratio=1.0,
         n_landmarks=10,
         r_landmarks=0.40):
     print("\n\n--------\n\nRunning agents on maze_type = %s, task_type = %s, n = %d, steps = %s...\n\n"%(maze_type, task_type, n, max_steps))
@@ -40,7 +41,7 @@ def run_maze_epoch(n=15,
     maze_env.set_task(task)
 
     # Must intialize agent after reset
-    agent = SmartSLAMAgent(maze_env=maze_env, render=False)
+    agent = SmartSLAMAgent(maze_env=maze_env, render=False, memory_keep_ratio=memory_keep_ratio)
 
     done=False
     observation = maze_env.reset()
@@ -73,17 +74,19 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, maze_type, max_steps, task_type):
+def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, mem_kr_list, maze_type, max_steps, task_type):
     for idx in epoch_ids:
         n = random.choice(n_list)
         n_landmarks = random.choice(n_landmarks_list)
         density = random.choice(density_list)
+        mem_kr = random.choice(mem_kr_list)
 
         observations, actions, rewards, maps = run_maze_epoch(
                 maze_type=maze_type,
                 max_steps=max_steps,
                 n=n,
                 task_type=task_type,
+                memory_keep_ratio=mem_kr,
                 density=density,
                 n_landmarks=n_landmarks)
 
@@ -107,6 +110,7 @@ if __name__=="__main__":
     parser.add_argument("--scale", type=str, default="9,15,25,35", help="a list of scales separated with comma to randomly choose")
     parser.add_argument("--density", type=str, default="0.20,0.34,0.36,0.38,0.45", help="density:a list of float")
     parser.add_argument("--landmarks", type=str, default="5,6,7,8,9,10", help="landmarks:a list of number of landmarks")
+    parser.add_argument("--memory_keep", type=str, default="0.25, 0.50, 1.0", help="random select memory keep ratio from this list")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
     args = parser.parse_args()
@@ -114,6 +118,7 @@ if __name__=="__main__":
     density_list = list(map(float, args.density.split(",")))
     n_list = list(map(int, args.scale.split(",")))
     n_landmarks_list = list(map(int, args.landmarks.split(",")))
+    memory_kr_list = list(map(float, args.memory_keep.split(",")))
 
     worker_splits = args.epochs / args.workers + 1.0e-6
     processes = []
@@ -125,7 +130,8 @@ if __name__=="__main__":
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_maze, 
-                args=(args.output_path, range(n_b, n_e), n_list, n_landmarks_list, density_list, args.maze_type, args.max_steps, args.task_type))
+                args=(args.output_path, range(n_b, n_e), n_list, n_landmarks_list, density_list, memory_kr_list, 
+                args.maze_type, args.max_steps, args.task_type))
         processes.append(process)
         process.start()
 

@@ -178,3 +178,30 @@ class ActionDecoder(nn.Module):
         out = self.act_decoder_pre(src)
         out = self.act_decoder_post(out + src)
         return self.act_decoder_output(out)
+
+class LatentDecoder(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        dropout=0.10
+    ):
+        super().__init__()
+
+        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
+
+        self.lat_decoder_pre = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, input_size),
+            nn.GELU())
+
+        self.lat_decoder_post = nn.Linear(input_size, output_size)
+
+    def forward(self, input):
+        src = self.layer_norm(input)
+        out = self.lat_decoder_pre(src)
+        out = self.lat_decoder_post(out + src)
+        return out
