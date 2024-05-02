@@ -50,7 +50,7 @@ class PrefetchDataLoader(NaiveDataLoader):
     def __init__(
         self,
         dataset,
-        batch_size=64,
+        batch_size=8,
         num_workers=4,
         prefetch_batches=2,
         collate_fn=torch_collate,

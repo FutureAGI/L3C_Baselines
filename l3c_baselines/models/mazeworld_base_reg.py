@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf8
 # File: models.py
+import random
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -110,34 +111,27 @@ class MazeModelBase2(nn.Module):
 
         return lmse_obs, lce_act, cnt
 
-    def inference_next(self, observations, actions, cache=None):
+    def inference_step_by_step(self, observation, cache=None):
         """
-        Inference a_t, s_{t+1} give s_0, a_0, ..., s_t
+        Inference a_t, s_{t+1} give s_t and caches infered from s_0, a_0, ..., s_{t-1}, a_{t-1}
         """
-        B, NT, C, W, H = observations.shape
-        device = observations.device
-        add_act = torch.zeros((B, 1), dtype=torch.int).to(device)
-
-        if(NT < 2):
-            valid_act = add_act
-        else:
-            valid_act = torch.cat([actions, add_act], dim=1)
-
-        if(cache is not None):
-            l_cached = cache[0].shape[1] // 2
-            valid_obs = observations[:, l_cached:]
-            valid_act = valid_act[:, l_cached:]
-        else:
-            valid_obs = observations
-        valid_obs = img_pro(valid_obs)
-        B, NT, C, W, H = valid_obs.shape
+        B, _, C, W, H = observation.shape
+        device = observation.device
+        valid_act = torch.zeros((B, 1), dtype=torch.int).to(device)
+        valid_obs = img_pro(observation)
 
         # Inference Action First
         with torch.no_grad():
             z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
-            n_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
-            valid_act[:, -1] = n_action
-            print("Decision:", a_pred, n_action)
+            r_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
+            g_action = torch.argmax(a_pred[:, -1], dim=-1, keepdim=False)
+            if(random.random() < 0.20):
+                flag = "Random"
+                valid_act[:, -1] = r_action
+            else:
+                flag = "Greedy"
+                valid_act[:, -1] = g_action
+            print("Decision:", a_pred, flag, "random", r_action, "greedy", g_action)
 
             # Inference Next Observation based on Sampled Action
             z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
@@ -146,10 +140,7 @@ class MazeModelBase2(nn.Module):
             pred_obs = self.vae.decoding(z_pred)
             rec_obs = self.vae.decoding(z_rec)
 
-            pred_obs = [img_post(pred_obs)] * 4
-            # Image Decoding
-
-        return img_post(rec_obs), pred_obs, n_action, new_cache
+        return img_post(rec_obs), img_post(pred_obs), valid_act[:, -1], new_cache
         
 
 if __name__=="__main__":
