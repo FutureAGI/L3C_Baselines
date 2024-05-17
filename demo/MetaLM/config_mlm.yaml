@@ -1,0 +1,14 @@
+---
+model_config:
+  vocabulary_size: 256
+  transformer_hidden_size: 1024
+  transformer_nhead: 16
+  n_transformer_block: 12
+  max_time_step: 1024
+  loss_context_warmup: 512
+
+train_config:
+  batch_size: 1
+
+evaluate_config:
+  batch_size: 1

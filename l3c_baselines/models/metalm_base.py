@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf8
 # File: models.py
+import sys
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -9,17 +10,20 @@ from modules import ARTransformerStandard
 from utils import ce_loss_mask, img_pro, img_post
 
 class LMBase(nn.Module):
-    def __init__(self, 
-                vocab_size=256,
-                hidden_size=768,
-                nhead=16,
-                max_time_step=1024,
-                n_trn_block=12,
-                ):
+    def __init__(self, config):
         super().__init__()
 
-        context_warmup = max_time_step // 2
-        self.transformer = ARTransformerStandard(vocab_size, n_trn_block, hidden_size, nhead, max_time_step)
+        context_warmup = config["loss_context_warmup"]
+        vocab_size = config["vocabulary_size"]
+        n_trn_block = config["n_transformer_block"]
+        hidden_size = config["transformer_hidden_size"]
+        nhead = config["transformer_nhead"]
+        max_time_step = config["max_time_step"]
+        if("transformer_checkpoints_density" in config):
+            checkpoints_density = config["transformer_checkpoints_density"]
+        else:
+            checkpoints_density = -1
+        self.transformer = ARTransformerStandard(vocab_size, n_trn_block, hidden_size, nhead, max_time_step, checkpoints_density=checkpoints_density)
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
                 torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
@@ -70,8 +74,12 @@ class LMBase(nn.Module):
         return outputs
 
 if __name__=="__main__":
-    model = LMBase()
-    inputs = torch.randint(256, (8, 33)) 
+    import yaml
+    with open(sys.argv[1], 'r') as file:
+        config = yaml.safe_load(file)
+
+    model = LMBase(config["model_config"])
+    inputs = torch.randint(256, (8, 32)) 
 
     losses = model.perplexity(inputs[:-1], inputs[1:])
     outputs = model.inference_seg(inputs, 4)

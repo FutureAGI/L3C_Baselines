@@ -1,7 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
-from rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
+from .rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
 from torch.utils.checkpoint import checkpoint
 
 class ARTransformerEncoderLayer(nn.Module):
