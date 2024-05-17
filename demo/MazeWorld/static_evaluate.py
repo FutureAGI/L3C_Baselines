@@ -26,6 +26,7 @@ def main_epoch(rank, use_gpu, world_size,
         load_model_path,
         max_time_step, 
         test_time_step, 
+        seg_len,
         main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
@@ -67,9 +68,30 @@ def main_epoch(rank, use_gpu, world_size,
     model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={})
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
+    seg_num = test_time_step // seg_len
+    lzs = []
+    lrecs = []
+    lacts = []
+    for seg_id in range(seg_num):
+        print(f"\nrun_segment {seg_id}/{seg_num}...\n\n")
+        seg_b = seg_id * seg_len
+        seg_e = min((seg_id + 1) * seg_len, test_time_step)
+        lrec, lz, lact = test_epoch(rank, use_gpu, world_size, test_dataloader, seg_b, seg_e, model, main, device, 0)
+        lz=torch.mean(lz, dim=0).cpu().tolist()
+        lact=torch.mean(lact, dim=0).cpu().tolist()
+        lzs.extend(lz)
+        lacts.extend(lact)
+        lrec.append(lrec)
 
-def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
+    if(main):
+        print("\n\n[Results]")
+        print("\n\n[Reconstruct Loss]", numpy.mean(lrecs))
+        print("\n\n[Prediction Loss]")
+        print("\n".join(map(str, lzs)))
+        print("\n\n[Action Cross Entropy]")
+        print("\n".join(map(str, lacts)))
+
+def test_epoch(rank, use_gpu, world_size, test_dataloader, start, end, model, main, device, epoch_id):
     # Example training loop
     results = []
     all_length = len(test_dataloader)
@@ -82,13 +104,15 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
     cnts = 0
     for batch_idx, batch in enumerate(test_dataloader):
         obs,acts,rews,maps = batch
-        obs = obs.to(device)
-        acts = acts.to(device)
+        obs = obs.to(device)[:, start:(end+1)]
+        acts = acts.to(device)[:, start:end]
         obs = obs.permute(0, 1, 4, 2, 3)
         length = acts.shape[0] * acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
             lz, lact, cnt = model.module.sequential_loss_with_decoding(obs, acts, reduce=None)
+            if(lact[-6] > 3):
+                print(acts[:, -6], lact[-6])
 
         lrecs += lrec.cpu() * cnt
         cnts += cnt
@@ -101,15 +125,10 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
 
     lrecs/=cnts
     lrecs = lrecs.item()
-    lzs=torch.mean(torch.stack(lzs, dim=0), dim=0).cpu().tolist()
-    lacts=torch.mean(torch.stack(lacts, dim=0), dim=0).cpu().tolist()
+    lzs=torch.stack(lzs, dim=0)
+    lacts=torch.stack(lacts, dim=0)
 
-    if(main):
-        print("reconstruction loss", lrecs)
-        print("prediction loss:\n\n")
-        print("\n".join(map(str, lzs)))
-        print("\n\naction loss:\n\n")
-        print("\n".join(map(str, lacts)))
+    return lrecs, lzs, lacts
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -117,6 +136,7 @@ if __name__=='__main__':
     parser.add_argument('--test_batch_size', type=int, default=4)
     parser.add_argument('--max_time_step', type=int, default=2048)
     parser.add_argument('--test_time_step', type=int, default=2048)
+    parser.add_argument('--segment_length', type=int, default=2048)
     parser.add_argument('--load_path', type=str)
     args = parser.parse_args()
 
@@ -133,6 +153,7 @@ if __name__=='__main__':
                     args.test_data_path,
                     args.load_path, 
                     args.max_time_step, 
+                    args.segment_length,
                     args.test_time_step, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

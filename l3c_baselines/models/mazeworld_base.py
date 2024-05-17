@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf8
 # File: models.py
+import sys
 import random
 import torch
 from torch import nn
@@ -11,41 +12,50 @@ from modules import DecisionTransformer
 from modules import DiffusionLayers
 from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
 
-class MazeModelBase2(nn.Module):
-    def __init__(self, 
-                 image_size=128,
-                 action_size=5,
-                 map_size=7,
-                 latent_size=1024,
-                 hidden_size=1024,
-                 image_encoder_size=384,
-                 nhead=16,
-                 max_time_step=1024,
-                 n_res_block=2,
-                 n_trn_block=24):
+class MazeModelBase(nn.Module):
+    def __init__(self, config): 
         super().__init__()
 
-        self.hidden_size = hidden_size
+        self.hidden_size = config["transformer_hidden_size"]
+        self.latent_size = config["image_latent_size"]
+        self.action_size = config["action_size"]
+        context_warmup = config["loss_context_warmup"]
 
-        self.latent_size = latent_size
+        self.encoder = Encoder(config["image_size"], 3, config["image_encoder_size"], config["n_residual_block"])
 
-        self.encoder = Encoder(image_size, 3, image_encoder_size, n_res_block)
+        self.decoder = Decoder(config["image_size"], self.latent_size, config["image_encoder_size"], 3, config["n_residual_block"])
 
-        self.decoder = Decoder(image_size, latent_size, image_encoder_size, 3, n_res_block)
+        self.vae = VAE(self.latent_size, self.encoder, self.decoder) 
 
-        self.vae = VAE(latent_size, self.encoder, self.decoder) 
+        self.decformer = DecisionTransformer(
+                self.latent_size, self.action_size, config["n_transformer_block"], 
+                self.hidden_size, config["transformer_nhead"], config["max_time_step"])
 
-        self.decformer = DecisionTransformer(latent_size, action_size, n_trn_block, hidden_size, nhead, max_time_step)
+        self.act_decoder = ActionDecoder(self.hidden_size, 4 * self.hidden_size, self.action_size, dropout=0.10)
 
-        self.act_decoder = ActionDecoder(hidden_size, 4 * hidden_size, action_size, dropout=0.10)
-
-        self.lat_decoder = LatentDecoder(hidden_size, 2 * hidden_size, hidden_size, dropout=0.10)
-
-        context_warmup = 256
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
-                torch.full((1, max_time_step - context_warmup, ), 1.0)), dim=1)
+                torch.full((1, config["max_time_step"] - context_warmup, ), 1.0)), dim=1)
         self.register_buffer('loss_mask', loss_mask)
+
+        if("image_decoder_type" not in config):
+            raise Exception("image decoder type is not specified, regression / diffusion")
+        elif(config["image_decoder_type"].lower() == "regression"):
+            self.is_diffusion = False
+            self.lat_decoder = LatentDecoder(
+                self.hidden_size, 
+                2 * self.hidden_size, 
+                self.hidden_size, dropout=0.0)
+        elif(config["image_decoder_type"].lower() == "diffusion"):
+            self.is_diffusion = True
+            self.lat_decoder = DiffusionLayers(
+                config["image_decoder"]["diffusion_steps"], # T
+                self.latent_size, # hidden size
+                self.hidden_size, # condition size
+                2 * self.hidden_size, # inner hidden size
+            )
+        else:
+            raise Exception("Unrecognized type", config["image_decoder_type"])
 
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
@@ -65,7 +75,6 @@ class MazeModelBase2(nn.Module):
 
         # Decode Action [B, N_T, action_size]
         a_pred = self.act_decoder(a_pred)
-        z_pred = self.lat_decoder(z_pred)
 
         return z_rec, z_pred, a_pred, new_cache
 
@@ -85,6 +94,14 @@ class MazeModelBase2(nn.Module):
 
         inputs = img_pro(observations)
         z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        if(self.is_diffusion):
+            with torch.no_grad():
+                z_rec_l, _ = self.vae(inputs[:, -1:])
+            z_rec_l = torch.cat((z_rec, z_rec_l), dim=1)
+            z_pred = self.lat_decoder(z_rec_l[:, 1:], z_pred)
+        else:
+            z_pred = self.lat_decoder(z_pred)
+
         obs_pred = self.vae.decoding(z_pred)
 
         lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, :obs_pred.shape[1]], reduce=reduce)
@@ -93,25 +110,7 @@ class MazeModelBase2(nn.Module):
 
         return lmse_obs, lce_act, cnt
 
-    def sequential_loss_with_decoding(self, observations, actions, reduce='mean'):
-        self.encoder.requires_grad_(False)
-        self.decoder.requires_grad_(False)
-        self.vae.requires_grad_(False)
-        self.decformer.requires_grad_(True)
-        self.act_decoder.requires_grad_(True)
-        self.lat_decoder.requires_grad_(True)
-
-        inputs = img_pro(observations)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
-        obs_pred = self.vae.decoding(z_pred)
-
-        lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], reduce=reduce)
-        lce_act = ce_loss_mask(a_pred, actions, reduce=reduce)
-        cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
-
-        return lmse_obs, lce_act, cnt
-
-    def inference_step_by_step(self, observation, cache=None):
+    def inference_step_by_step(self, observation, config, cache=None, verbose=False):
         """
         Inference a_t, s_{t+1} give s_t and caches infered from s_0, a_0, ..., s_{t-1}, a_{t-1}
         """
@@ -120,31 +119,53 @@ class MazeModelBase2(nn.Module):
         valid_act = torch.zeros((B, 1), dtype=torch.int).to(device)
         valid_obs = img_pro(observation)
 
+        print(config)
+        e_s = config["softmax"]
+        e_g = config["greedy"]
+
         # Inference Action First
         with torch.no_grad():
             z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
-            r_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
+            s_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
             g_action = torch.argmax(a_pred[:, -1], dim=-1, keepdim=False)
-            if(random.random() < 0.20):
-                flag = "Random"
-                valid_act[:, -1] = r_action
-            else:
-                flag = "Greedy"
+            eps = random.random()
+            if(eps < e_s):
+                flag = "S"
+                valid_act[:, -1] = s_action
+            elif(eps < e_s + e_g):
+                flag = "G"
                 valid_act[:, -1] = g_action
-            print("Decision:", a_pred, flag, "random", r_action, "greedy", g_action)
+            else:
+                flag = "R"
+                valid_act[:, -1] = torch.randint_like(r_action, high=self.action_size)
+            if(verbose):
+                print("Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
 
             # Inference Next Observation based on Sampled Action
             z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
 
             # Decode the prediction
-            pred_obs = self.vae.decoding(z_pred)
+            if(self.is_diffusion):
+                # Latent Diffusion
+                lat_pred_list = self.lat_decoder.inference(z_pred)
+                pred_obs = []
+                for lat_pred in lat_pred_list:
+                    pred_obs.append(img_post(self.vae.decoding(lat_pred)))
+            else:
+                lat_pred = self.lat_decoder(z_pred)
+                pred_obs = self.vae.decoding(lat_pred)
+
+            # Image Decoding
             rec_obs = self.vae.decoding(z_rec)
 
         return img_post(rec_obs), img_post(pred_obs), valid_act[:, -1], new_cache
         
 
 if __name__=="__main__":
-    model = MazeModelBase2()
+    import yaml
+    with open(sys.argv[1], 'r') as file:
+        config = yaml.safe_load(file)
+    model = MazeModelBase(config["model_config"])
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)
@@ -152,7 +173,7 @@ if __name__=="__main__":
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(observation, action)
-    rec_img, img_out, act_out, cache = model.inference_next(observation, action)
+    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config["evaluate_config"]["policy"])
     print("vae:", vae_loss, "sequential:", losses)
     print(img_out[0].shape, act_out.shape)
     print(len(cache))
