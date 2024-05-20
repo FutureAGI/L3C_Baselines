@@ -15,18 +15,13 @@ from torch.cuda.amp import autocast
 from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
-from models import MazeModelBase1, MazeModelBase2
+from utils import Configure
+from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
 
 
-def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
-        vae_stop_epoch, main_start_epoch, batch_size_vae, batch_size_seq,
-        train_data_path, test_data_path, 
-        load_model_path, save_model_path, 
-        max_time_step, train_vae_time_step, 
-        train_seq_time_step, learning_rate, main_rank):
+def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -46,7 +41,7 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModelBase2(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
+    model = MazeModelBase(config.model_config)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters decision transformer: ", count_parameters(model.decformer))
@@ -56,42 +51,65 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
 
     model = model.to(device)
 
-
     if use_gpu:
         model = DDP(model, device_ids=[rank])
     else:
         model = DDP(model)
 
+
     # Example dataset and dataloader
-    if(main):
-        print("Initializing Training and Testing Datasets...")
-    train_vae_dataset = MazeDataSet(train_data_path, train_vae_time_step, verbose=main)
-    train_seq_dataset = MazeDataSet(train_data_path, train_seq_time_step, verbose=main)
-    test_dataset = MazeDataSet(test_data_path, train_seq_time_step, verbose=main)
+    train_config = config.train_config
+    load_model_path = train_config.load_model_path
+    load_model_parameter_blacklist = train_config.load_model_parameter_blacklist
+    learning_rate_vae = train_config.learning_rate_vae
+    learning_rate_vae_decay_interval = train_config.learning_rate_vae_decay_interval
+    learning_rate_causal = train_config.learning_rate_causal
+    learning_rate_causal_decay_interval = train_config.learning_rate_causal_decay_interval
+    batch_size_vae = train_config.batch_size_vae
+    batch_size_causal = train_config.batch_size_causal
+    time_step_vae = train_config.time_step_vae
+    time_step_causal = train_config.time_step_causal
+    data_path = train_config.data_path
 
-    vae_dataloader = PrefetchDataLoader(train_vae_dataset, batch_size=batch_size_vae)
-    seq_dataloader = PrefetchDataLoader(train_seq_dataset, batch_size=batch_size_seq)
-    test_dataloader = PrefetchDataLoader(test_dataset, batch_size=batch_size_seq)
+    vae_dataset = MazeDataSet(data_path, time_step_vae, verbose=main)
+    causal_dataset = MazeDataSet(data_path, time_step_causal, verbose=main)
 
-    sigma_scheduler = LinearScheduler(500, [1.0, 1.0, 1.0, 1.0])
-    lambda_scheduler = LinearScheduler(500, [1.0e-4, 1.0e-4, 1.0e-4, 1.0e-4])
+    vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae)
+    causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal)
 
-    vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    main_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    sigma_scheduler = train_config.sigma_scheduler
+    sigma_value = train_config.sigma_value
 
-    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
-    main_scheduler = LambdaLR(main_optimizer, lr_lambda=lambda x:noam_scheduler(x, 500, low=1.0e-5))
+    lambda_scheduler = train_config.lambda_scheduler
+    lambda_value = train_config.lambda_value
+
+    sigma_scheduler = LinearScheduler(sigma_scheduler, sigma_value)
+    lambda_scheduler = LinearScheduler(lambda_scheduler, lambda_value)
+
+    vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate_vae)
+    causal_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate_causal)
+
+    lr_scheduler_vae = lambda x:noam_scheduler(x, learning_rate_vae_decay_interval)
+    lr_scheduler_causal = lambda x:noam_scheduler(x, learning_rate_causal_decay_interval)
+
+    vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lr_scheduler_vae)
+    causal_scheduler = LambdaLR(causal_optimizer, lr_lambda=lr_scheduler_causal)
+
+    load_model_path = train_config.load_model_path
 
     if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={})
+        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=False)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0)
+    test_config = config.test_config
+    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    lossweight_worldmodel = train_config.lossweight_worldmodel
+    lossweight_policymodel = train_config.lossweight_policymodel
 
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
-            obs, acts, rews, maps = batch
+            obs, bacts, lacts, rews = batch
             obs = obs.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
             vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
@@ -110,31 +128,32 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
                         (rid, percentage, batch_idx, sigma_scheduler(), lambda_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
             sys.stdout.flush()
 
-    def main_round(rid, dataloader, max_acc_iter=-1):
+    def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            obs, acts, rews, maps = batch
+            obs, bacts, lacts, rews = batch
             obs = obs.to(device)
-            acts = acts.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            lz, lact, cnt = model.module.sequential_loss(obs, acts)
-            main_loss = 0.9 * lz + 0.1 * lact
+            lacts = lacts.to(device)
+            bacts = bacts.to(device)
+            lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
+            causal_loss = lossweight_worldmodel * lz + lossweight_policymodel * lact
 
-            main_optimizer.zero_grad()
-            main_loss.backward()
+            causal_optimizer.zero_grad()
+            causal_loss.backward()
             clip_grad_norm_(model.module.parameters(), 1.0)
 
-            main_optimizer.step()
-            main_scheduler.step()
+            causal_optimizer.step()
+            causal_scheduler.step()
 
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
                 print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
-                        (rid, percentage, batch_idx, main_scheduler.get_last_lr()[0],
+                        (rid, percentage, batch_idx, causal_scheduler.get_last_lr()[0],
                             float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
-                if(acc_iter > max_acc_iter and max_acc_iter > 0):
+                if(acc_iter > max_save_iterations and max_save_iterations > 0):
                     acc_iter = 0
                     print("Check current validity and save model for safe...")
                     check_model_validity(model.module)
@@ -142,42 +161,54 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
                     torch.save(model.state_dict(), mod_path)
 
     # Example training loop
-    for epoch_id in range(1, max_epochs + 1):
+    vae_stop_epoch = train_config.epoch_vae_stop
+    causal_start_epoch = train_config.epoch_causal_start
+    max_save_iterations = train_config.max_save_iterations
+
+    for epoch_id in range(1, train_config.max_epochs + 1):
         model.train()
         if(vae_stop_epoch > epoch_id):
             vae_round(epoch_id, vae_dataloader)
-        if(epoch_id > main_start_epoch):
+        if(epoch_id > causal_start_epoch):
             # To save the model within an epoch to prevent failure at the end of the epoch
-            main_round(epoch_id, seq_dataloader, max_acc_iter=3000)
+            causal_round(epoch_id, causal_dataloader, max_save_iterations=max_save_iterations)
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
         if(main and epoch_id % eval_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
-            #torch.save(vae_optimizer.state_dict(), opt_path_vae)
-            #torch.save(main_optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % eval_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id)
+            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
-def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
+    load_model_path = config.load_model_path
+    batch_size = config.batch_size
+    data_path = config.data_path
+    time_step = config.time_step
+
+    dataset = MazeDataSet(data_path, time_step, verbose=main)
+
+    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size)
+
     results = []
-    all_length = len(test_dataloader)
+    all_length = len(dataloader)
 
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
-    for batch_idx, batch in enumerate(test_dataloader):
-        obs,acts,rews,maps = batch
+    for batch_idx, batch in enumerate(dataloader):
+        obs,bacts,lacts,rews = batch
         obs = obs.to(device)
-        acts = acts.to(device)
         obs = obs.permute(0, 1, 4, 2, 3)
-        length = acts.shape[0] * acts.shape[1]
+        bacts = bacts.to(device)
+        lacts = lacts.to(device)
+        length = lacts.shape[0] * lacts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lz, lact, cnt = model.module.sequential_loss(obs, acts)
+            lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
 
             lrec = cnt * lrec
             lz = cnt * lz
@@ -225,19 +256,8 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_data_path', type=str)
-    parser.add_argument('--test_data_path', type=str)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--vae_batch_size', type=int, default=4)
-    parser.add_argument('--sequential_batch_size', type=int, default=4)
-    parser.add_argument('--max_epochs', type=int, default=10)
-    parser.add_argument('--eval_interval', type=int, default=1)
-    parser.add_argument('--vae_stop_epoch', type=int, default=10)
-    parser.add_argument('--main_start_epoch', type=int, default=-1)
-    parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--train_time_step', type=int, default=256)
-    parser.add_argument('--save_path', type=str, default='./model/')
-    parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -247,13 +267,19 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
+    config = Configure()
+    config.from_yaml(args.configuration)
+
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
+
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, args.max_epochs, args.eval_interval, 
-                    args.vae_stop_epoch, args.main_start_epoch,
-                    args.vae_batch_size, args.sequential_batch_size, 
-                    args.train_data_path, args.test_data_path,
-                    args.load_path, args.save_path,
-                    args.max_time_step, args.train_time_step // 2, args.train_time_step,
-                    args.lr, 0),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

@@ -25,7 +25,7 @@ def model_path(save_model_path, epoch_id):
         os.makedirs(directory_path)
     return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
-def custom_load_model(model, state_dict_path, black_list=dict(), max_norm_allowed=1.0e+2, strict_check=False):  
+def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.0e+2, strict_check=False):  
     """
     In case of hard condition, shape mismatch, nan/inf are not allowed, which directly lead to failure
     """
@@ -53,9 +53,15 @@ def custom_load_model(model, state_dict_path, black_list=dict(), max_norm_allowe
             l2_norm = torch.norm(param_tensor, p=2).item()
             norm_valid = (l2_norm < max_norm_allowed)
 
-            if param_name in black_list:
-                print(f"Skip black list parameter {param_name}")
-            elif model_param_shape == param_tensor.shape and (not is_nan):  
+            hits_black = False
+            for name in black_list:
+                if(param_name.find(name) > -1):
+                    print(f"Parameter hits {param_name} black lists {name}")
+                    hits_black = True
+            if(hits_black):
+                continue
+
+            if model_param_shape == param_tensor.shape and (not is_nan):  
                 if(not norm_valid):
                     print(f"[Warning] Large norm ({l2_norm}) encountered in parameter {param_name}. Keep Loading...")
                 if(is_inf):

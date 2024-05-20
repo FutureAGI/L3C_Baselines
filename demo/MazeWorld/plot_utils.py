@@ -3,8 +3,9 @@ import numpy
 import matplotlib.pyplot as plt
 
 def plot_mean_variance(ax, x, y_mean, y_var, color, lab):
-    ax.plot(x, y_mean, '-', color=color, label=lab)
-    ax.fill_between(x, y_mean - y_var, y_mean + y_var, color=color, alpha=0.15)
+    x_s = 10
+    ax.plot(x[x_s:], numpy.clip(y_mean[x_s:], -1.0e-6, 1.0e+6), '-', color=color, label=lab)
+    ax.fill_between(x[x_s:], numpy.clip(y_mean - y_var, -1.0e-6, 1.0e+6)[x_s:], numpy.clip(y_mean + y_var, -1.0e-6, 1.0e+6)[x_s:], color=color, alpha=0.15)
 
 def plot_input_file(ax, file_name, color, lab, max_step):
     x = numpy.arange(max_step)
@@ -34,8 +35,13 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     fig, ax = plt.subplots()
+    #ax.set_xscale('log')
+    #ax.set_yscale('log')
+    ax.set_xlabel('Steps')
+    ax.set_ylabel('Average accumulated reward')
+    plt.xlim(10, 2000)
     if(args.y_axis is not None):
-        y_tok = map(float(args.y_axis.split(",")))
+        y_tok = list(map(float, args.y_axis.split(",")))
         plt.ylim(y_tok[0], y_tok[1])
 
     input_info = args.input_info.split(";")

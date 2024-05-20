@@ -88,7 +88,7 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(True)
         return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
-    def sequential_loss(self, observations, actions, reduce='mean'):
+    def sequential_loss(self, observations, behavior_actions, label_actions, reduce='mean'):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -97,7 +97,7 @@ class MazeModelBase(nn.Module):
         self.lat_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], actions, cache=None, need_cache=False)
+        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False)
         if(self.is_diffusion):
             with torch.no_grad():
                 z_rec_l, _ = self.vae(inputs[:, -1:])
@@ -109,8 +109,8 @@ class MazeModelBase(nn.Module):
         obs_pred = self.vae.decoding(z_pred)
 
         lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, :obs_pred.shape[1]], reduce=reduce)
-        lce_act = ce_loss_mask(a_pred, actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
-        cnt = torch.tensor(actions.shape[0] * actions.shape[1], dtype=torch.int, device=actions.device)
+        lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
+        cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
         return lmse_obs, lce_act, cnt
 

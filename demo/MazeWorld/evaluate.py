@@ -1,3 +1,4 @@
+import random
 import argparse
 import sys
 import os
@@ -127,7 +128,7 @@ def model_epoch(maze_env, task, model, device, video_writer=None, video_text=Tru
         sys.stdout.flush()
     return reward_smoothing(rew_arr), acc_rew_arr
 
-def random_epoch(maze_env, task, mem_kr):
+def random_epoch(maze_env, task):
     # Example training loop
     maze_env.set_task(task)
     observation = maze_env.reset()

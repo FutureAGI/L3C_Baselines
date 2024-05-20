@@ -3,6 +3,7 @@ model_config:
   image_size: 128
   action_size: 5
   map_size: 7
+  checkpoints_density: 4
   transformer_hidden_size: 1024
   transformer_nhead: 16
   image_latent_size: 1024
@@ -17,30 +18,52 @@ model_config:
 
 
 train_config:
+  max_epochs: 15
   batch_size_vae: 1
   batch_size_causal: 1
   epoch_vae_stop: -1
   epoch_causal_start: -1
-  time_step_vae: 1024
-  time_step_causal: 1024
+  time_step_vae: 256
+  time_step_causal: 256
   learning_rate_vae: 1.0e-3
   learning_rate_causal: 1.0e-3
   learning_rate_vae_decay_interval: 1.0e-3
   learning_rate_causal_decay_interval: 1000
-  data_path: ./data
-  load_model_path: ./checkpoints/01
+  data_path: ../../../data/maze_data_demo/
+  load_model_path: ./checkpoints/pretrain_35_20240513
   save_model_path: ./checkpoints/
   master_port: "12300"
+  max_save_iterations: 5000
+  lossweight_policymodel: 0.80
+  lossweight_worldmodel: 0.20
+  load_model_parameter_blacklist:
+    - "lat_decoder"
+    - "act_decoder"
+    - "decformer"
+
+  sigma_scheduler: 1000
+  sigma_value:
+    - 0.0
+    - 0.1
+    - 0.2
+    - 1.0
+
+  lambda_scheduler: 1000
+  lambda_value:
+    - 0.0
+    - 1.0e-7
+    - 1.0e-6
+    - 1.0e-5
 
 test_config:
   batch_size: 1
   time_step: 1024
-  data_path: ./data
+  data_path: ../../../data/maze_data_demo/
   master_port: "12301"
-  load_model_path: ./checkpoints/01
+  load_model_path: ./checkpoints/pretrain_35_20240513
 
 demo_config:
-  load_model_path: ./checkpoints/01
+  load_model_path: ./checkpoints/pretrain_35_20240513
   master_port: "12301"
   policy:
     softmax: 0.80

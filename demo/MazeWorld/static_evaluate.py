@@ -17,9 +17,9 @@ from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
 from models import MazeModelBase1, MazeModelBase2
 
-os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12345'        # Example port, choose an available port
 
+os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
+os.environ['MASTER_PORT'] = '12348'        # Example port, choose an available port
 
 def main_epoch(rank, use_gpu, world_size, 
         test_batch_size, test_data_path, 
@@ -73,7 +73,7 @@ def main_epoch(rank, use_gpu, world_size,
     lrecs = []
     lacts = []
     for seg_id in range(seg_num):
-        print(f"\nrun_segment {seg_id}/{seg_num}...\n\n")
+        print(f"\nrun_segment {seg_id + 1}/{seg_num}...\n\n")
         seg_b = seg_id * seg_len
         seg_e = min((seg_id + 1) * seg_len, test_time_step)
         lrec, lz, lact = test_epoch(rank, use_gpu, world_size, test_dataloader, seg_b, seg_e, model, main, device, 0)
@@ -81,7 +81,7 @@ def main_epoch(rank, use_gpu, world_size,
         lact=torch.mean(lact, dim=0).cpu().tolist()
         lzs.extend(lz)
         lacts.extend(lact)
-        lrec.append(lrec)
+        lrecs.append(lrec)
 
     if(main):
         print("\n\n[Results]")
@@ -111,8 +111,6 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, start, end, model, ma
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
             lz, lact, cnt = model.module.sequential_loss_with_decoding(obs, acts, reduce=None)
-            if(lact[-6] > 3):
-                print(acts[:, -6], lact[-6])
 
         lrecs += lrec.cpu() * cnt
         cnts += cnt
@@ -153,7 +151,8 @@ if __name__=='__main__':
                     args.test_data_path,
                     args.load_path, 
                     args.max_time_step, 
+                    args.test_time_step, 
                     args.segment_length,
-                    args.test_time_step, 0),
+                    0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
