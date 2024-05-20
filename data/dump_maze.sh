@@ -8,7 +8,8 @@ python gen_maze_record.py \
   --task_type NAVIGATION \
   --maze_type Discrete3D \
   --max_steps 2048 \
+  --memory_keep 1.0 \
   --landmarks 10 \
-  --scale 15 \
-  --epochs 32 \
+  --scale 15,25,35 \
+  --epochs 64 \
   --workers 32

@@ -19,6 +19,7 @@ def run_maze_epoch(n=15,
         task_type="NAVIGATION",
         density=0.40,
         memory_keep_ratio=1.0,
+        behavior_epsilon=0.40,
         n_landmarks=10,
         r_landmarks=0.40):
     print("\n\n--------\n\nRunning agents on maze_type = %s, task_type = %s, n = %d, steps = %s...\n\n"%(maze_type, task_type, n, max_steps))
@@ -48,29 +49,33 @@ def run_maze_epoch(n=15,
     sum_reward = 0
     reward = 0
     observation_list = [observation]
-    action_list = []
+    behavior_action_list = []
+    label_action_list = []
     reward_list = []
     map_list = []
     interval = 0
 
     while not done:
-        action = agent.step(observation, reward)
-        if(random.random() < 0.01):
+        label_action = agent.step(observation, reward)
+        if(random.random() < behavior_epsilon):
             action = random.randint(0,4)
-        action_list.append(action)
+        else:
+            action = label_action
+        behavior_action_list.append(action)
+        label_action_list.append(label_action)
+
         observation, reward, done, info = maze_env.step(action)
         loc_map = maze_env.maze_core.get_loc_map(map_range=3)
         reward_list.append(reward)
         observation_list.append(observation)
-        map_list.append(loc_map)
         sum_reward += reward
 
     print("Finish running, sum reward = %f, steps = %d\n"%(sum_reward, len(observation_list)-1))
 
     return (numpy.asarray(observation_list, dtype=numpy.uint8), 
-        numpy.asarray(action_list, dtype=numpy.uint8), 
-        numpy.asarray(reward_list, dtype=numpy.float32),
-        numpy.asarray(map_list, dtype=numpy.uint8))
+        numpy.asarray(behavior_action_list, dtype=numpy.uint8), 
+        numpy.asarray(label_action_list, dtype=numpy.uint8), 
+        numpy.asarray(reward_list, dtype=numpy.float32))
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):
@@ -83,7 +88,7 @@ def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, mem_
         density = random.choice(density_list)
         mem_kr = random.choice(mem_kr_list)
 
-        observations, actions, rewards, maps = run_maze_epoch(
+        observations, behavior_actions, label_actions, rewards = run_maze_epoch(
                 maze_type=maze_type,
                 max_steps=max_steps,
                 n=n,
@@ -98,9 +103,9 @@ def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, mem_
         # Open the lmdb environment
         create_directory(file_path)
         numpy.save("%s/observations.npy" % file_path, observations)
-        numpy.save("%s/actions.npy" % file_path, actions)
+        numpy.save("%s/actions_behavior.npy" % file_path, behavior_actions)
+        numpy.save("%s/actions_label.npy" % file_path, label_actions)
         numpy.save("%s/rewards.npy" % file_path, rewards)
-        numpy.save("%s/maps.npy" % file_path, maps)
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
