@@ -14,16 +14,12 @@ from torch.cuda.amp import autocast
 from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
+from utils import Configure
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12343'        # Example port, choose an available port
 
-
-def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval, 
-        batch_size, vocab_size, train_data_path, test_data_path, 
-        load_model_path, save_model_path, 
-        max_time_step, train_time_step, learning_rate, main_rank):
+def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -43,11 +39,8 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = LMBase(vocab_size=vocab_size,
-                hidden_size=1024,
-                nhead=16,
-                max_time_step=max_time_step,
-                n_trn_block=12)
+    model = LMBase(config.model_config)
+                
     if(main):
         print("Model parameters:", count_parameters(model))
 
@@ -59,34 +52,31 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         model = DDP(model)
 
     # Example dataset and dataloader
-    if(main):
-        print("Initializing Training Dataset...")
-    train_dataset = LMDataSet(train_data_path, 500, verbose=main)
-    if(main):
-        print("Initializing Testing Dataset...")
-    test_dataset = LMDataSet(test_data_path, 500, verbose=main)
+    train_config = config.train_config
+    load_model_path = train_config.load_model_path
+    learning_rate = train_config.learning_rate
+    noam_decay_interval = train_config.learning_rate_noam_decay_interval
+    batch_size = config.train_config.batch_size
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
-
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler)
+    dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, 1000))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, noam_decay_interval))
 
     if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth')
+        model = custom_load_model(model, f'{load_model_path}/model.pth', strict_check=False)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 0, max_time_step)
+    test_config = config.test_config
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, (feature, label) in enumerate(dataloader):
             feature = feature[:, :train_time_step].to(device)
             label = label[:, :train_time_step].to(device)
-            #with autocast():
             loss = model.module.perplexity(feature, label)
 
             optimizer.zero_grad()
@@ -106,26 +96,34 @@ def main_epoch(rank, use_gpu, world_size, max_epochs, eval_interval,
         model.train()
         main_round(epoch_id, train_dataloader)
         if(main and epoch_id % eval_interval == 0):
-            mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
+            mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
             torch.save(optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % eval_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id, max_time_step)
+            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
-def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, epoch_id, max_time_step):
+def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
+
+    data_path = config.data_path
+    file_size = config.file_size
+    batch_size = config.batch_size
+    time_step = config.time_step
     results = []
-    all_length = len(test_dataloader)
+    dataset = LMDataSet(data_path, file_size, verbose=main)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+    all_length = len(dataloader)
 
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
 
-    for batch_idx, (feature, label) in enumerate(test_dataloader):
-        feature = feature[:, :max_time_step].to(device)
-        label = label[:, :max_time_step].to(device)
+    for batch_idx, (feature, label) in enumerate(dataloader):
+        feature = feature[:, :time_step].to(device)
+        label = label[:, :time_step].to(device)
         #with autocast():
         with torch.no_grad():
             loss = model.module.perplexity(feature, label)
@@ -157,17 +155,8 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, model, main, device, 
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_data_path', type=str)
-    parser.add_argument('--test_data_path', type=str)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--max_epochs', type=int, default=10)
-    parser.add_argument('--eval_interval', type=int, default=1)
-    parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--train_time_step', type=int, default=256)
-    parser.add_argument('--vocab_size', type=int, default=64)
-    parser.add_argument('--save_path', type=str, default='./model/')
-    parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -177,11 +166,19 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
+    config = Configure()
+    config.from_yaml(args.configuration)
+
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
+
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, args.max_epochs, args.eval_interval, 
-                    args.batch_size, args.vocab_size,
-                    args.train_data_path, args.test_data_path,
-                    args.load_path, args.save_path,
-                    args.max_time_step, args.train_time_step, args.lr, 0),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

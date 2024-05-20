@@ -13,14 +13,14 @@ class LMBase(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        context_warmup = config["loss_context_warmup"]
-        vocab_size = config["vocabulary_size"]
-        n_trn_block = config["n_transformer_block"]
-        hidden_size = config["transformer_hidden_size"]
-        nhead = config["transformer_nhead"]
-        max_time_step = config["max_time_step"]
-        if("transformer_checkpoints_density" in config):
-            checkpoints_density = config["transformer_checkpoints_density"]
+        context_warmup = config.loss_context_warmup
+        vocab_size = config.vocabulary_size
+        n_trn_block = config.n_transformer_block
+        hidden_size = config.transformer_hidden_size
+        nhead = config.transformer_nhead
+        max_time_step = config.max_time_step
+        if(hasattr(config, "transformer_checkpoints_density")):
+            checkpoints_density = config.transformer_checkpoints_density
         else:
             checkpoints_density = -1
         self.transformer = ARTransformerStandard(vocab_size, n_trn_block, hidden_size, nhead, max_time_step, checkpoints_density=checkpoints_density)
@@ -74,12 +74,12 @@ class LMBase(nn.Module):
         return outputs
 
 if __name__=="__main__":
-    import yaml
-    with open(sys.argv[1], 'r') as file:
-        config = yaml.safe_load(file)
+    from utils import Configure
+    config=Configure()
+    config.from_yaml(sys.argv[1])
 
-    model = LMBase(config["model_config"])
-    inputs = torch.randint(256, (8, 32)) 
+    model = LMBase(config.model_config)
+    inputs = torch.randint(32, (4, 128)) 
 
     losses = model.perplexity(inputs[:-1], inputs[1:])
     outputs = model.inference_seg(inputs, 4)

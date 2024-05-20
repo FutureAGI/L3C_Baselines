@@ -1,10 +1,11 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
-python train.py \
-    --train_data_path /root/workspace/data/lm_data_train \
-    --test_data_path /root/workspace/data/lm_data_demo \
-    --train_time_step 1024 \
-    --max_time_step 1024 \
-    --vocab_size 16 \
-    --lr 1.0e-3 \
-    --batch_size 1
+#export CUDA_VISIBLE_DEVICES=4,5
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+python train.py config_mlm.yaml \
+    --configs train_config.data_path=/root/workspace/data/lm_data_train.32 \
+              test_config.data_path=/root/workspace/data/lm_data_test.32 \
+              train_config.time_step=4000 \
+              model_config.max_time_step=4096 \
+              model_config.vocab_size=32 \
+              train_config.learning_rate=1.0e-3 \
+              train_config.batch_size=2

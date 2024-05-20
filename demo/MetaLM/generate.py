@@ -14,6 +14,7 @@ from torch.cuda.amp import autocast
 from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
+from utils import Configure
 from models import LMBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -33,9 +34,8 @@ math_vocab = [';',
     '=', ' ', '\n']
 
 class Tokenizer(object):
-    def __init__(self):
-        self.inverse_dict = math_vocab
-        #self.inverse_dict = english_vocab
+    def __init__(self, vocab):
+        self.inverse_dict = vocab
         self.vocab_dict = dict()
         for i, cha in enumerate(self.inverse_dict):
             self.vocab_dict[cha] = i
@@ -52,8 +52,7 @@ class Tokenizer(object):
             output += self.inverse_dict[token]
         return output
 
-def main_epoch(rank, use_gpu, world_size,
-        vocab_size, load_model_path, max_time_step, data, tokenizer):
+def main_epoch(rank, use_gpu, world_size, config, datas):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -62,14 +61,21 @@ def main_epoch(rank, use_gpu, world_size,
         device = torch.device('cpu')
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
-    # Create model and move it to GPU with id `gpu`
-    model = LMBase(vocab_size=vocab_size,
-                hidden_size=1024,
-                nhead=16,
-                max_time_step=max_time_step,
-                n_trn_block=12)
+    if(config.demo_config.vocab.lower() == "english"):
+        print("English Vocabulary Used")
+        T_setting = {0: 1.0}
+        vocab = english_vocab
+    elif(config.demo_config.vocab.lower() == "math"):
+        print("Math Vocabulary Used")
+        T_setting = {0: 0.8, 13:0.01}
+        vocab = math_vocab
+    tokenizer = Tokenizer(vocab)
+        
 
+    # Create model and move it to GPU with id `gpu`
+    model = LMBase(config.model_config)
     model = model.to(device)
+    load_model_path = config.demo_config.load_model_path
 
     if use_gpu:
         model = DDP(model, device_ids=[rank])
@@ -77,26 +83,22 @@ def main_epoch(rank, use_gpu, world_size,
         model = DDP(model)
 
     # Example dataset and dataloader
-    model = custom_load_model(model, f'{load_model_path}/model.pth')
+    model = custom_load_model(model, f'{load_model_path}/model.pth', strict_check=False)
 
-    model.eval()
-    tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
     print("\n\nTHE OUTPUT SAMPLING:\n\n")
-
-    T_setting_math = {0: 0.8, 13:0.01}
-    T_setting_eng = {0: 1.0}
-    l = 512
-
-    outputs = model.module.inference_seg(tokens, l, T_default=0.30, T_setting=T_setting_math)
-    outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
-    print(outputs[-l:])
+    for data in datas:
+        model.eval()
+        tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
+        l = 512
+        outputs = model.module.inference_seg(tokens, l, T_default=0.30, T_setting=T_setting)
+        outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
+        print(outputs[-l:])
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--load_path', type=str)
-    parser.add_argument('--input_text', type=str)
-    parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--vocab_size', type=int, default=32)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
+    parser.add_argument('--data', type=str, help="Input contexts")
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -106,18 +108,21 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
-    tokenizer = Tokenizer()
-    with open(args.input_text, 'r') as f_reader:
-        data = f_reader.read().strip()
-        print("\nTHE INPUT IS:\n%s\n" % data)
+    config = Configure()
+    config.from_yaml(args.configuration)
 
-    tokens = tokenizer.tokenize(data)
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.demo_config.master_port        # Example port, choose an available port
 
-    mp.spawn(main_epoch,
-             args=(use_gpu, world_size,
-                    args.vocab_size,
-                    args.load_path,
-                    args.max_time_step, 
-                    data, tokenizer),
-             nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
-             join=True)
+    with open(args.data, 'r') as f:
+        data = f.readlines()
+        mp.spawn(main_epoch,
+                 args=(use_gpu, world_size, config, data),
+                 nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
+                 join=True)

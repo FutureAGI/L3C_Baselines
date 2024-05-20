@@ -14,14 +14,12 @@ from torch.cuda.amp import autocast
 from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
+from utils import Configure
 from models import LMBase
 
-os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
+os.environ['MASTER_ADDR'] = 'localhost' 
 
-
-def main_epoch(rank, use_gpu, world_size,
-        batch_size, vocab_size, data_path, load_model_path, 
-        max_time_step, test_time_step):
+def main_epoch(rank, use_gpu, world_size, config):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -31,12 +29,7 @@ def main_epoch(rank, use_gpu, world_size,
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
     # Create model and move it to GPU with id `gpu`
-    model = LMBase(vocab_size=vocab_size,
-                hidden_size=1024,
-                nhead=16,
-                max_time_step=max_time_step,
-                n_trn_block=12)
-
+    model = LMBase(config.model_config)
     model = model.to(device)
 
     if use_gpu:
@@ -45,20 +38,22 @@ def main_epoch(rank, use_gpu, world_size,
         model = DDP(model)
 
     # Example dataset and dataloader
-    dataset = LMDataSet(data_path, 500, verbose=True)
+    test_config = config.test_config
+    dataset = LMDataSet(test_config.data_path, test_config.file_size, verbose=True)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+    dataloader = DataLoader(dataset, batch_size=test_config.batch_size, sampler=sampler)
+    load_model_path = config.test_config.load_model_path
     all_length = len(dataloader)
 
-    if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth')
+    model = custom_load_model(model, f'{load_model_path}/model.pth', strict_check=False)
 
     model.eval()
 
     results = []
+    time_step = test_config.time_step
     for batch_idx, (feature, label) in enumerate(dataloader):
-        feature = feature[:, :test_time_step].to(device)
-        label = label[:, :test_time_step].to(device)
+        feature = feature[:, :time_step].to(device)
+        label = label[:, :time_step].to(device)
         #with autocast():
         with torch.no_grad():
             loss = model.module.perplexity_array(feature, label)
@@ -71,13 +66,8 @@ def main_epoch(rank, use_gpu, world_size,
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str)
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--test_time_step', type=int, default=256)
-    parser.add_argument('--vocab_size', type=int, default=64)
-    parser.add_argument('--port', type=str, default='12340')
-    parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -87,14 +77,19 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
-    os.environ['MASTER_PORT'] = args.port        # Example port, choose an available port
+    config = Configure()
+    config.from_yaml(args.configuration)
+
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.test_config.master_port        # Example port, choose an available port
+
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size,
-                    args.batch_size, 
-                    args.vocab_size,
-                    args.data_path,
-                    args.load_path,
-                    args.max_time_step, 
-                    args.test_time_step),
+             args=(use_gpu, world_size, config),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

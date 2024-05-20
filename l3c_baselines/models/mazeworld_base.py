@@ -16,50 +16,50 @@ class MazeModelBase(nn.Module):
     def __init__(self, config): 
         super().__init__()
 
-        self.hidden_size = config["transformer_hidden_size"]
-        self.latent_size = config["image_latent_size"]
-        self.action_size = config["action_size"]
-        context_warmup = config["loss_context_warmup"]
-        if("transformer_checkpoints_density" in config):
-            checkpoints_density = config["transformer_checkpoints_density"]
+        self.hidden_size = config.transformer_hidden_size
+        self.latent_size = config.image_latent_size
+        self.action_size = config.action_size
+        context_warmup = config.loss_context_warmup
+        if(hasattr(config, "transformer_checkpoints_density")):
+            checkpoints_density = config.transformer_checkpoints_density
         else:
             checkpoints_density = -1
 
-        self.encoder = Encoder(config["image_size"], 3, config["image_encoder_size"], config["n_residual_block"])
+        self.encoder = Encoder(config.image_size, 3, config.image_encoder_size, config.n_residual_block)
 
-        self.decoder = Decoder(config["image_size"], self.latent_size, config["image_encoder_size"], 3, config["n_residual_block"])
+        self.decoder = Decoder(config.image_size, self.latent_size, config.image_encoder_size, 3, config.n_residual_block)
 
         self.vae = VAE(self.latent_size, self.encoder, self.decoder) 
 
         self.decformer = DecisionTransformer(
-                self.latent_size, self.action_size, config["n_transformer_block"], 
-                self.hidden_size, config["transformer_nhead"], config["max_time_step"], checkpoints_density=checkpoints_density)
+                self.latent_size, self.action_size, config.n_transformer_block, 
+                self.hidden_size, config.transformer_nhead, config.max_time_step, checkpoints_density=checkpoints_density)
 
         self.act_decoder = ActionDecoder(self.hidden_size, 4 * self.hidden_size, self.action_size, dropout=0.10)
 
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
-                torch.full((1, config["max_time_step"] - context_warmup, ), 1.0)), dim=1)
+                torch.full((1, config.max_time_step - context_warmup, ), 1.0)), dim=1)
         self.register_buffer('loss_mask', loss_mask)
 
-        if("image_decoder_type" not in config):
+        if(not hasattr(config, "image_decoder_type")):
             raise Exception("image decoder type is not specified, regression / diffusion")
-        elif(config["image_decoder_type"].lower() == "regression"):
+        elif(config.image_decoder_type.lower() == "regression"):
             self.is_diffusion = False
             self.lat_decoder = LatentDecoder(
                 self.hidden_size, 
                 2 * self.hidden_size, 
                 self.hidden_size, dropout=0.0)
-        elif(config["image_decoder_type"].lower() == "diffusion"):
+        elif(config.image_decoder_type.lower() == "diffusion"):
             self.is_diffusion = True
             self.lat_decoder = DiffusionLayers(
-                config["image_decoder"]["diffusion_steps"], # T
+                config.image_decoder.diffusion_steps, # T
                 self.latent_size, # hidden size
                 self.hidden_size, # condition size
                 2 * self.hidden_size, # inner hidden size
             )
         else:
-            raise Exception("Unrecognized type", config["image_decoder_type"])
+            raise Exception("Unrecognized type", config.image_decoder_type)
 
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
@@ -124,8 +124,8 @@ class MazeModelBase(nn.Module):
         valid_obs = img_pro(observation)
 
         print(config)
-        e_s = config["softmax"]
-        e_g = config["greedy"]
+        e_s = config.softmax
+        e_g = config.greedy
 
         # Inference Action First
         with torch.no_grad():
@@ -166,10 +166,12 @@ class MazeModelBase(nn.Module):
         
 
 if __name__=="__main__":
-    import yaml
-    with open(sys.argv[1], 'r') as file:
-        config = yaml.safe_load(file)
-    model = MazeModelBase(config["model_config"])
+    from utils import Configure
+    config=Configure()
+    config.from_yaml(sys.argv[1])
+
+    model = MazeModelBase(config.model_config)
+
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
     reward = torch.randn(8, 32)
@@ -177,7 +179,7 @@ if __name__=="__main__":
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(observation, action)
-    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config["evaluate_config"]["policy"])
+    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config.demo_config.policy)
     print("vae:", vae_loss, "sequential:", losses)
     print(img_out[0].shape, act_out.shape)
     print(len(cache))
