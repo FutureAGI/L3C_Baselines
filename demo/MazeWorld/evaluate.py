@@ -25,9 +25,10 @@ TaskConfig = namedtuple("TaskConfig", ["start", "cell_landmarks", "cell_walls", 
     "cell_size", "wall_height", "agent_height", "initial_life", "max_life",
     "step_reward", "goal_reward", "landmarks_rewards", "landmarks_coordinates", "landmarks_refresh_interval", "commands_sequence"])
 
-from dataloader import MazeDataSet
-from models import MazeModelBase1, MazeModelBase2
+from models import MazeModelBase
 from utils import create_folder, VideoWriter
+from utils import Configure
+from utils import custom_load_model
 
 
 def postprocess_image(img, scale_factor, texts):
@@ -61,7 +62,7 @@ def reward_smoothing(rewards, kernel_size=192):
     data_convolved = numpy.convolve(numpy.array(rewards) + 0.01, gaussian_kernel(), mode='same') - 0.01
     return data_convolved
 
-def model_epoch(maze_env, task, model, device, video_writer=None, video_text=True):
+def model_epoch(maze_env, task, model, policy_config, device, video_writer=None, video_text=True):
     # Example training loop
     maze_env.set_task(task)
     obs = maze_env.reset()
@@ -82,7 +83,7 @@ def model_epoch(maze_env, task, model, device, video_writer=None, video_text=Tru
         obs_tor = torch.from_numpy(numpy.array(obs_arr[-1])).float().to(device).unsqueeze(0)
         obs_tor = obs_tor.permute(0, 3, 1, 2).unsqueeze(1)
         with torch.no_grad():
-            rec_obs, next_obs, next_act, cache = model.inference_step_by_step(obs_tor, cache=cache)
+            rec_obs, next_obs, next_act, cache = model.inference_step_by_step(obs_tor, policy_config, cache=cache)
 
             if(step > 10):
                 z_rec, z_sig = model.vae(obs_tor)
@@ -175,100 +176,115 @@ def agent_epoch(maze_env, task, mem_kr):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--load_path', type=str)
-    parser.add_argument('--max_time_step', type=int, default=1024)
-    parser.add_argument('--test_time_step', type=int, default=256)
-    parser.add_argument('--scale', type=int, default=25)
-    parser.add_argument('--density', type=int, default=0.36)
-    parser.add_argument('--test_epochs', type=int, default=1)
-    parser.add_argument('--n_landmarks', type=int, default=8)
-    parser.add_argument('--run_model', type=int, default=0)
-    parser.add_argument('--run_rule', type=int, default=1)
-    parser.add_argument('--run_random', type=int, default=0)
-    parser.add_argument('--mem_kr', type=float, default=1.0)
-    parser.add_argument('--output', type=str, default="./videos")
-    parser.add_argument('--write_task', type=str, default=None)
-    parser.add_argument('--read_task', type=str, default=None)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
     args = parser.parse_args()
 
-    if(args.write_task is not None):
+    use_gpu = torch.cuda.is_available()
+    world_size = torch.cuda.device_count() if use_gpu else os.cpu_count()
+    if(use_gpu):
+        print("Use Parallel GPUs: %s" % world_size)
+    else:
+        print("Use Parallel CPUs: %s" % world_size)
+
+    config = Configure()
+    config.from_yaml(args.configuration)
+
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
+
+    demo_config = config.demo_config
+    if(demo_config.write_task is not None):
         #used for dump tasks only
+        maze_config = demo_config.maze_config
         tasks = []
-        for idx in range(args.test_epochs):
-            task = MazeTaskSampler(n=args.scale, allow_loops=True, 
-                    wall_density=args.density,
-                    landmarks_number=args.n_landmarks,
+        for idx in range(demo_config.test_epochs):
+            task = MazeTaskSampler(n=maze_config.scale, allow_loops=True, 
+                    wall_density=maze_config.density,
+                    landmarks_number=maze_config.n_landmarks,
                     landmarks_avg_reward=0.5,
                     commands_sequence = 10000,
                     verbose=False)
             task_dict = task._asdict()
             tasks.append(task_dict)
-        print(f"Writing tasks to {args.write_task} and quit")
-        with open(args.write_task, 'wb') as fw:
+        print(f"Writing tasks to {demo_config.write_task} and quit")
+        with open(config.write_task, 'wb') as fw:
             pickle.dump(tasks, fw)
         sys.exit(0)
-    elif(args.read_task is not None):
-        print(f"Reading tasks from {args.read_task} and quit")
+    elif(demo_config.read_task is not None):
+        print(f"Reading tasks from {demo_config.read_task}...")
         tasks = []
-        with open(args.read_task, 'rb') as fr:
+        with open(demo_config.read_task, 'rb') as fr:
             task_dicts = pickle.load(fr)
             #print(task_dicts)
             for task_dict in task_dicts:
                 task = MazeTaskManager.TaskConfig(**task_dict)
                 tasks.append(task)
-        create_folder(f'{args.output}')
+        create_folder(f'{demo_config.output}')
     else:
-        raise Exception("Must set '--read_task' if write_task is None")
+        raise Exception("Must set 'demo_config.read_task' if write_task is None")
 
-    if(args.run_model):
-        model = MazeModelBase2(image_size=128, map_size=7, action_size=5, max_time_step=args.max_time_step)
+    run_model = demo_config.run_model
+    run_rule = demo_config.run_rule
+    run_random = demo_config.run_random
+
+    if(run_model):
+        model = MazeModelBase(config.model_config)
         use_gpu = torch.cuda.is_available()
         if(use_gpu):
             device = torch.device(f'cuda:0')
         else:
             device = torch.device('cpu')
 
-        DP(model).load_state_dict(torch.load('%s/model.pth' % args.load_path))
-        model = model.to(device)
+        load_model_path = demo_config.model_config.load_model_path
+        model = custom_load_model(DP(model), f'{load_model_path}/model.pth', strict_check=False)
+
+        model = model.module.to(device)
 
         reward_model = []
         acc_reward_model = []
 
-    if(args.run_rule):
+    if(run_rule):
         reward_agent = []
         acc_reward_agent = []
 
-    if(args.run_random):
+    if(run_random):
         reward_random = []
         acc_reward_random = []
 
-    maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=args.test_time_step, task_type="NAVIGATION", resolution=(128, 128))
+    maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=demo_config.time_step, task_type="NAVIGATION", resolution=(128, 128))
 
     # Go across all tasks and perform evaluation
     for idx, task in enumerate(tasks):
-        if(args.run_model):
-            video_writer = VideoWriter(f'{args.output}/{idx}/', "demo", window_size=(1536, 384))
-            rewards, acc_rewards = model_epoch(maze_env, task, model, device, video_writer, video_text=True)
+        if(run_model):
+            video_writer = VideoWriter(f'{demo_config.output}/{idx}/', "demo", window_size=(1536, 384))
+            rewards, acc_rewards = model_epoch(maze_env, task, model, config.demo_config.policy, device, video_writer, video_text=True)
             reward_model.append(rewards)
             acc_reward_model.append(acc_rewards)
-            maze_env.save_trajectory(f'{args.output}/{idx}/traj_model_agent.jpg')
+            maze_env.save_trajectory(f'{demo_config.output}/{idx}/traj_model_agent.jpg')
             video_writer.clear()
 
-        if(args.run_rule):
-            rewards, acc_rewards = agent_epoch(maze_env, task, args.mem_kr)
+        if(run_rule):
+            rewards, acc_rewards = agent_epoch(maze_env, task, demo_config.rule_config.mem_kr)
             reward_agent.append(rewards)
             acc_reward_agent.append(acc_rewards)
-            create_folder(f'{args.output}/{idx}')
-            maze_env.save_trajectory(f'{args.output}/{idx}/traj_rule_agent.jpg')
+            create_folder(f'{demo_config.output}/{idx}')
+            maze_env.save_trajectory(f'{demo_config.output}/{idx}/traj_rule_agent.jpg')
 
-        if(args.run_random):
+        if(run_random):
             rewards, acc_rewards = random_epoch(maze_env, task)
             reward_random.append(rewards)
             acc_reward_random.append(acc_rewards)
-            create_folder(f'{args.output}/{idx}')
-            maze_env.save_trajectory(f'{args.output}/{idx}/traj_random_agent.jpg')
+            create_folder(f'{demo_config.output}/{idx}')
+            maze_env.save_trajectory(f'{demo_config.output}/{idx}/traj_random_agent.jpg')
 
-    if(args.run_model):
+    if(run_model):
         reward_model = numpy.array(reward_model, dtype=numpy.float64)
         rewards_mean = numpy.mean(reward_model, axis=0)
         rewards_std = numpy.std(reward_model, axis=0)
@@ -281,7 +297,7 @@ if __name__=='__main__':
         with open(f'{args.output}/acc_reward_model_agent.txt', 'w') as f_model:
             f_model.write(acc_string_model)
 
-    if(args.run_rule):
+    if(run_rule):
         reward_agent = numpy.array(reward_agent, dtype=numpy.float64)
         rewards_mean = numpy.mean(reward_agent, axis=0)
         rewards_std = numpy.std(reward_agent, axis=0)
@@ -294,7 +310,7 @@ if __name__=='__main__':
         with open(f'{args.output}/acc_reward_rule_agent.txt', 'w') as f_model:
             f_model.write(string_agent)
 
-    if(args.run_random):
+    if(run_random):
         reward_random = numpy.array(reward_random, dtype=numpy.float64)
         rewards_mean = numpy.mean(reward_random, axis=0)
         rewards_std = numpy.std(reward_random, axis=0)

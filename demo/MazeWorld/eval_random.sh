@@ -1,3 +1,10 @@
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_15_random --run_model 0 --run_random 1 --run_rule 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_15.pkl > log.15.rand &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_25_random --run_model 0 --run_random 1 --run_rule 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_25.pkl > log.25.rand &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_35_random --run_model 0 --run_random 1 --run_rule 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_35.pkl > log.35.rand &
+scale=15
+nohup python evaluate.py config_maze.yaml \
+	--configs \
+		demo_config.run_model=0 \
+		demo_config.run_rule=0 \
+		demo_config.run_random=1 \
+        demo_config.time_step=2048 \
+        demo_config.output=./eval_results_'$scale'_random \
+        demo_config.read_task=/root/workspace/data/maze_evaluate_tasks/maze_'$scale'.pkl \
+        > log.'$scale'.rand &

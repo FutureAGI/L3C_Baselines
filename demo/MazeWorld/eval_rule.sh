@@ -1,9 +1,12 @@
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_15_mem0 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_15.pkl > log.15.mem0 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.25 --output ./eval_results_15_mem25 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_15.pkl > log.15.mem25 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 1.00 --output ./eval_results_15_mem100 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_15.pkl > log.15.mem100 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_25_mem0 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_25.pkl > log.25.mem0 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.25 --output ./eval_results_25_mem25 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_25.pkl > log.25.mem25 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 1.00 --output ./eval_results_25_mem100 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_25.pkl > log.25.mem100 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.05 --output ./eval_results_35_mem0 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_35.pkl > log.35.mem0 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 0.25 --output ./eval_results_35_mem25 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_35.pkl > log.35.mem25 &
- nohup python evaluate.py --test_time_step 2048 --mem_kr 1.00 --output ./eval_results_35_mem100 --run_model 0 --read_task /root/workspace/data/maze_evaluate_tasks/maze_35.pkl > log.35.mem100 &
+scale=15
+mem_kr=1
+nohup python evaluate.py config_maze.yaml \
+	--configs \
+		demo_config.run_model=0 \
+		demo_config.run_rule=0 \
+		demo_config.run_random=1 \
+        demo_config.time_step=2048 \
+        demo_config.rule_config.mem_kr=${mem_kr} \
+        demo_config.output=./eval_results_'$scale'_mem_'$mem_kr' \
+        demo_config.read_task=/root/workspace/data/maze_evaluate_tasks/maze_'$scale'.pkl \
+        > log.'$scale'.mem.'$memkr' &

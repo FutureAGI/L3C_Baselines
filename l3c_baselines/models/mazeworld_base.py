@@ -98,13 +98,15 @@ class MazeModelBase(nn.Module):
 
         inputs = img_pro(observations)
         z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False)
-        if(self.is_diffusion):
-            with torch.no_grad():
-                z_rec_l, _ = self.vae(inputs[:, -1:])
+        with torch.no_grad():
+            z_rec_l, _ = self.vae(inputs[:, -1:])
             z_rec_l = torch.cat((z_rec, z_rec_l), dim=1)
+        if(self.is_diffusion):
+            lmse_z = self.lat_decoder.loss_DDPM(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
             z_pred = self.lat_decoder(z_rec_l[:, 1:], z_pred)
         else:
             z_pred = self.lat_decoder(z_pred)
+            lmse_z = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
 
         obs_pred = self.vae.decoding(z_pred)
 
@@ -112,7 +114,7 @@ class MazeModelBase(nn.Module):
         lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
         cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
-        return lmse_obs, lce_act, cnt
+        return lmse_obs, lmse_z, lce_act, cnt
 
     def inference_step_by_step(self, observation, config, cache=None, verbose=False):
         """
@@ -123,7 +125,6 @@ class MazeModelBase(nn.Module):
         valid_act = torch.zeros((B, 1), dtype=torch.int).to(device)
         valid_obs = img_pro(observation)
 
-        print(config)
         e_s = config.softmax
         e_g = config.greedy
 

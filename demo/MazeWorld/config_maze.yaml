@@ -3,7 +3,7 @@ model_config:
   image_size: 128
   action_size: 5
   map_size: 7
-  checkpoints_density: 4
+  transformer_checkpoints_density: 4
   transformer_hidden_size: 1024
   transformer_nhead: 16
   image_latent_size: 1024
@@ -34,8 +34,11 @@ train_config:
   save_model_path: ./checkpoints/
   master_port: "12300"
   max_save_iterations: 5000
-  lossweight_policymodel: 0.80
-  lossweight_worldmodel: 0.20
+  evaluate_epochs: 1
+  lossweight_policymodel: 0.40
+  lossweight_worldmodel_raw: 0.40
+  lossweight_worldmodel_latent: 0.20
+  use_amp: True
   load_model_parameter_blacklist:
     - "lat_decoder"
     - "act_decoder"
@@ -57,14 +60,33 @@ train_config:
 
 test_config:
   batch_size: 1
-  time_step: 1024
   data_path: ../../../data/maze_data_demo/
   master_port: "12301"
   load_model_path: ./checkpoints/pretrain_35_20240513
+  time_step: 1024
 
 demo_config:
-  load_model_path: ./checkpoints/pretrain_35_20240513
   master_port: "12301"
   policy:
     softmax: 0.80
     greedy: 0.20
+
+  model_config:
+    batch_size: 1
+    data_path: ../../../data/maze_data_demo/
+    master_port: "12301"
+    load_model_path: ./checkpoints/pretrain_35_20240513
+  time_step: 1024
+  maze_config:
+    scale: 25
+    density: 0.36
+    n_landmarks: 8
+  rule_config:
+    mem_kr: 1.0
+  run_model: 0
+  run_rule: 1
+  run_random: 0
+  test_epochs: 1
+  write_task: null
+  read_task: null
+  output: ./videos

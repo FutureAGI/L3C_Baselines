@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
-from torch.cuda.amp import autocast
+from torch.cuda.amp import autocast, GradScaler
 from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
@@ -96,6 +96,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     causal_scheduler = LambdaLR(causal_optimizer, lr_lambda=lr_scheduler_causal)
 
     load_model_path = train_config.load_model_path
+    eval_interval = train_config.evaluate_epochs
 
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=False)
@@ -103,8 +104,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Perform the first evaluation
     test_config = config.test_config
     #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
-    lossweight_worldmodel = train_config.lossweight_worldmodel
+    lossweight_worldmodel_latent = train_config.lossweight_worldmodel_latent
+    lossweight_worldmodel_raw = train_config.lossweight_worldmodel_raw
     lossweight_policymodel = train_config.lossweight_policymodel
+    use_amp = train_config.use_amp
+    scaler = GradScaler()
 
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
@@ -112,16 +116,20 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             obs, bacts, lacts, rews = batch
             obs = obs.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
-            vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
-
             vae_optimizer.zero_grad()
-            vae_loss.backward()
-            clip_grad_norm_(model.module.parameters(), 1.0)
 
-            vae_optimizer.step()
+            with autocast(dtype=torch.float16, enabled=use_amp):
+                vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
+
+            scaler.scale(vae_loss).backward()
+            clip_grad_norm_(model.module.parameters(), 1.0)
+            scaler.step(vae_optimizer)
+            scaler.update()
+
             vae_scheduler.step()
             sigma_scheduler.step()
             lambda_scheduler.step()
+
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
                 print("Epoch: %s [ %.2f %% ][VAE ROUND] Iteration: %s; Hyperparameter: sigma:%f, lambda:%f; LearningRate: %f Reconstruction Loss: %.04f" % 
@@ -138,12 +146,16 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             obs = obs.permute(0, 1, 4, 2, 3)
             lacts = lacts.to(device)
             bacts = bacts.to(device)
-            lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
-            causal_loss = lossweight_worldmodel * lz + lossweight_policymodel * lact
 
             causal_optimizer.zero_grad()
-            causal_loss.backward()
+            with autocast(dtype=torch.float16, enabled=use_amp):
+                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
+                causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
+
+            scaler.scale(causal_loss).backward()
             clip_grad_norm_(model.module.parameters(), 1.0)
+            scaler.step(causal_optimizer)
+            scaler.update()
 
             causal_optimizer.step()
             causal_scheduler.step()
@@ -208,45 +220,45 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         length = lacts.shape[0] * lacts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
+            lobs, _, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
 
             lrec = cnt * lrec
-            lz = cnt * lz
+            lobs = cnt * lobs
             lact = cnt * lact
 
         if torch.isinf(lrec).any() or torch.isnan(lrec).any():
             print(f"[WARNING] {device} reconstruction loss = NAN/INF, {lrec}")
             lrec.fill_(0.0)
-        if torch.isinf(lz).any() or torch.isnan(lz).any():
+        if torch.isinf(lobs).any() or torch.isnan(lobs).any():
             print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
-            lz.fill_(0.0)
+            lobs.fill_(0.0)
         if torch.isinf(lact).any() or torch.isnan(lact).any():
             print("[WARNING] {device} action loss = NAN/INF, {lact}")
             lact.fill_(0.0)
 
         dist.all_reduce(lrec.data)
-        dist.all_reduce(lz.data)
+        dist.all_reduce(lobs.data)
         dist.all_reduce(lact.data)
         dist.all_reduce(cnt.data)
 
-        results.append((lrec.cpu(), lz.cpu(), lact.cpu(), cnt.cpu()))
+        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), cnt.cpu()))
 
         if(main):
             show_bar((batch_idx + 1) / all_length, 100)
             sys.stdout.flush()
 
     sum_lrec = 0
-    sum_lz = 0
+    sum_lobs = 0
     sum_lact = 0
     sum_cnt = 0
-    for lrec, lz, lact, cnt in results:
+    for lrec, lobs, lact, cnt in results:
         sum_lrec += lrec
-        sum_lz += lz
+        sum_lobs += lobs
         sum_lact += lact
         sum_cnt += cnt
     sum_cnt = max(1, sum_cnt)
     sum_lrec /= sum_cnt
-    sum_lz /= sum_cnt
+    sum_lobs /= sum_cnt
     sum_lact /= sum_cnt
 
     if(main):

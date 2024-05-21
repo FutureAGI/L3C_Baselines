@@ -5,6 +5,8 @@ from torch import nn
 import yaml
 from types import SimpleNamespace
 from copy import deepcopy
+from dateutil.parser import parse
+import re
 
 def show_bar(fraction, bar):
     percentage = int(bar * fraction)
@@ -122,6 +124,45 @@ def img_post(observations):
 def print_memory(info="Default"):
     print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
 
+def infer_type(s):
+    s = s.strip().lower()
+
+    # Check for boolean
+    if s in ['true', 'false']:
+        return s == 'true'
+    elif s in ['yes', 'no']:
+        return s == 'yes'
+    elif s in ['None', 'null', '~']:
+        return None
+    
+    # Check for integer
+    try:
+        return int(s)
+    except ValueError:
+        pass
+
+    # Check for float
+    try:
+        return float(s)
+    except ValueError:
+        pass
+
+    # Check for date/time
+    try:
+        return parse(s)
+    except ValueError:
+        pass
+
+    # Check for list (e.g., "[1, 2, 3]" or "[1,2,3]")
+    if re.match(r'^\[.*\]$', s):
+        try:
+            return eval(s)
+        except:
+            pass
+
+    # Default to string
+    return s
+
 class Configure(object):
     def __init__(self, data=None):
         super().__setattr__("__config", dict())
@@ -151,32 +192,17 @@ class Configure(object):
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}'")
 
     def __setattr__(self, attr, value):
-        if(attr in super().__getattribute__("__dict__")):
-            super().__setattr__(attr, value)
+        d = super().__getattribute__("__config")
+        if('.' in attr):
+            keys = attr.split('.')
+            print(keys)
+            for key in keys[:-1]:
+                if(key not in d):
+                    d[key] = dict()
+                d = d[key]
+            d[keys[-1]] = infer_type(value)
         else:
-            if '.' in attr:
-                keys = attr.split('.')
-                d = super().__getattribute__("__config")
-                for key in keys[:-1]:
-                    if(key in d):
-                        d = d[key]
-                    else:
-                        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}', (try to access key {key} in {d})")
-                key = keys[-1]
-                if(key in d):
-                    v_type = type(d[key])
-                    if(type(value) == v_type):
-                        d[key] = value
-                    else:
-                        d[key] = v_type(value)
-                else:
-                    raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}', (try to access key {key} in {d})")
-            else:
-                v_type = type(d[key])
-                if(type(value) == v_type):
-                    d[key] = value
-                else:
-                    d[key] = v_type(value)
+            d[attr] = infer_type(value)
 
     def set_value(self, attr, value):
         self.__setattr__(attr, value)
