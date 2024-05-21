@@ -35,7 +35,7 @@ class MazeModelBase(nn.Module):
                 self.latent_size, self.action_size, config.n_transformer_block, 
                 self.hidden_size, config.transformer_nhead, config.max_time_step, checkpoints_density=checkpoints_density)
 
-        self.act_decoder = ActionDecoder(self.hidden_size, 4 * self.hidden_size, self.action_size, dropout=0.10)
+        self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
 
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
@@ -49,7 +49,7 @@ class MazeModelBase(nn.Module):
             self.lat_decoder = LatentDecoder(
                 self.hidden_size, 
                 2 * self.hidden_size, 
-                self.hidden_size, dropout=0.0)
+                self.latent_size, dropout=0.0)
         elif(config.image_decoder_type.lower() == "diffusion"):
             self.is_diffusion = True
             self.lat_decoder = DiffusionLayers(

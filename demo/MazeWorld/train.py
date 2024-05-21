@@ -96,6 +96,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     causal_scheduler = LambdaLR(causal_optimizer, lr_lambda=lr_scheduler_causal)
 
     load_model_path = train_config.load_model_path
+    save_model_path = train_config.save_model_path
     eval_interval = train_config.evaluate_epochs
 
     if(load_model_path is not None):
