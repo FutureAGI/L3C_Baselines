@@ -163,9 +163,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
             if(main):
                 percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s;; Action Cross Entropy: %s;" % 
+                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s; Latent %s; Action Cross Entropy: %s;" % 
                         (rid, percentage, batch_idx, causal_scheduler.get_last_lr()[0],
-                            float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
+                            float(lobs.detach().cpu().numpy()), float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
                 if(acc_iter > max_save_iterations and max_save_iterations > 0):
                     acc_iter = 0
                     print("Check current validity and save model for safe...")
@@ -264,7 +264,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
 
     if(main):
         print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction Image: %s; Action Cross Entropy: %s;" % 
-                (epoch_id, sum_lrec, sum_lz, sum_lact))
+                (epoch_id, sum_lrec, sum_lobs, sum_lact))
         sys.stdout.flush()
 
 if __name__=='__main__':
