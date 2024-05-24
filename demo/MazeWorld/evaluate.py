@@ -136,7 +136,6 @@ def random_epoch(maze_env, task):
 
     done = False
     step = 0
-    cache = None
     rew_arr = []
     acc_rew_arr = []
     reward = 0
@@ -159,7 +158,6 @@ def agent_epoch(maze_env, task, mem_kr):
 
     done = False
     step = 0
-    cache = None
     rew_arr = []
     acc_rew_arr = []
     reward = 0
@@ -197,9 +195,9 @@ if __name__=='__main__':
             config.set_value(key, value)
             print(f"Rewriting configurations from args: {key} to {value}")
     print("Final configuration:\n", config)
-    os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
-
     demo_config = config.demo_config
+    os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
+
     if(demo_config.write_task is not None):
         #used for dump tasks only
         maze_config = demo_config.maze_config
@@ -291,10 +289,10 @@ if __name__=='__main__':
         acc_rewards_mean = numpy.mean(acc_reward_model, axis=0)
         acc_rewards_std = numpy.std(acc_reward_model, axis=0)
         string_model = string_mean_var(rewards_mean, rewards_std)
-        with open(f'{args.output}/reward_model_agent.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/reward_model_agent.txt', 'w') as f_model:
             f_model.write(string_model)
         acc_string_model = string_mean_var(acc_rewards_mean, acc_rewards_std)
-        with open(f'{args.output}/acc_reward_model_agent.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/acc_reward_model_agent.txt', 'w') as f_model:
             f_model.write(acc_string_model)
 
     if(run_rule):
@@ -304,10 +302,10 @@ if __name__=='__main__':
         acc_rewards_mean = numpy.mean(acc_reward_agent, axis=0)
         acc_rewards_std = numpy.std(acc_reward_agent, axis=0)
         string_agent = string_mean_var(rewards_mean, rewards_std)
-        with open(f'{args.output}/reward_rule_agent.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/reward_rule_agent.txt', 'w') as f_model:
             f_model.write(string_agent)
         string_agent = string_mean_var(acc_rewards_mean, acc_rewards_std)
-        with open(f'{args.output}/acc_reward_rule_agent.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/acc_reward_rule_agent.txt', 'w') as f_model:
             f_model.write(string_agent)
 
     if(run_random):
@@ -317,8 +315,8 @@ if __name__=='__main__':
         acc_rewards_mean = numpy.mean(acc_reward_random, axis=0)
         acc_rewards_std = numpy.std(acc_reward_random, axis=0)
         string_random = string_mean_var(rewards_mean, rewards_std)
-        with open(f'{args.output}/reward_rule_random.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/reward_rule_random.txt', 'w') as f_model:
             f_model.write(string_random)
         string_random = string_mean_var(acc_rewards_mean, acc_rewards_std)
-        with open(f'{args.output}/acc_reward_rule_random.txt', 'w') as f_model:
+        with open(f'{demo_config.output}/acc_reward_rule_random.txt', 'w') as f_model:
             f_model.write(string_random)

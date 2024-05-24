@@ -11,6 +11,7 @@ class LMDataSet(Dataset):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
+        self.file_size = file_size
         directories = []
         if(isinstance(directory, list)):
             directories.extend(directory)

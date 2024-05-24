@@ -15,19 +15,13 @@ from torch.cuda.amp import autocast
 from dataloader import MazeDataSet, PrefetchDataLoader
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
-from models import MazeModelBase1, MazeModelBase2
+from utils import Configure
+from models import MazeModelBase
 
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-os.environ['MASTER_PORT'] = '12348'        # Example port, choose an available port
 
-def main_epoch(rank, use_gpu, world_size, 
-        test_batch_size, test_data_path, 
-        load_model_path,
-        max_time_step, 
-        test_time_step, 
-        seg_len,
-        main_rank):
+def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -47,7 +41,7 @@ def main_epoch(rank, use_gpu, world_size,
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModelBase2(image_size=128, map_size=7, action_size=5, max_time_step=max_time_step)
+    model = MazeModelBase(config.model_config)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters decision transformer: ", count_parameters(model.decformer))
@@ -62,24 +56,27 @@ def main_epoch(rank, use_gpu, world_size,
     else:
         model = DDP(model)
 
-    test_dataset = MazeDataSet(test_data_path, test_time_step, verbose=main)
-    test_dataloader = PrefetchDataLoader(test_dataset, batch_size=test_batch_size)
+    test_config = config.test_config
+    dataset = MazeDataSet(test_config.data_path, test_config.time_step, verbose=main)
+    dataloader = PrefetchDataLoader(dataset, batch_size=test_config.batch_size)
 
-    model = custom_load_model(model, f'{load_model_path}/model.pth', black_list={})
+    model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', black_list={}, strict_check=True)
 
     # Perform the first evaluation
+    test_time_step = test_config.time_step
+    seg_len = test_config.segment_length
     seg_num = test_time_step // seg_len
-    lzs = []
+    lobss = []
     lrecs = []
     lacts = []
     for seg_id in range(seg_num):
         print(f"\nrun_segment {seg_id + 1}/{seg_num}...\n\n")
         seg_b = seg_id * seg_len
         seg_e = min((seg_id + 1) * seg_len, test_time_step)
-        lrec, lz, lact = test_epoch(rank, use_gpu, world_size, test_dataloader, seg_b, seg_e, model, main, device, 0)
-        lz=torch.mean(lz, dim=0).cpu().tolist()
+        lrec, lobs, lact = test_epoch(rank, use_gpu, world_size, dataloader, seg_b, seg_e, model, main, device, 0)
+        lobs=torch.mean(lobs, dim=0).cpu().tolist()
         lact=torch.mean(lact, dim=0).cpu().tolist()
-        lzs.extend(lz)
+        lobss.extend(lobs)
         lacts.extend(lact)
         lrecs.append(lrec)
 
@@ -87,34 +84,36 @@ def main_epoch(rank, use_gpu, world_size,
         print("\n\n[Results]")
         print("\n\n[Reconstruct Loss]", numpy.mean(lrecs))
         print("\n\n[Prediction Loss]")
-        print("\n".join(map(str, lzs)))
+        print("\n".join(map(str, lobss)))
         print("\n\n[Action Cross Entropy]")
         print("\n".join(map(str, lacts)))
 
-def test_epoch(rank, use_gpu, world_size, test_dataloader, start, end, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, dataloader, start, end, model, main, device, epoch_id):
     # Example training loop
     results = []
-    all_length = len(test_dataloader)
+    all_length = len(dataloader)
 
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
-    lzs = []
+
+    lobss = []
     lacts = []
     lrecs = 0.0
     cnts = 0
-    for batch_idx, batch in enumerate(test_dataloader):
-        obs,acts,rews,maps = batch
+    for batch_idx, batch in enumerate(dataloader):
+        obs,behavior_acts,label_acts,rews = batch
         obs = obs.to(device)[:, start:(end+1)]
-        acts = acts.to(device)[:, start:end]
+        behavior_acts = behavior_acts.to(device)[:, start:end]
+        label_acts = label_acts.to(device)[:, start:end]
         obs = obs.permute(0, 1, 4, 2, 3)
-        length = acts.shape[0] * acts.shape[1]
+        length = label_acts.shape[0] * label_acts.shape[1]
         with torch.no_grad():
             lrec = model.module.vae_loss(obs)
-            lz, lact, cnt = model.module.sequential_loss_with_decoding(obs, acts, reduce=None)
+            lobs, _, lact, cnt = model.module.sequential_loss(obs, behavior_acts, label_acts, reduce=None)
 
         lrecs += lrec.cpu() * cnt
         cnts += cnt
-        lzs.append(lz)
+        lobss.append(lobs)
         lacts.append(lact)
 
         if(main):
@@ -123,19 +122,15 @@ def test_epoch(rank, use_gpu, world_size, test_dataloader, start, end, model, ma
 
     lrecs/=cnts
     lrecs = lrecs.item()
-    lzs=torch.stack(lzs, dim=0)
+    lobss=torch.stack(lobss, dim=0)
     lacts=torch.stack(lacts, dim=0)
 
-    return lrecs, lzs, lacts
+    return lrecs, lobss, lacts
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--test_data_path', type=str)
-    parser.add_argument('--test_batch_size', type=int, default=4)
-    parser.add_argument('--max_time_step', type=int, default=2048)
-    parser.add_argument('--test_time_step', type=int, default=2048)
-    parser.add_argument('--segment_length', type=int, default=2048)
-    parser.add_argument('--load_path', type=str)
+    parser.add_argument('configuration', type=str, help="YAML configuration file")
+    parser.add_argument('--configs', nargs='*', help="List of all configurations, overwrite configuration file: eg. train_config.batch_size=16 test_config.xxx=...")
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
@@ -145,14 +140,19 @@ if __name__=='__main__':
     else:
         print("Use Parallel CPUs: %s" % world_size)
 
+    config = Configure()
+    config.from_yaml(args.configuration)
+
+    # Get the dictionary of attributes
+    if args.configs:
+        for pair in args.configs:
+            key, value = pair.split('=')
+            config.set_value(key, value)
+            print(f"Rewriting configurations from args: {key} to {value}")
+    print("Final configuration:\n", config)
+    os.environ['MASTER_PORT'] = config.test_config.master_port        # Example port, choose an available port
+
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, 
-                    args.test_batch_size,
-                    args.test_data_path,
-                    args.load_path, 
-                    args.max_time_step, 
-                    args.test_time_step, 
-                    args.segment_length,
-                    0),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

@@ -55,8 +55,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     train_config = config.train_config
     load_model_path = train_config.load_model_path
     learning_rate = train_config.learning_rate
+    time_step = train_config.time_step
     noam_decay_interval = train_config.learning_rate_noam_decay_interval
     batch_size = config.train_config.batch_size
+    max_epochs = train_config.max_epochs
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
@@ -75,8 +77,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, (feature, label) in enumerate(dataloader):
-            feature = feature[:, :train_time_step].to(device)
-            label = label[:, :train_time_step].to(device)
+            feature = feature[:, :time_step].to(device)
+            label = label[:, :time_step].to(device)
             loss = model.module.perplexity(feature, label)
 
             optimizer.zero_grad()
@@ -94,7 +96,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):
         model.train()
-        main_round(epoch_id, train_dataloader)
+        main_round(epoch_id, dataloader)
         if(main and epoch_id % eval_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
