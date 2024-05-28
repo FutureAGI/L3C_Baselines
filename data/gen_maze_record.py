@@ -55,9 +55,10 @@ def run_maze_epoch(n=15,
     map_list = []
     interval = 0
 
+    epsilon = behavior_epsilon * random.random()
     while not done:
         label_action = agent.step(observation, reward)
-        if(random.random() < behavior_epsilon):
+        if(random.random() < epsilon):
             action = random.randint(0,4)
         else:
             action = label_action
