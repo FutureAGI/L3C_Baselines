@@ -51,6 +51,7 @@ def run_maze_epoch(n=15,
     observation_list = [observation]
     behavior_action_list = []
     label_action_list = []
+    target_location_list = []
     reward_list = []
     map_list = []
     interval = 0
@@ -69,6 +70,7 @@ def run_maze_epoch(n=15,
         loc_map = maze_env.maze_core.get_loc_map(map_range=3)
         reward_list.append(reward)
         observation_list.append(observation)
+        target_location_list.append(list(maze_env.get_target_location()))
         sum_reward += reward
 
     print("Finish running, sum reward = %f, steps = %d\n"%(sum_reward, len(observation_list)-1))
@@ -76,7 +78,8 @@ def run_maze_epoch(n=15,
     return (numpy.asarray(observation_list, dtype=numpy.uint8), 
         numpy.asarray(behavior_action_list, dtype=numpy.uint8), 
         numpy.asarray(label_action_list, dtype=numpy.uint8), 
-        numpy.asarray(reward_list, dtype=numpy.float32))
+        numpy.asarray(reward_list, dtype=numpy.float32),
+        numpy.asarray(target_location_list, dtype=numpy.float32))
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):
@@ -89,7 +92,7 @@ def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, mem_
         density = random.choice(density_list)
         mem_kr = random.choice(mem_kr_list)
 
-        observations, behavior_actions, label_actions, rewards = run_maze_epoch(
+        observations, behavior_actions, label_actions, rewards, targets = run_maze_epoch(
                 maze_type=maze_type,
                 max_steps=max_steps,
                 n=n,
@@ -107,6 +110,7 @@ def dump_maze(path_name, epoch_ids, n_list, n_landmarks_list, density_list, mem_
         numpy.save("%s/actions_behavior.npy" % file_path, behavior_actions)
         numpy.save("%s/actions_label.npy" % file_path, label_actions)
         numpy.save("%s/rewards.npy" % file_path, rewards)
+        numpy.save("%s/targets_location.npy" % file_path, targets)
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
