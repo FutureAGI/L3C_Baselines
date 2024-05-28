@@ -36,6 +36,7 @@ class MazeDataSet(Dataset):
         actions_behavior = np.load(path + '/actions_behavior.npy')
         actions_label = np.load(path + '/actions_label.npy')
         rewards = np.load(path + '/rewards.npy')
+        targets = np.load(path + '/targets_location.npy')
         max_t = actions_behavior.shape[0]
         assert max_t == rewards.shape[0] and max_t == actions_label.shape[0] and max_t + 1 == observations.shape[0], \
                 "The 0 dimension shape of actions == rewards == label == observations - 1, but get %s, %s, %s and %s" % \
@@ -52,8 +53,9 @@ class MazeDataSet(Dataset):
         bact_arr = torch.from_numpy(actions_behavior[n_b:n_e]).long() 
         lact_arr = torch.from_numpy(actions_label[n_b:n_e]).long() 
         rew_arr = torch.from_numpy(rewards[n_b:n_e]).float()
+        target_arr = torch.from_numpy(targets[n_b:n_e]).float()
 
-        return obs_arr, bact_arr, lact_arr, rew_arr
+        return obs_arr, bact_arr, lact_arr, rew_arr, target_arr
 
     def __len__(self):
         return len(self.file_list)
@@ -64,5 +66,5 @@ if __name__=="__main__":
     data_path = sys.argv[1]
     dataset = MazeDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
-    obs, bact, lact, rew = dataset[0]
-    print(obs.shape, bact.shape, lact.shape, rew.shape)
+    obs, bact, lact, rew, targets = dataset[0]
+    print(obs.shape, bact.shape, lact.shape, rew.shape, targets.shape)

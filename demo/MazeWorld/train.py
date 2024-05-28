@@ -114,7 +114,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
-            obs, bacts, lacts, rews = batch
+            obs, bacts, lacts, rews, targets = batch
             obs = obs.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
             vae_optimizer.zero_grad()
@@ -142,7 +142,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            obs, bacts, lacts, rews = batch
+            obs, bacts, lacts, rews, targets = batch
             obs = obs.to(device)
             obs = obs.permute(0, 1, 4, 2, 3)
             lacts = lacts.to(device)
