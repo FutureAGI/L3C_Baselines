@@ -59,6 +59,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     noam_decay_interval = train_config.learning_rate_noam_decay_interval
     batch_size = config.train_config.batch_size
     max_epochs = train_config.max_epochs
+    eval_interval = train_config.evaluation_interval
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)

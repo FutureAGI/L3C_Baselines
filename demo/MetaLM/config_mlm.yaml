@@ -18,6 +18,7 @@ train_config:
   load_model_path: null
   save_model_path: ./checkpoints/
   master_port: "12300"
+  evaluation_interval: 1
 
 test_config:
   batch_size: 1
