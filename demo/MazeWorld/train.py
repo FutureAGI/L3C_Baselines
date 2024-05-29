@@ -147,10 +147,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             obs = obs.permute(0, 1, 4, 2, 3)
             lacts = lacts.to(device)
             bacts = bacts.to(device)
+            targets = targets.to(device)
 
             causal_optimizer.zero_grad()
             with autocast(dtype=torch.float16, enabled=use_amp):
-                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
+                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
                 causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
 
             scaler.scale(causal_loss).backward()
@@ -213,58 +214,68 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
     for batch_idx, batch in enumerate(dataloader):
-        obs,bacts,lacts,rews = batch
+        obs,bacts,lacts,rews,targets = batch
         obs = obs.to(device)
         obs = obs.permute(0, 1, 4, 2, 3)
         bacts = bacts.to(device)
         lacts = lacts.to(device)
+        targets = targets.to(device)
         length = lacts.shape[0] * lacts.shape[1]
-        with torch.no_grad():
-            lrec = model.module.vae_loss(obs)
-            lobs, _, lact, cnt = model.module.sequential_loss(obs, bacts, lacts)
 
-            lrec = cnt * lrec
+        with torch.no_grad():
+            #lrec = model.module.vae_loss(obs)
+            lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
+
             lobs = cnt * lobs
             lact = cnt * lact
+            lat = cnt * lat
 
-        if torch.isinf(lrec).any() or torch.isnan(lrec).any():
-            print(f"[WARNING] {device} reconstruction loss = NAN/INF, {lrec}")
-            lrec.fill_(0.0)
+        #if torch.isinf(lrec).any() or torch.isnan(lrec).any():
+        #    print(f"[WARNING] {device} reconstruction loss = NAN/INF, {lrec}")
+        #    lrec.fill_(0.0)
         if torch.isinf(lobs).any() or torch.isnan(lobs).any():
             print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
             lobs.fill_(0.0)
         if torch.isinf(lact).any() or torch.isnan(lact).any():
             print("[WARNING] {device} action loss = NAN/INF, {lact}")
             lact.fill_(0.0)
+        if torch.isinf(lat).any() or torch.isnan(lat).any():
+            print("[WARNING] {device} action loss = NAN/INF, {lat}")
+            lat.fill_(0.0)
 
-        dist.all_reduce(lrec.data)
+        #dist.all_reduce(lrec.data)
         dist.all_reduce(lobs.data)
         dist.all_reduce(lact.data)
+        dist.all_reduce(lat.data)
         dist.all_reduce(cnt.data)
 
-        results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), cnt.cpu()))
+        #results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
+        results.append((lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
 
         if(main):
             show_bar((batch_idx + 1) / all_length, 100)
             sys.stdout.flush()
 
-    sum_lrec = 0
+    #sum_lrec = 0
     sum_lobs = 0
     sum_lact = 0
+    sum_lat = 0
     sum_cnt = 0
-    for lrec, lobs, lact, cnt in results:
-        sum_lrec += lrec
+    for lobs, lact, lat, cnt in results:
+        #sum_lrec += lrec
         sum_lobs += lobs
         sum_lact += lact
+        sum_lat += lat
         sum_cnt += cnt
     sum_cnt = max(1, sum_cnt)
-    sum_lrec /= sum_cnt
+    #sum_lrec /= sum_cnt
     sum_lobs /= sum_cnt
     sum_lact /= sum_cnt
+    sum_lat /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; [Loss] Reconstruction: %s, Future Prediction Image: %s; Action Cross Entropy: %s;" % 
-                (epoch_id, sum_lrec, sum_lobs, sum_lact))
+        print("\n[EVALUATION] Epochs: %s; [Loss] FuturePrediction Image: %s; WorldModel Latent: %s; Action Cross Entropy: %s;" % 
+                (epoch_id, sum_lobs, sum_lat, sum_lact))
         sys.stdout.flush()
 
 if __name__=='__main__':

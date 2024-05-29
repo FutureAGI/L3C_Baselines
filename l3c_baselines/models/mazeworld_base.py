@@ -36,30 +36,40 @@ class MazeModelBase(nn.Module):
                 self.hidden_size, config.transformer_nhead, config.max_time_step, checkpoints_density=checkpoints_density)
 
         self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
+        self.wm_type = config.worldmodel_type
 
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
                 torch.full((1, config.max_time_step - context_warmup, ), 1.0)), dim=1)
         self.register_buffer('loss_mask', loss_mask)
 
-        if(not hasattr(config, "image_decoder_type")):
-            raise Exception("image decoder type is not specified, regression / diffusion")
-        elif(config.image_decoder_type.lower() == "regression"):
-            self.is_diffusion = False
+        if(self.wm_type=='image'):
+            if(not hasattr(config, "image_decoder_type")):
+                raise Exception("image decoder type is not specified, regression / diffusion")
+            elif(config.image_decoder_type.lower() == "regression"):
+                self.is_diffusion = False
+                self.lat_decoder = LatentDecoder(
+                    self.hidden_size, 
+                    2 * self.hidden_size, 
+                    self.latent_size, dropout=0.0)
+            elif(config.image_decoder_type.lower() == "diffusion"):
+                self.is_diffusion = True
+                self.lat_decoder = DiffusionLayers(
+                    config.image_decoder.diffusion_steps, # T
+                    self.latent_size, # hidden size
+                    self.hidden_size, # condition size
+                    2 * self.hidden_size, # inner hidden size
+                )
+            else:
+                raise Exception("Unrecognized type", config.image_decoder_type)
+        elif(self.wm_type=='target'):
             self.lat_decoder = LatentDecoder(
-                self.hidden_size, 
-                2 * self.hidden_size, 
-                self.latent_size, dropout=0.0)
-        elif(config.image_decoder_type.lower() == "diffusion"):
-            self.is_diffusion = True
-            self.lat_decoder = DiffusionLayers(
-                config.image_decoder.diffusion_steps, # T
-                self.latent_size, # hidden size
-                self.hidden_size, # condition size
-                2 * self.hidden_size, # inner hidden size
-            )
+                self.hidden_size,
+                2 * self.hidden_size,
+                2, dropout=0.0)
         else:
-            raise Exception("Unrecognized type", config.image_decoder_type)
+            raise Exception("Unrecognized world model type", config.wm_type)
+            
 
     def forward(self, observations, actions, cache=None, need_cache=True):
         """
@@ -88,7 +98,7 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(True)
         return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, reduce='mean'):
+    def sequential_loss(self, observations, behavior_actions, label_actions, targets, reduce='mean'):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -98,19 +108,26 @@ class MazeModelBase(nn.Module):
 
         inputs = img_pro(observations)
         z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False)
-        with torch.no_grad():
-            z_rec_l, _ = self.vae(inputs[:, -1:])
-            z_rec_l = torch.cat((z_rec, z_rec_l), dim=1)
-        if(self.is_diffusion):
-            lmse_z = self.lat_decoder.loss_DDPM(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
-            z_pred = self.lat_decoder(z_rec_l[:, 1:], z_pred)
-        else:
-            z_pred = self.lat_decoder(z_pred)
-            lmse_z = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+        if(self.wm_type == 'image'):
+            with torch.no_grad():
+                z_rec_l, _ = self.vae(inputs[:, -1:])
+                z_rec_l = torch.cat((z_rec, z_rec_l), dim=1)
+            if(self.is_diffusion):
+                lmse_z = self.lat_decoder.loss_DDPM(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+                z_pred = self.lat_decoder(z_rec_l[:, 1:], z_pred)
+            else:
+                z_pred = self.lat_decoder(z_pred)
+                lmse_z = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+            obs_pred = self.vae.decoding(z_pred)
+            lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, :obs_pred.shape[1]], reduce=reduce)
+        elif(self.wm_type == 'target'):
+            tx = targets[:, :, 0] * torch.cos(targets[:, :, 1])
+            ty = targets[:, :, 0] * torch.sin(targets[:, :, 1])
+            targets = torch.stack((tx, ty), dim=2)
+            target_pred = self.lat_decoder(z_pred)
+            lmse_z = mse_loss_mask(target_pred, targets, mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+            lmse_obs = torch.tensor(0.0).to(lmse_z.device)
 
-        obs_pred = self.vae.decoding(z_pred)
-
-        lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, :obs_pred.shape[1]], reduce=reduce)
         lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
         cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
@@ -150,20 +167,24 @@ class MazeModelBase(nn.Module):
             z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
 
             # Decode the prediction
-            if(self.is_diffusion):
-                # Latent Diffusion
-                lat_pred_list = self.lat_decoder.inference(z_pred)
-                pred_obs = []
-                for lat_pred in lat_pred_list:
-                    pred_obs.append(img_post(self.vae.decoding(lat_pred)))
-            else:
-                lat_pred = self.lat_decoder(z_pred)
-                pred_obs = self.vae.decoding(lat_pred)
+            if(self.wm_type=='image'):
+                if(self.is_diffusion):
+                    # Latent Diffusion
+                    lat_pred_list = self.lat_decoder.inference(z_pred)
+                    pred_obs = []
+                    for lat_pred in lat_pred_list:
+                        pred_obs.append(img_post(self.vae.decoding(lat_pred)))
+                else:
+                    lat_pred = self.lat_decoder(z_pred)
+                    pred_obs = self.vae.decoding(lat_pred)
+                pred_obs = img_post(pred_obs)
+            elif(self.wm_type=='target'):
+                pred_obs = self.lat_decoder(z_pred)
 
             # Image Decoding
-            rec_obs = self.vae.decoding(z_rec)
+            rec_obs = img_post(self.vae.decoding(z_rec))
 
-        return img_post(rec_obs), img_post(pred_obs), valid_act[:, -1], new_cache
+        return rec_obs, pred_obs, valid_act[:, -1], new_cache
         
 
 if __name__=="__main__":

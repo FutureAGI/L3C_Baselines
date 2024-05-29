@@ -4,15 +4,16 @@ model_config:
   action_size: 5
   map_size: 7
   transformer_checkpoints_density: 4
-  transformer_hidden_size: 1024
+  transformer_hidden_size: 1280
   transformer_nhead: 16
   image_latent_size: 1024
   image_encoder_size: 384
   n_residual_block: 2
-  n_transformer_block: 24
-  max_time_step: 1024
-  loss_context_warmup: 256
+  n_transformer_block: 12
+  max_time_step: 2048
+  loss_context_warmup: 512
   image_decoder_type: regression
+  worldmodel_type: target
   image_decoder:
     diffusion_steps: 32
 
@@ -35,10 +36,10 @@ train_config:
   master_port: "12300"
   max_save_iterations: 5000
   evaluate_epochs: 1
-  lossweight_policymodel: 0.40
-  lossweight_worldmodel_raw: 0.40
-  lossweight_worldmodel_latent: 0.20
-  use_amp: True
+  lossweight_policymodel: 0.1
+  lossweight_worldmodel_raw: 0.0
+  lossweight_worldmodel_latent: 0.9
+  use_amp: False
   load_model_parameter_blacklist:
     - "lat_decoder"
     - "act_decoder"
@@ -61,22 +62,20 @@ train_config:
 test_config:
   batch_size: 1
   data_path: ../../../data/maze_data_demo/
-  master_port: "12301"
-  load_model_path: ./checkpoints/pretrain_35_20240513
-  time_step: 1024
+  master_port: "12201"
+  load_model_path: ./checkpoints/pretrain_20240524
+  time_step: 512
+  segment_length: 512
 
 demo_config:
-  master_port: "12301"
+  master_port: "12211"
+  time_step: 2048
   policy:
     softmax: 0.80
     greedy: 0.20
 
   model_config:
-    batch_size: 1
-    data_path: ../../../data/maze_data_demo/
-    master_port: "12301"
-    load_model_path: ./checkpoints/pretrain_35_20240513
-  time_step: 1024
+    load_model_path: ./checkpoints/pretrain_20240524
   maze_config:
     scale: 25
     density: 0.36
