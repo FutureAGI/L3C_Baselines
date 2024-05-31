@@ -41,7 +41,7 @@ class ARTransformerEncoderLayer(nn.Module):
             output = self.norm1(src)
             kv = output
         
-        output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
+        #output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
 
         # Residual Connection
         output = src + output
@@ -59,7 +59,8 @@ class ARTransformerEncoder(nn.Module):
             nhead : int, 
             max_steps : int,
             dim_feedforward : int=2048, 
-            dropout : float=0.10):
+            dropout : float=0.10,
+            context_free: bool=False):
         super(ARTransformerEncoder, self).__init__()
         ar_layer = ARTransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
@@ -69,6 +70,12 @@ class ARTransformerEncoder(nn.Module):
 
         attn_mask = (torch.triu(torch.ones(max_steps, max_steps)) == 1).transpose(1, 0)
         attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
+
+        # If context-free, only window of 2 is allowed
+        if(context_free):
+            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagnol=-1) == 1)
+            attn_mask = attn_mask.masked_fill(ext_mask == False, float('inf'))
+
         self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
         self.register_buffer('attn_mask', attn_mask)
 
@@ -117,7 +124,16 @@ class DecisionTransformer(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, observation_size, action_vocab_size, num_layers, d_model, nhead, max_time_step, dropout=0.1, checkpoints_density=-1):
+    def __init__(self, 
+            observation_size, 
+            action_vocab_size, 
+            num_layers, 
+            d_model, 
+            nhead, 
+            max_time_step, 
+            dropout=0.1, 
+            checkpoints_density=-1,
+            context_free=False):
         super().__init__()
 
         self.d_model = d_model
@@ -132,7 +148,7 @@ class DecisionTransformer(nn.Module):
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
         max_seq_len = 2 * max_time_step + 1
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout, context_free=context_free)
 
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 

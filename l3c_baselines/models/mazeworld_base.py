@@ -21,6 +21,7 @@ class MazeModelBase(nn.Module):
         self.latent_size = config.image_latent_size
         self.action_size = config.action_size
         context_warmup = config.loss_context_warmup
+        context_free = config.context_free
         if(hasattr(config, "transformer_checkpoints_density")):
             checkpoints_density = config.transformer_checkpoints_density
         else:
@@ -34,7 +35,9 @@ class MazeModelBase(nn.Module):
 
         self.decformer = DecisionTransformer(
                 self.latent_size, self.action_size, config.n_transformer_block, 
-                self.hidden_size, config.transformer_nhead, config.max_time_step, checkpoints_density=checkpoints_density)
+                self.hidden_size, config.transformer_nhead, config.max_time_step, 
+                checkpoints_density=checkpoints_density,
+                context_free=context_free)
 
         self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
         self.wm_type = config.worldmodel_type
