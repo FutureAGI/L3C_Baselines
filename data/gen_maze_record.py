@@ -124,6 +124,7 @@ if __name__=="__main__":
     parser.add_argument("--landmarks", type=str, default="5,6,7,8,9,10", help="landmarks:a list of number of landmarks")
     parser.add_argument("--memory_keep", type=str, default="0.25, 0.50, 1.0", help="random select memory keep ratio from this list")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
+    parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
     args = parser.parse_args()
 
@@ -134,7 +135,7 @@ if __name__=="__main__":
 
     worker_splits = args.epochs / args.workers + 1.0e-6
     processes = []
-    n_b_t = 0
+    n_b_t = args.start_index
     for worker_id in range(args.workers):
         n_e_t = n_b_t + worker_splits
         n_b = int(n_b_t)

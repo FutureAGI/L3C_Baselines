@@ -9,7 +9,8 @@ python gen_maze_record.py \
   --maze_type Discrete3D \
   --max_steps 2048 \
   --memory_keep 1.0 \
+  --start_index 960 \
   --landmarks 10 \
   --scale 15,25,35 \
-  --epochs 64 \
-  --workers 32
+  --epochs 640 \
+  --workers 48
