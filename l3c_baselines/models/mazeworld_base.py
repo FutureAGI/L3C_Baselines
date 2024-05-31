@@ -21,7 +21,7 @@ class MazeModelBase(nn.Module):
         self.latent_size = config.image_latent_size
         self.action_size = config.action_size
         context_warmup = config.loss_context_warmup
-        context_free = config.context_free
+        context_free = bool(config.context_free)
         if(hasattr(config, "transformer_checkpoints_density")):
             checkpoints_density = config.transformer_checkpoints_density
         else:
@@ -137,7 +137,7 @@ class MazeModelBase(nn.Module):
 
         return lmse_obs, lmse_z, lce_act, cnt
 
-    def inference_step_by_step(self, observations, actions, config, device, n_step=1, cache=None, verbose=False):
+    def inference_step_by_step(self, observations, actions, config, device, n_step=1, cache=None, verbose=True):
         """
         Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
                observations: s_{tc}, ... s_{t}
@@ -170,22 +170,21 @@ class MazeModelBase(nn.Module):
         # Only use ground truth
         if(Nobs > 1):
             with torch.no_grad():
-                z_rec, z_pred, a_pred, gt_cache  = self.forward(valid_obs[:, :-1], valid_act[:, :-1], cache=cache, need_cache=True)
+                z_rec, z_pred, a_pred, valid_cache  = self.forward(valid_obs[:, :-1], valid_act[:, :-1], cache=cache, need_cache=True)
         else:
-            gt_cache = cache
+            valid_cache = cache
 
         # Inference Action First
         pred_obs_list = []
         pred_act_list = []
-        new_cache = gt_cache
+        updated_cache = valid_cache
         n_act = valid_act[:, -1:]
         z_rec, _ = self.vae(valid_obs[:, -1:])
-        print(z_rec.shape, n_act.shape, valid_obs.shape)
 
         for step in range(n_step):
             with torch.no_grad():
                 # Temporal Encoders
-                z_pred, a_pred, new_cache = self.decformer(z_rec, n_act, cache=new_cache, need_cache=True)
+                z_pred, a_pred, _ = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)
                 # Decode Action [B, N_T, action_size]
                 a_pred = self.act_decoder(a_pred)
 
@@ -207,11 +206,11 @@ class MazeModelBase(nn.Module):
                     print("Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
 
                 # Inference Next Observation based on Sampled Action
-                z_pred, a_pred, new_cache  = self.decformer(z_rec, n_act, cache=new_cache, need_cache=True)
+                z_pred, a_pred, updated_cache  = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)
 
                 # Only the first step uses the ground truth
                 if(step == 0):
-                    gt_cache = new_cache
+                    valid_cache = updated_cache
 
                 # Decode the prediction
                 if(self.wm_type=='image'):
@@ -233,7 +232,7 @@ class MazeModelBase(nn.Module):
                 # Do auto-regression for n_step
                 z_rec = self.lat_decoder(z_pred)
 
-        return pred_obs_list, pred_act_list, gt_cache
+        return pred_obs_list, pred_act_list, valid_cache
         
 
 if __name__=="__main__":

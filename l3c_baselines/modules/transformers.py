@@ -28,9 +28,6 @@ class ARTransformerEncoderLayer(nn.Module):
         Cache: B, NT, H
         SRC: Other Parts
         """
-
-        # Norm first always
-
         # Self Attention
         if cache is not None:
             q0_pos=cache.shape[1]
@@ -41,7 +38,7 @@ class ARTransformerEncoderLayer(nn.Module):
             output = self.norm1(src)
             kv = output
         
-        #output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
+        output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
 
         # Residual Connection
         output = src + output
