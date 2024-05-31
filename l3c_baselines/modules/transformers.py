@@ -139,8 +139,10 @@ class DecisionTransformer(nn.Module):
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
+        mask_embeddings = torch.randn(1, 1, observation_size)
+        self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
-    def forward(self, observations, actions, cache=None, need_cache=True):
+    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -157,9 +159,21 @@ class DecisionTransformer(nn.Module):
             assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
+        # Add state dropouts
+        device = observations.device
+        p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+        p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+        eps = torch.randn((B, NT, H)).to(device)
+        dp_eps = torch.bernoulli(p_noise)
+        dp_mask = torch.bernoulli(p_mask)
+
+        # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+        observation_in = observations + eps * dp_eps
+        observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+        observation_in = self.pre_layer(observation_in).view(B, NT, 1, -1)
+
         # Input actions: [B, NT, 1, H]
         action_in = self.action_embedding(actions).view(B, NT, 1, -1)
-        observation_in = self.pre_layer(observations).view(B, NT, 1, -1)
 
         # [B, NT, 2, H]
         outputs = torch.cat([observation_in, action_in], dim=2)
@@ -201,9 +215,6 @@ class ARTransformerStandard(nn.Module):
         self.word_embedding = nn.Embedding(vocab_size, d_model)
 
         # 创建Transformer编码器层
-        self.split_layers = num_layers // 2
-        #self.encoder_1 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
-        #self.encoder_2 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
@@ -220,25 +231,12 @@ class ARTransformerStandard(nn.Module):
         if(cache is None):
             cache_len = 0
         else:
-            assert isinstance(cache, list) and len(cache) == 2 * self.split_layers + 1, "The cache must be list with length == num_layers + 1"
+            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
         # Input actions: [B, NT, 1, H]
         outputs = self.word_embedding(inputs)
 
-        # Temporal Encoders
-        #if(cache is None):
-        #    cache_1 = None
-        #    cache_2 = None
-        #else:
-        #    cache_1 = cache[:self.split_layers + 1]
-        #    cache_2 = cache[self.split_layers:]
-        #outputs, new_cache_1 = checkpoint(lambda x: self.encoder_1(x, cache = cache_1, need_cache=need_cache), outputs)
-        #outputs, new_cache_2 = checkpoint(lambda x: self.encoder_2(x, cache = cache_2, need_cache=need_cache), outputs)
-        #if(new_cache_1 is not None and new_cache_2 is not None):
-        #    new_cache = new_cache_1[:-1] + new_cache_2
-        #else:
-        #    new_cache = None
         outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache, checkpoints_density=self.checkpoints_density)
 
         outputs = self.output_mapping(self.norm(outputs))

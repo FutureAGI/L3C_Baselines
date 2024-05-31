@@ -99,6 +99,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     save_model_path = train_config.save_model_path
     eval_interval = train_config.evaluate_epochs
 
+    vae_scheduler.step(train_config.vae_start_step)
+    causal_scheduler.step(train_config.causal_start_step)
+
     if(load_model_path is not None):
         model = custom_load_model(model, f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=False)
 

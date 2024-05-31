@@ -19,10 +19,12 @@ class VideoWriter(object):
         self.image_dir = f'{dir_name}/imgs'
         create_folder(self.image_dir)
         self.ind = 0
+        self.window_size = window_size
         self.video_writer = cv2.VideoWriter(f'{dir_name}/{file_name}.mp4', fourcc, frame_rate, window_size) 
 
     def add_image(self, image):
         self.ind += 1
+        img_out = cv2.resize(image, self.window_size)
         img_write = image.clip(0, 255).astype(np.uint8)
         cv2.imwrite(f'{self.image_dir}/frame_{self.ind:04d}.jpg', img_write)
         self.video_writer.write(img_write)

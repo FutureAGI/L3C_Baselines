@@ -84,12 +84,9 @@ class MazeModelBase(nn.Module):
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
 
-        # Add state dropouts
-        dp_vec = (state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(z_rec.device)
-        z_input = z_rec * torch.bernoulli(dp_vec)
 
         # Temporal Encoders
-        z_pred, a_pred, new_cache = self.decformer(z_input, actions, cache=cache, need_cache=need_cache)
+        z_pred, a_pred, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache, state_dropout=state_dropout)
 
         # Decode Action [B, N_T, action_size]
         a_pred = self.act_decoder(a_pred)

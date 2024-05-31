@@ -28,8 +28,10 @@ train_config:
   time_step_causal: 256
   learning_rate_vae: 1.0e-3
   learning_rate_causal: 1.0e-3
-  learning_rate_vae_decay_interval: 1.0e-3
+  learning_rate_vae_decay_interval: 1000
   learning_rate_causal_decay_interval: 1000
+  vae_start_step: 0
+  causal_start_step: 0
   data_path: "[PATH]"
   load_model_path: "[PATH]"
   save_model_path: "[PATH]"
