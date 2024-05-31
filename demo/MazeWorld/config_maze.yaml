@@ -79,8 +79,9 @@ demo_config:
     autoregressive_threshold: 128
     autoregressive_interval: 8
     policy:
-      softmax: 0.80
-      greedy: 0.20
+      greedy_init: 0.0
+      greedy_increment: 0.001
+      greedy_max: 0.85
   maze_config:
     scale: 25
     density: 0.36
