@@ -73,7 +73,7 @@ class ARTransformerEncoder(nn.Module):
 
         # If context-free, only window of 2 is allowed
         if(context_free):
-            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagnol=-1) == 1)
+            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagonal=-1) == 1)
             attn_mask = attn_mask.masked_fill(ext_mask == False, float('inf'))
 
         self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
