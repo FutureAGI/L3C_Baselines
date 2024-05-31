@@ -151,7 +151,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
             causal_optimizer.zero_grad()
             with autocast(dtype=torch.float16, enabled=use_amp):
-                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
+                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.15)
                 causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
 
             scaler.scale(causal_loss).backward()

@@ -13,7 +13,7 @@ model_config:
   max_time_step: 2048
   loss_context_warmup: 512
   image_decoder_type: regression
-  worldmodel_type: target
+  worldmodel_type: image
   image_decoder:
     diffusion_steps: 32
 
@@ -30,15 +30,15 @@ train_config:
   learning_rate_causal: 1.0e-3
   learning_rate_vae_decay_interval: 1.0e-3
   learning_rate_causal_decay_interval: 1000
-  data_path: ../../../data/maze_data_demo/
-  load_model_path: ./checkpoints/pretrain_35_20240513
-  save_model_path: ./checkpoints/
+  data_path: "[PATH]"
+  load_model_path: "[PATH]"
+  save_model_path: "[PATH]"
   master_port: "12300"
   max_save_iterations: 5000
   evaluate_epochs: 1
   lossweight_policymodel: 0.1
-  lossweight_worldmodel_raw: 0.0
-  lossweight_worldmodel_latent: 0.9
+  lossweight_worldmodel_raw: 0.85
+  lossweight_worldmodel_latent: 0.05
   use_amp: False
   load_model_parameter_blacklist:
     - "lat_decoder"
@@ -61,21 +61,23 @@ train_config:
 
 test_config:
   batch_size: 1
-  data_path: ../../../data/maze_data_demo/
+  data_path: "[PATH]"
   master_port: "12201"
-  load_model_path: ./checkpoints/pretrain_20240524
+  load_model_path: "[PATH]"
   time_step: 512
   segment_length: 512
 
 demo_config:
   master_port: "12211"
   time_step: 2048
-  policy:
-    softmax: 0.80
-    greedy: 0.20
 
   model_config:
-    load_model_path: ./checkpoints/pretrain_20240524
+    load_model_path: "[PATH]"
+    autoregressive_threshold: 128
+    autoregressive_interval: 8
+    policy:
+      softmax: 0.80
+      greedy: 0.20
   maze_config:
     scale: 25
     density: 0.36
@@ -88,4 +90,4 @@ demo_config:
   test_epochs: 1
   write_task: null
   read_task: null
-  output: ./videos
+  output: "[PATH]"

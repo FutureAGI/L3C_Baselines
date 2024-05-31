@@ -4,6 +4,7 @@
 import sys
 import random
 import torch
+import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
@@ -70,8 +71,7 @@ class MazeModelBase(nn.Module):
         else:
             raise Exception("Unrecognized world model type", config.wm_type)
             
-
-    def forward(self, observations, actions, cache=None, need_cache=True):
+    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0):
         """
         Input Size:
             observations:[B, NT, C, W, H]
@@ -84,8 +84,12 @@ class MazeModelBase(nn.Module):
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
 
+        # Add state dropouts
+        dp_vec = (state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(z_rec.device)
+        z_input = z_rec * torch.bernoulli(dp_vec)
+
         # Temporal Encoders
-        z_pred, a_pred, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache)
+        z_pred, a_pred, new_cache = self.decformer(z_input, actions, cache=cache, need_cache=need_cache)
 
         # Decode Action [B, N_T, action_size]
         a_pred = self.act_decoder(a_pred)
@@ -98,7 +102,7 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(True)
         return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, targets, reduce='mean'):
+    def sequential_loss(self, observations, behavior_actions, label_actions, targets, state_dropout=0.0, reduce='mean'):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -107,7 +111,7 @@ class MazeModelBase(nn.Module):
         self.lat_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False)
+        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False, state_dropout=state_dropout)
         if(self.wm_type == 'image'):
             with torch.no_grad():
                 z_rec_l, _ = self.vae(inputs[:, -1:])
@@ -133,58 +137,103 @@ class MazeModelBase(nn.Module):
 
         return lmse_obs, lmse_z, lce_act, cnt
 
-    def inference_step_by_step(self, observation, config, cache=None, verbose=False):
+    def inference_step_by_step(self, observations, actions, config, device, n_step=1, cache=None, verbose=False):
         """
-        Inference a_t, s_{t+1} give s_t and caches infered from s_0, a_0, ..., s_{t-1}, a_{t-1}
+        Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
+               observations: s_{tc}, ... s_{t}
+               actions: a_{tc}, ..., a_{t-1}
+        Returns:
+            obs_pred: numpy.array [n, W, H, C], s_{t+1}, ..., s_{t+n}
+            act_pred: numpy.array [n], a_{t}, ..., a_{t+n-1}
+            new_cache: torch.array caches up to s_0, a_0, ..., s_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
         """
-        B, _, C, W, H = observation.shape
-        device = observation.device
-        valid_act = torch.zeros((B, 1), dtype=torch.int).to(device)
-        valid_obs = img_pro(observation)
+        obss = numpy.array(observations, dtype=numpy.float32)
+        acts = numpy.array(actions, dtype=numpy.int64)
+        Nobs, W, H, C = obss.shape
+        (No,) = acts.shape
+
+        assert Nobs == No + 1
+
+        valid_obs = torch.from_numpy(img_pro(obss)).float().to(device)
+        valid_obs = valid_obs.permute(0, 3, 1, 2).unsqueeze(0)
+
+        if(No < 1):
+            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        else:
+            valid_act = torch.from_numpy(acts).int()
+            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
 
         e_s = config.softmax
         e_g = config.greedy
 
+        # Update the cache first
+        # Only use ground truth
+        if(Nobs > 1):
+            with torch.no_grad():
+                z_rec, z_pred, a_pred, gt_cache  = self.forward(valid_obs[:, :-1], valid_act[:, :-1], cache=cache, need_cache=True)
+        else:
+            gt_cache = cache
+
         # Inference Action First
-        with torch.no_grad():
-            z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
-            s_action = torch.multinomial(a_pred[:, -1], num_samples=1).squeeze(1)
-            g_action = torch.argmax(a_pred[:, -1], dim=-1, keepdim=False)
-            eps = random.random()
-            if(eps < e_s):
-                flag = "S"
-                valid_act[:, -1] = s_action
-            elif(eps < e_s + e_g):
-                flag = "G"
-                valid_act[:, -1] = g_action
-            else:
-                flag = "R"
-                valid_act[:, -1] = torch.randint_like(r_action, high=self.action_size)
-            if(verbose):
-                print("Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
+        pred_obs_list = []
+        pred_act_list = []
+        new_cache = gt_cache
+        n_act = valid_act[:, -1:]
+        z_rec, _ = self.vae(valid_obs[:, -1:])
+        print(z_rec.shape, n_act.shape, valid_obs.shape)
 
-            # Inference Next Observation based on Sampled Action
-            z_rec, z_pred, a_pred, new_cache  = self.forward(valid_obs, valid_act, cache=cache, need_cache=True)
+        for step in range(n_step):
+            with torch.no_grad():
+                # Temporal Encoders
+                z_pred, a_pred, new_cache = self.decformer(z_rec, n_act, cache=new_cache, need_cache=True)
+                # Decode Action [B, N_T, action_size]
+                a_pred = self.act_decoder(a_pred)
 
-            # Decode the prediction
-            if(self.wm_type=='image'):
-                if(self.is_diffusion):
-                    # Latent Diffusion
-                    lat_pred_list = self.lat_decoder.inference(z_pred)
-                    pred_obs = []
-                    for lat_pred in lat_pred_list:
-                        pred_obs.append(img_post(self.vae.decoding(lat_pred)))
+                s_action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
+                g_action = torch.argmax(a_pred[:, 0], dim=-1, keepdim=False)
+                eps = random.random()
+                if(eps < e_s):
+                    flag = "S"
+                    true_act = s_action
+                elif(eps < e_s + e_g):
+                    flag = "G"
+                    true_act = g_action
                 else:
-                    lat_pred = self.lat_decoder(z_pred)
-                    pred_obs = self.vae.decoding(lat_pred)
-                pred_obs = img_post(pred_obs)
-            elif(self.wm_type=='target'):
-                pred_obs = self.lat_decoder(z_pred)
+                    flag = "R"
+                    true_act = torch.randint_like(r_action, high=self.action_size)
+                n_act[:, 0] = true_act
+                pred_act_list.append(true_act.squeeze(0).cpu().numpy())
+                if(verbose):
+                    print("Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
 
-            # Image Decoding
-            rec_obs = img_post(self.vae.decoding(z_rec))
+                # Inference Next Observation based on Sampled Action
+                z_pred, a_pred, new_cache  = self.decformer(z_rec, n_act, cache=new_cache, need_cache=True)
 
-        return rec_obs, pred_obs, valid_act[:, -1], new_cache
+                # Only the first step uses the ground truth
+                if(step == 0):
+                    gt_cache = new_cache
+
+                # Decode the prediction
+                if(self.wm_type=='image'):
+                    if(self.is_diffusion):
+                        # Latent Diffusion
+                        lat_pred_list = self.lat_decoder.inference(z_pred)
+                        pred_obs = []
+                        for lat_pred in lat_pred_list:
+                            pred_obs.append(img_post(self.vae.decoding(lat_pred)))
+                    else:
+                        lat_pred = self.lat_decoder(z_pred)
+                        pred_obs = self.vae.decoding(lat_pred)
+                    pred_obs = img_post(pred_obs)
+                elif(self.wm_type=='target'):
+                    pred_obs = self.lat_decoder(z_pred)
+
+                pred_obs_list.append(pred_obs.squeeze(1).squeeze(0).permute(1, 2, 0).cpu().numpy())
+
+                # Do auto-regression for n_step
+                z_rec = self.lat_decoder(z_pred)
+
+        return pred_obs_list, pred_act_list, gt_cache
         
 
 if __name__=="__main__":
