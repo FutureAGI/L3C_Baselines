@@ -21,7 +21,6 @@ class MazeModelBase(nn.Module):
         self.latent_size = config.image_latent_size
         self.action_size = config.action_size
         context_warmup = config.loss_context_warmup
-        context_free = bool(config.context_free)
         if(hasattr(config, "transformer_checkpoints_density")):
             checkpoints_density = config.transformer_checkpoints_density
         else:
@@ -37,14 +36,14 @@ class MazeModelBase(nn.Module):
                 self.latent_size, self.action_size, config.n_transformer_block, 
                 self.hidden_size, config.transformer_nhead, config.max_time_step, 
                 checkpoints_density=checkpoints_density,
-                context_free=context_free)
+                context_window=config.context_window)
 
         self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
         self.wm_type = config.worldmodel_type
 
         loss_mask = torch.cat((
                 torch.linspace(0.0, 1.0, context_warmup).unsqueeze(0),
-                torch.full((1, config.max_time_step - context_warmup, ), 1.0)), dim=1)
+                torch.full((1, config.max_time_step - context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_mask', loss_mask)
 
         if(self.wm_type=='image'):
@@ -137,7 +136,7 @@ class MazeModelBase(nn.Module):
 
         return lmse_obs, lmse_z, lce_act, cnt
 
-    def inference_step_by_step(self, observations, actions, config, device, n_step=1, cache=None, verbose=True):
+    def inference_step_by_step(self, observations, actions, config, cur_step, device, n_step=1, cache=None, verbose=True):
         """
         Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
                observations: s_{tc}, ... s_{t}
@@ -163,8 +162,8 @@ class MazeModelBase(nn.Module):
             valid_act = torch.from_numpy(acts).int()
             valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
 
-        e_s = config.softmax
-        e_g = config.greedy
+        e_g = min(config.greedy_init + cur_step * config.greedy_increment, config.greedy_max)
+        e_s = 1.0 - e_g
 
         # Update the cache first
         # Only use ground truth
@@ -203,7 +202,7 @@ class MazeModelBase(nn.Module):
                 n_act[:, 0] = true_act
                 pred_act_list.append(true_act.squeeze(0).cpu().numpy())
                 if(verbose):
-                    print("Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
+                    print(f"Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
 
                 # Inference Next Observation based on Sampled Action
                 z_pred, a_pred, updated_cache  = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)

@@ -57,7 +57,7 @@ class ARTransformerEncoder(nn.Module):
             max_steps : int,
             dim_feedforward : int=2048, 
             dropout : float=0.10,
-            context_free: bool=False):
+            context_window: int=-1):
         super(ARTransformerEncoder, self).__init__()
         ar_layer = ARTransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
@@ -69,10 +69,10 @@ class ARTransformerEncoder(nn.Module):
         attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
 
         # If context-free, only window of 2 is allowed
-        if(context_free):
-            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagonal=-1) == 1)
+        if(context_window > -1):
+            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagonal=-context_window) == 1)
             attn_mask = attn_mask.masked_fill(ext_mask == False, float('-inf'))
-            print("[Warning] Context-Free Model, Use an attention mask of {attn_mask}")
+            print(f"[Warning] Context-Window is applied, Use an attention mask of {attn_mask}")
 
         self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
         self.register_buffer('attn_mask', attn_mask)
@@ -82,10 +82,13 @@ class ARTransformerEncoder(nn.Module):
         # If checkpoints_density < 1 we do not use checkpoints
         # Calculate Cache Size
         l = src.shape[1]
+        ks = 0
         if(cache is None):
-            s = l
+            qs = 0
+            e = l
         else:
-            s = l + cache[0].shape[1]
+            qs = cache[0].shape[1]
+            e = qs + l
             
         new_cache = None
 
@@ -104,16 +107,16 @@ class ARTransformerEncoder(nn.Module):
                 need_checkpoint=False
             if(cache is not None):
                 if(not need_checkpoint):
-                    output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:], cache[i]) 
+                    output = layer(output, self.rope_embedding, self.attn_mask[qs:e, ks:e], cache[i]) 
                 else:
-                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[-l:, -s:], cache[i]), output)
+                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[qs:e, ks:e], cache[i]), output)
                 if(need_cache):
                     new_cache.append(torch.cat([cache[i + 1], output.detach()], dim=1))
             else:
                 if(not need_checkpoint):
-                    output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:])
+                    output = layer(output, self.rope_embedding, self.attn_mask[qs:e, ks:e])
                 else:
-                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[-l:, -s:]), output)
+                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[qs:e, ks:e]), output)
                 if(need_cache):
                     new_cache.append(output.detach())
         return output, new_cache
@@ -131,7 +134,7 @@ class DecisionTransformer(nn.Module):
             max_time_step, 
             dropout=0.1, 
             checkpoints_density=-1,
-            context_free=False):
+            context_window=-1):
         super().__init__()
 
         self.d_model = d_model
@@ -146,7 +149,7 @@ class DecisionTransformer(nn.Module):
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
         max_seq_len = 2 * max_time_step + 1
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout, context_free=context_free)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout, context_window=context_window)
 
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 

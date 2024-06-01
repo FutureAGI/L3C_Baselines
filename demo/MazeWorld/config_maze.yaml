@@ -12,7 +12,7 @@ model_config:
   n_transformer_block: 12
   max_time_step: 2048
   loss_context_warmup: 512
-  context_free: 0
+  context_free: -1
   image_decoder_type: regression
   worldmodel_type: image
   image_decoder:
@@ -81,7 +81,7 @@ demo_config:
     policy:
       greedy_init: 0.0
       greedy_increment: 0.001
-      greedy_max: 0.85
+      greedy_max: 0.75
   maze_config:
     scale: 25
     density: 0.36
