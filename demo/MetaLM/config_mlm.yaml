@@ -26,9 +26,9 @@ test_config:
   time_step: 1024
   data_path: ./data
   master_port: "12301"
-  load_model_path: ./checkpoints/01
+  load_model_path: [PATH]
 
 demo_config:
   vocab: english
-  load_model_path: ./checkpoints/01
+  load_model_path: [PATH]
   master_port: "12301"

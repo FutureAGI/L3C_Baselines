@@ -11,6 +11,9 @@ python gen_maze_record.py
   --n n1,n2,n3
   --density d1,d2,d3
   --n_landmarks l1,l2,l3
+  --label_mem_kr 0.50 \
+  --behavior_mem_kr 0.15,0.30,0.50,0.75 \
+  --behavior_noise 0.0,0.20,0.40,0.60,0.80 \
   --epochs EPOCHS
   --workers WORKERS
 ```
@@ -28,3 +31,8 @@ python gen_metalang.py
 	--file_number 16
 	--workers 4
 ```
+
+## Data Collection Strategy
+In Maze World, we use different behavior policy and reference policy to facilitate the performance of imitation learning.
+Use "--label_mem_kr" to specify the $p(STM->LTM)$ of the reference policy
+Use "--behavior_mem_kr" and "--behavior_noise" to specify the behavior policy
