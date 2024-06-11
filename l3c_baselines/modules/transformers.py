@@ -28,9 +28,6 @@ class ARTransformerEncoderLayer(nn.Module):
         Cache: B, NT, H
         SRC: Other Parts
         """
-
-        # Norm first always
-
         # Self Attention
         if cache is not None:
             q0_pos=cache.shape[1]
@@ -59,7 +56,8 @@ class ARTransformerEncoder(nn.Module):
             nhead : int, 
             max_steps : int,
             dim_feedforward : int=2048, 
-            dropout : float=0.10):
+            dropout : float=0.10,
+            context_window: int=-1):
         super(ARTransformerEncoder, self).__init__()
         ar_layer = ARTransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
@@ -69,6 +67,13 @@ class ARTransformerEncoder(nn.Module):
 
         attn_mask = (torch.triu(torch.ones(max_steps, max_steps)) == 1).transpose(1, 0)
         attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
+
+        # If context-free, only window of 2 is allowed
+        if(context_window > -1):
+            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagonal=-context_window) == 1)
+            attn_mask = attn_mask.masked_fill(ext_mask == False, float('-inf'))
+            print(f"[Warning] Context-Window is applied, Use an attention mask of {attn_mask}")
+
         self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
         self.register_buffer('attn_mask', attn_mask)
 
@@ -77,10 +82,13 @@ class ARTransformerEncoder(nn.Module):
         # If checkpoints_density < 1 we do not use checkpoints
         # Calculate Cache Size
         l = src.shape[1]
+        ks = 0
         if(cache is None):
-            s = l
+            qs = 0
+            e = l
         else:
-            s = l + cache[0].shape[1]
+            qs = cache[0].shape[1]
+            e = qs + l
             
         new_cache = None
 
@@ -99,16 +107,16 @@ class ARTransformerEncoder(nn.Module):
                 need_checkpoint=False
             if(cache is not None):
                 if(not need_checkpoint):
-                    output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:], cache[i]) 
+                    output = layer(output, self.rope_embedding, self.attn_mask[qs:e, ks:e], cache[i]) 
                 else:
-                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[-l:, -s:], cache[i]), output)
+                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[qs:e, ks:e], cache[i]), output)
                 if(need_cache):
                     new_cache.append(torch.cat([cache[i + 1], output.detach()], dim=1))
             else:
                 if(not need_checkpoint):
-                    output = layer(output, self.rope_embedding, self.attn_mask[-l:, -s:])
+                    output = layer(output, self.rope_embedding, self.attn_mask[qs:e, ks:e])
                 else:
-                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[-l:, -s:]), output)
+                    output = checkpoint(lambda x: layer(x, self.rope_embedding, self.attn_mask[qs:e, ks:e]), output)
                 if(need_cache):
                     new_cache.append(output.detach())
         return output, new_cache
@@ -117,7 +125,16 @@ class DecisionTransformer(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, observation_size, action_vocab_size, num_layers, d_model, nhead, max_time_step, dropout=0.1, checkpoints_density=-1):
+    def __init__(self, 
+            observation_size, 
+            action_vocab_size, 
+            num_layers, 
+            d_model, 
+            nhead, 
+            max_time_step, 
+            dropout=0.1, 
+            checkpoints_density=-1,
+            context_window=-1):
         super().__init__()
 
         self.d_model = d_model
@@ -132,15 +149,17 @@ class DecisionTransformer(nn.Module):
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
         max_seq_len = 2 * max_time_step + 1
-        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout)
+        self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_seq_len, dim_feedforward=4*d_model, dropout=dropout, context_window=context_window)
 
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
         # 创建Type向量[1, 1, NP, C]
         type_embeddings = torch.randn(1, 1, 2, d_model)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
+        mask_embeddings = torch.randn(1, 1, observation_size)
+        self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
-    def forward(self, observations, actions, cache=None, need_cache=True):
+    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -157,9 +176,21 @@ class DecisionTransformer(nn.Module):
             assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
+        # Add state dropouts
+        device = observations.device
+        p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+        p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+        eps = torch.randn((B, NT, H)).to(device)
+        dp_eps = torch.bernoulli(p_noise)
+        dp_mask = torch.bernoulli(p_mask)
+
+        # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+        observation_in = observations + eps * dp_eps
+        observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+        observation_in = self.pre_layer(observation_in).view(B, NT, 1, -1)
+
         # Input actions: [B, NT, 1, H]
         action_in = self.action_embedding(actions).view(B, NT, 1, -1)
-        observation_in = self.pre_layer(observations).view(B, NT, 1, -1)
 
         # [B, NT, 2, H]
         outputs = torch.cat([observation_in, action_in], dim=2)
@@ -201,9 +232,6 @@ class ARTransformerStandard(nn.Module):
         self.word_embedding = nn.Embedding(vocab_size, d_model)
 
         # 创建Transformer编码器层
-        self.split_layers = num_layers // 2
-        #self.encoder_1 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
-        #self.encoder_2 = ARTransformerEncoder(self.split_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
@@ -220,25 +248,12 @@ class ARTransformerStandard(nn.Module):
         if(cache is None):
             cache_len = 0
         else:
-            assert isinstance(cache, list) and len(cache) == 2 * self.split_layers + 1, "The cache must be list with length == num_layers + 1"
+            assert isinstance(cache, list) and len(cache) == self.num_layers + 1, "The cache must be list with length == num_layers + 1"
             cache_len = cache[0].shape[1]
 
         # Input actions: [B, NT, 1, H]
         outputs = self.word_embedding(inputs)
 
-        # Temporal Encoders
-        #if(cache is None):
-        #    cache_1 = None
-        #    cache_2 = None
-        #else:
-        #    cache_1 = cache[:self.split_layers + 1]
-        #    cache_2 = cache[self.split_layers:]
-        #outputs, new_cache_1 = checkpoint(lambda x: self.encoder_1(x, cache = cache_1, need_cache=need_cache), outputs)
-        #outputs, new_cache_2 = checkpoint(lambda x: self.encoder_2(x, cache = cache_2, need_cache=need_cache), outputs)
-        #if(new_cache_1 is not None and new_cache_2 is not None):
-        #    new_cache = new_cache_1[:-1] + new_cache_2
-        #else:
-        #    new_cache = None
         outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache, checkpoints_density=self.checkpoints_density)
 
         outputs = self.output_mapping(self.norm(outputs))

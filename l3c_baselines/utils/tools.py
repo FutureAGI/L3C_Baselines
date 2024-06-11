@@ -31,25 +31,18 @@ def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.
     """
     In case of hard condition, shape mismatch, nan/inf are not allowed, which directly lead to failure
     """
-    # 加载保存的模型参数  
     saved_state_dict = torch.load(state_dict_path)  
       
-    # 获取当前模型的state_dict  
     model_state_dict = model.state_dict()  
       
-    # 初始化一个空的字典，用于存放匹配且形状一致的参数  
     matched_state_dict = {}  
       
-    # 遍历保存的模型参数  
     print("Verbose Model Parameters List:", model_state_dict.keys())
 
     for param_name, param_tensor in saved_state_dict.items():  
-        # 检查参数名称是否在当前模型中  
         if param_name in model_state_dict:  
-            # 获取当前模型中对应名称的参数形状  
             model_param_shape = model_state_dict[param_name].shape  
               
-            # 检查形状是否一致  
             is_nan = torch.isnan(param_tensor).any()
             is_inf = torch.isinf(param_tensor).any()
             l2_norm = torch.norm(param_tensor, p=2).item()
@@ -88,7 +81,6 @@ def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.
             else:
                 print(e, "Skipping loading...")
       
-    # 加载匹配的参数到模型中  
     model.load_state_dict(matched_state_dict, strict=False)  
     return model  
 
@@ -126,6 +118,10 @@ def print_memory(info="Default"):
 
 def infer_type(s):
     s = s.strip().lower()
+
+    # If starts with specific tokens return string
+    if(s.startswith("\"") or s.startswith("\'")):
+        return s.strip("\"").strip("\'")
 
     # Check for boolean
     if s in ['true', 'false']:
@@ -195,7 +191,6 @@ class Configure(object):
         d = super().__getattribute__("__config")
         if('.' in attr):
             keys = attr.split('.')
-            print(keys)
             for key in keys[:-1]:
                 if(key not in d):
                     d[key] = dict()
