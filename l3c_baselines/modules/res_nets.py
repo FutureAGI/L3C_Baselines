@@ -173,11 +173,11 @@ class ActionDecoder(nn.Module):
         self.act_decoder_post = nn.Linear(input_size, output_size)
         self.act_decoder_output = nn.Softmax(dim=-1)
 
-    def forward(self, input):
+    def forward(self, input, T=1.0):
         src = self.layer_norm(input)
         out = self.act_decoder_pre(src)
         out = self.act_decoder_post(out + src)
-        return self.act_decoder_output(out)
+        return self.act_decoder_output(out / T)
 
 class LatentDecoder(nn.Module):
     def __init__(

@@ -3,18 +3,18 @@ model_config:
   image_size: 128
   action_size: 5
   map_size: 7
-  transformer_checkpoints_density: 4
-  transformer_hidden_size: 1280
-  transformer_nhead: 16
+  transformer_checkpoints_density: -1
+  transformer_hidden_size: 512
+  transformer_nhead: 8
   image_latent_size: 1024
   image_encoder_size: 384
   n_residual_block: 2
-  n_transformer_block: 12
+  n_transformer_block: 8
   max_time_step: 2048
   loss_context_warmup: 512
-  context_free: -1
-  image_decoder_type: regression
+  context_window: -1
   worldmodel_type: image
+  image_decoder_type: regression
   image_decoder:
     diffusion_steps: 32
 
@@ -33,20 +33,18 @@ train_config:
   learning_rate_causal_decay_interval: 1000
   vae_start_step: 0
   causal_start_step: 0
-  data_path: "[PATH]"
-  load_model_path: "[PATH]"
-  save_model_path: "[PATH]"
+  data_path: ../../../data/maze_data_demo/
+  load_model_path: ./checkpoints/pretrain_20240602_small
+  save_model_path: ./checkpoints/
   master_port: "12300"
   max_save_iterations: 5000
   evaluate_epochs: 1
-  lossweight_policymodel: 0.1
-  lossweight_worldmodel_raw: 0.85
-  lossweight_worldmodel_latent: 0.05
-  use_amp: False
+  lossweight_policymodel: 0.40
+  lossweight_worldmodel_raw: 0.40
+  lossweight_worldmodel_latent: 0.20
+  use_amp: True
   load_model_parameter_blacklist:
-    - "lat_decoder"
-    - "act_decoder"
-    - "decformer"
+    - "attn_mask"
 
   sigma_scheduler: 1000
   sigma_value:
@@ -64,20 +62,23 @@ train_config:
 
 test_config:
   batch_size: 1
-  data_path: "[PATH]"
-  master_port: "12201"
-  load_model_path: "[PATH]"
-  time_step: 512
-  segment_length: 512
+  data_path: ../../../data/maze_data_demo/
+  master_port: "12302"
+  load_model_path: ./checkpoints/pretrain_20240602_small
+  time_step: 2048
+  segment_length: 2048
+  state_dropout: 0.40
+  load_model_parameter_blacklist:
+    - "attn_mask"
 
 demo_config:
-  master_port: "12211"
+  master_port: "12313"
   time_step: 2048
 
   model_config:
-    load_model_path: "[PATH]"
-    autoregressive_threshold: 128
-    autoregressive_interval: 8
+    load_model_path: ./checkpoints/pretrain_20240602_small
+    autoregressive_threshold: 2048
+    autoregressive_interval: 1
     policy:
       T_ini: 1.0
       T_dec: 0.005
@@ -87,14 +88,13 @@ demo_config:
   maze_config:
     scale: 25
     density: 0.36
-    n_landmarks: 10
+    n_landmarks: 8
   rule_config:
     mem_kr: 1.0
   run_model: 0
   run_rule: 1
   run_random: 0
-  test_epochs: 64
+  test_epochs: 1
   write_task: null
   read_task: null
-  write_video: 0
-  output: "[PATH]"
+  output: ./videos

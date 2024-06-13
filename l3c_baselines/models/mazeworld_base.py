@@ -136,11 +136,12 @@ class MazeModelBase(nn.Module):
 
         return lmse_obs, lmse_z, lce_act, cnt
 
-    def inference_step_by_step(self, observations, actions, config, cur_step, device, n_step=1, cache=None, verbose=True):
+    def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
         """
         Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
                observations: s_{tc}, ... s_{t}
                actions: a_{tc}, ..., a_{t-1}
+               T: temperature
         Returns:
             obs_pred: numpy.array [n, W, H, C], s_{t+1}, ..., s_{t+n}
             act_pred: numpy.array [n], a_{t}, ..., a_{t+n-1}
@@ -162,9 +163,6 @@ class MazeModelBase(nn.Module):
             valid_act = torch.from_numpy(acts).int()
             valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
 
-        e_g = min(config.greedy_init + cur_step * config.greedy_increment, config.greedy_max)
-        e_s = 1.0 - e_g
-
         # Update the cache first
         # Only use ground truth
         if(Nobs > 1):
@@ -185,24 +183,14 @@ class MazeModelBase(nn.Module):
                 # Temporal Encoders
                 z_pred, a_pred, _ = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)
                 # Decode Action [B, N_T, action_size]
-                a_pred = self.act_decoder(a_pred)
+                a_pred = self.act_decoder(a_pred, T=T)
 
-                s_action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
-                g_action = torch.argmax(a_pred[:, 0], dim=-1, keepdim=False)
-                eps = random.random()
-                if(eps < e_s):
-                    flag = "S"
-                    true_act = s_action
-                elif(eps < e_s + e_g):
-                    flag = "G"
-                    true_act = g_action
-                else:
-                    flag = "R"
-                    true_act = torch.randint_like(r_action, high=self.action_size)
-                n_act[:, 0] = true_act
-                pred_act_list.append(true_act.squeeze(0).cpu().numpy())
+                action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
+
+                n_act[:, 0] = action
+                pred_act_list.append(action.squeeze(0).cpu().numpy())
                 if(verbose):
-                    print(f"Action: {valid_act[:, -1]}\tRaw Output: {a_pred[:, -1]}\tDecision_Flag: {flag}")
+                    print(f"Action: {valid_act[:, -1]} Raw Output: {a_pred[:, -1]}")
 
                 # Inference Next Observation based on Sampled Action
                 z_pred, a_pred, updated_cache  = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)

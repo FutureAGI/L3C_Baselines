@@ -26,7 +26,8 @@ english_vocab = [';',
     'k', 'l', 'm', 'n', 'o',
     'p', 'q', 'r', 's', 't',
     'u', 'v', 'w', 'x', 'y',
-    'z', ' ', '.', ',', '\n', '\t']
+    'z', ' ', '.', ',', '\n', '-']
+
 math_vocab = [';',
     '1', '2', '3', '4',
     '5', '6', '7', '8',
@@ -52,25 +53,24 @@ class Tokenizer(object):
             output += self.inverse_dict[token]
         return output
 
-def main_epoch(rank, use_gpu, world_size, config, datas):
+def main_epoch(rank, use_gpu, config, datas):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        dist.init_process_group("nccl", rank=rank, world_size=1)
     else:
         device = torch.device('cpu')
-        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+        dist.init_process_group("nccl", rank=rank, world_size=1)
 
     if(config.demo_config.vocab.lower() == "english"):
         print("English Vocabulary Used")
-        T_setting = {0: 1.0}
+        T_setting = {}#{0: 1.0, 27: 1.0, 28: 1.0, 29: 1.0, 30: 1.0, 31: 1.0}
         vocab = english_vocab
     elif(config.demo_config.vocab.lower() == "math"):
         print("Math Vocabulary Used")
         T_setting = {0: 0.8, 13:0.01}
         vocab = math_vocab
     tokenizer = Tokenizer(vocab)
-        
 
     # Create model and move it to GPU with id `gpu`
     model = LMBase(config.model_config)
@@ -83,16 +83,17 @@ def main_epoch(rank, use_gpu, world_size, config, datas):
         model = DDP(model)
 
     # Example dataset and dataloader
-    model = custom_load_model(model, f'{load_model_path}/model.pth', strict_check=False)
+    model = custom_load_model(model, f'{load_model_path}/model.pth', strict_check=True)
 
+    print("\n\nTHE INPUT SAMPLING:\n\n")
+    print(datas)
     print("\n\nTHE OUTPUT SAMPLING:\n\n")
-    for data in datas:
-        model.eval()
-        tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
-        l = 512
-        outputs = model.module.inference_seg(tokens, l, T_default=0.30, T_setting=T_setting)
-        outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
-        print(outputs[-l:])
+    model.eval()
+    tokens = torch.tensor(tokenizer.tokenize(data), dtype=torch.int64, device=device).unsqueeze(0)
+    l = 1024
+    outputs = model.module.inference_seg(tokens, l, T_default=0.30, T_setting=T_setting)
+    outputs = tokenizer.inverse_tokenize(outputs[0].tolist())
+    print(outputs[-l:])
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -102,11 +103,6 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     use_gpu = torch.cuda.is_available()
-    world_size = torch.cuda.device_count() if use_gpu else os.cpu_count()
-    if(use_gpu):
-        print("Use Parallel GPUs: %s" % world_size)
-    else:
-        print("Use Parallel CPUs: %s" % world_size)
 
     config = Configure()
     config.from_yaml(args.configuration)
@@ -121,8 +117,5 @@ if __name__=='__main__':
     os.environ['MASTER_PORT'] = config.demo_config.master_port        # Example port, choose an available port
 
     with open(args.data, 'r') as f:
-        data = f.readlines()
-        mp.spawn(main_epoch,
-                 args=(use_gpu, world_size, config, data),
-                 nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
-                 join=True)
+        data = f.read()
+        main_epoch(0, use_gpu, config, data)

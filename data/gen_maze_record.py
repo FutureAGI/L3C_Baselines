@@ -11,7 +11,7 @@ import argparse
 import multiprocessing
 from l3c.mazeworld import MazeTaskSampler
 from l3c.mazeworld.agents import SmartSLAMAgent
-from numpy import random
+import random
 
 def run_maze_epoch(n=15,
         maze_type="Discrete2D", 
@@ -57,12 +57,15 @@ def run_maze_epoch(n=15,
     reward_list = []
     map_list = []
     interval = 0
-    print(behavior_noise, behavior_memkr)
+
+    behavior_noise_decay = random.random() / max_steps
+    step = 0
 
     while not done:
         label_action = label_agent.step(observation, reward)
         behavior_action = behavior_agent.step(observation, reward)
-        if(random.random() < behavior_noise):
+        true_noise = behavior_noise * (1.0 - behavior_noise_decay * step)
+        if(random.random() < true_noise):
             bahavior_action = random.randint(0,4)
 
         behavior_action_list.append(behavior_action)
@@ -73,6 +76,7 @@ def run_maze_epoch(n=15,
         observation_list.append(observation)
         target_location_list.append(list(maze_env.get_target_location()))
         sum_reward += reward
+        step += 1
 
     print("Finish running, sum reward = %f, steps = %d\n"%(sum_reward, len(observation_list)-1))
 
@@ -87,7 +91,7 @@ def create_directory(directory_path):
         os.makedirs(directory_path)
 
 def dump_maze(work_id, path_name, epoch_ids, n_list, n_landmarks_list, density_list, 
-        label_mem_kr_list, behavior_mem_kr_list, noise_list, 
+        label_configs, behavior_configs, 
         maze_type, max_steps, task_type):
     for idx in epoch_ids:
         seed = int(idx + time.time() + work_id * 65536)
@@ -96,11 +100,10 @@ def dump_maze(work_id, path_name, epoch_ids, n_list, n_landmarks_list, density_l
         n = random.choice(n_list)
         n_landmarks = random.choice(n_landmarks_list)
         density = random.choice(density_list)
-        behavior_mem_kr = random.choice(behavior_mem_kr_list)
-        label_mem_kr = random.choice(label_mem_kr_list)
-        noise = random.choice(noise_list)
+        behavior_mem_kr, behavior_noise = random.choice(behavior_configs)
+        label_mem_kr = random.choice(label_configs)
 
-
+        print(f"Sampled behavior policy: LTM={behavior_mem_kr},epsilon={behavior_noise}; Sampled reference policy: LTM={label_mem_kr}")
         observations, behavior_actions, label_actions, rewards, targets = run_maze_epoch(
                 maze_type=maze_type,
                 max_steps=max_steps,
@@ -108,11 +111,11 @@ def dump_maze(work_id, path_name, epoch_ids, n_list, n_landmarks_list, density_l
                 task_type=task_type,
                 label_memkr = label_mem_kr,
                 behavior_memkr = behavior_mem_kr,
-                behavior_noise = noise,
+                behavior_noise = behavior_noise,
                 density=density,
                 n_landmarks=n_landmarks)
 
-        file_path = f'{path_name}/record-{idx:04d}'
+        file_path = f'{path_name}/record-{idx:06d}'
 
         # Convert observations, actions, and rewards to lmdb format and save file
         # Open the lmdb environment
@@ -133,9 +136,8 @@ if __name__=="__main__":
     parser.add_argument("--scale", type=str, default="9,15,21,25,31,35", help="a list of scales separated with comma to randomly choose")
     parser.add_argument("--density", type=str, default="0.20,0.34,0.36,0.38,0.45", help="density:a list of float")
     parser.add_argument("--landmarks", type=str, default="5,6,7,8,9,10", help="landmarks:a list of number of landmarks")
-    parser.add_argument("--label_mem_kr", type=str, default="1.0", help="random select memory keep ratio from this list")
-    parser.add_argument("--behavior_mem_kr", type=str, default="0.25,0.50,1.0", help="random select memory keep ratio from this list")
-    parser.add_argument("--behavior_noise", type=str, default="0.0,0.20,0.40,0.60,0.80", help="random select memory keep ratio from this list")
+    parser.add_argument('--reference_policy_config', nargs='*', help="List of all LTM ratio, randomly select one for generating reference policy, format: ltm1, ltm2, ...")
+    parser.add_argument('--behavior_policy_config', nargs='*', help="List of all LTM ratio and epsilons, randomly select one for generating behavior policy, format ltm1,eps1 ltm2,eps2 ...")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
     parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
@@ -144,9 +146,15 @@ if __name__=="__main__":
     density_list = list(map(float, args.density.split(",")))
     n_list = list(map(int, args.scale.split(",")))
     n_landmarks_list = list(map(int, args.landmarks.split(",")))
-    label_mem_kr_list = list(map(float, args.label_mem_kr.split(",")))
-    behavior_mem_kr_list = list(map(float, args.behavior_mem_kr.split(",")))
-    behavior_noise_list = list(map(float, args.behavior_noise.split(",")))
+
+    behavior_configs = []
+    label_configs = []
+
+    for val in args.reference_policy_config:
+        label_configs.append(float(val))
+    for val in args.behavior_policy_config:
+        ltm, eps = val.split(",")
+        behavior_configs.append((float(ltm), float(eps)))
 
     worker_splits = args.epochs / args.workers + 1.0e-6
     processes = []
@@ -159,7 +167,7 @@ if __name__=="__main__":
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_maze, 
                 args=(worker_id, args.output_path, range(n_b, n_e), n_list, n_landmarks_list, density_list, 
-                label_mem_kr_list, behavior_mem_kr_list, behavior_noise_list,
+                label_configs, behavior_configs,
                 args.maze_type, args.max_steps, args.task_type))
         processes.append(process)
         process.start()

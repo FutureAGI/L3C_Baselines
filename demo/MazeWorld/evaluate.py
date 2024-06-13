@@ -31,19 +31,22 @@ from utils import Configure
 from utils import custom_load_model
 
 
-def postprocess_image(img, scale_factor, texts):
+def postprocess_image(img, cell_size, scale_factor, actions):
+    action_texts = ["Stop", "Turn-Left", "Turn Right", "Backward", "Forward"]
+    def action_text(action):
+        return "Actions:" + action_texts[action]
     w, h, c = img.shape
     W = w * scale_factor
     H = h * scale_factor
     img_out = cv2.resize(img, (H, W))
-    for pos, text in texts:
-        reshaped_pos = (pos[0] * scale_factor, pos[1] * scale_factor)
-        img_out = cv2.putText(img_out, text, reshaped_pos, cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
+    offset = cell_size * scale_factor
+    for i, action in enumerate(actions):
+        p_x = int(offset * (i + 0.80))
+        p_y = int(offset * 0.90)
+        text = action_text(action)
+        img_out = cv2.putText(img_out, text, (p_x, p_y), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 0), thickness=2, lineType=cv2.LINE_AA)
     return img_out
 
-action_texts = ["STOP", "TURN LEFT", "TURN RIGHT", "BACKWARD", "FORWARD"]
-def action_text(action):
-    return "Actions:" + action_texts[action]
 
 def string_mean_var(mean, var):
     string=""
@@ -62,12 +65,16 @@ def reward_smoothing(rewards, kernel_size=192):
     data_convolved = numpy.convolve(numpy.array(rewards) + 0.01, gaussian_kernel(), mode='same') - 0.01
     return data_convolved
 
-def model_epoch(maze_env, task, model, policy_config, device, video_writer=None, video_text=True):
+def model_epoch(maze_env, task, model, policy_config, device, max_step, 
+        autoregressive_threshold=10000000, autoregressive_interval=1, 
+        video_writer=None, video_text=True):
     # Example training loop
     maze_env.set_task(task)
     obs = maze_env.reset()
     obs_arr = [obs]
+    pred_obs_arr = []
     act_arr = []
+
     rew_arr = []
     acc_rew_arr = []
 
@@ -75,56 +82,44 @@ def model_epoch(maze_env, task, model, policy_config, device, video_writer=None,
     next_rew_gt = 0.0
 
     done = False
-    step = 0
+    step = 1
     cache = None
     act_tor = None
+    last_obs = obs
+    temperature = policy_config.T_ini
     while not done:
-        step += 1
-        obs_tor = torch.from_numpy(numpy.array(obs_arr[-1])).float().to(device).unsqueeze(0)
-        obs_tor = obs_tor.permute(0, 3, 1, 2).unsqueeze(1)
-        with torch.no_grad():
-            rec_obs, next_obs, next_act, cache = model.inference_step_by_step(obs_tor, policy_config, cache=cache)
-
-            if(step > 10):
-                z_rec, z_sig = model.vae(obs_tor)
-                #print("z_rec", z_rec)
-        
-        next_action = int(next_act.squeeze().item())
-
-        agent_action = agent.step(obs_arr[-1], next_rew_gt)
-        print("agent decision:", agent_action)
-
-        next_obs_gt, next_rew_gt, done, _ = maze_env.step(next_action)
-        loc_map = maze_env.maze_core.get_loc_map(3)
-        obs_arr.append(next_obs_gt)
-        rew_arr.append(next_rew_gt)
-        if(len(acc_rew_arr) < 1):
-            acc_rew_arr.append(max(0.0, next_rew_gt + 0.01))
+        if(step < autoregressive_threshold):
+            n_step = 1
         else:
-            acc_rew_arr.append(acc_rew_arr[-1] + max(0.0, next_rew_gt + 0.01))
-        act_arr.append(next_action)
+            n_step = autoregressive_interval
+        step += n_step
+        if(step >= max_step):
+            break
 
-        rec_obs_pred = rec_obs.squeeze().permute(1, 2, 0).cpu().numpy()
-        next_obs_pred = next_obs.squeeze().permute(1, 2, 0).cpu().numpy()
+        temperature = max(temperature * (1.0 - policy_config.T_dec), policy_config.T_min)
+        pred_obss, pred_acts, cache = model.inference_step_by_step(obs_arr, act_arr, temperature, step, device, n_step=n_step, cache=cache)
 
-        obs_err = numpy.sqrt(numpy.mean((next_obs_pred - next_obs_gt) ** 2))
-        obs_err_rec = numpy.sqrt(numpy.mean((rec_obs_pred - obs_arr[-2]) ** 2))
-        loc_map = cv2.resize(loc_map, (128, 128), interpolation=cv2.INTER_NEAREST)
+        obs_arr = []
+        act_arr = pred_acts[1:]
+        for act in pred_acts:
+            next_obs_gt, next_rew_gt, done, _ = maze_env.step(act)
+            obs_arr.append(next_obs_gt)
+            rew_arr.append(next_rew_gt)
+            if(len(acc_rew_arr) < 1):
+                acc_rew_arr.append(max(0.0, next_rew_gt + 0.01))
+            else:
+                acc_rew_arr.append(acc_rew_arr[-1] + max(0.0, next_rew_gt + 0.01))
 
         if(video_writer is not None):
-            img = numpy.transpose(numpy.concatenate([obs_arr[-2], rec_obs_pred, obs_arr[-1], next_obs_pred], axis=0), (1, 0, 2))
+            img_pred = numpy.concatenate([last_obs] + pred_obss, axis=0)
+            img_gt = numpy.concatenate([last_obs] + obs_arr, axis=0)
+            img_syn = numpy.transpose(numpy.concatenate((img_gt, img_pred), axis=1), (1, 0, 2))
             if(video_text):
-                img = postprocess_image(img, 3, (
-                    ((10, 10), "t (Ground Truth)"),
-                    ((110, 110), action_text(act_arr[-1])),
-                    ((138, 10), "t (VAE Reconstruction)"),
-                    ((266, 10), "t+1 (Ground Truth)"),
-                    ((388, 10), "t+1 (Predict)"),
-                    ))
+                img_syn = postprocess_image(img_syn, 128, 3, pred_acts)
             
-            video_writer.add_image(img)
-
-            print("Step: %d, Reward: %f, Reward Summary: %f, Observation Prediction Error: %f, Reconstruction Error: %f" % (step, next_rew_gt, numpy.sum(rew_arr), obs_err, obs_err_rec))
+            video_writer.add_image(img_syn)
+            print("Step: %d, Reward: %f, Reward Summary: %f" % (step, next_rew_gt, numpy.sum(rew_arr)))
+        last_obs = obs_arr[-1]
 
         sys.stdout.flush()
     return reward_smoothing(rew_arr), acc_rew_arr
@@ -212,7 +207,7 @@ if __name__=='__main__':
             task_dict = task._asdict()
             tasks.append(task_dict)
         print(f"Writing tasks to {demo_config.write_task} and quit")
-        with open(config.write_task, 'wb') as fw:
+        with open(demo_config.write_task, 'wb') as fw:
             pickle.dump(tasks, fw)
         sys.exit(0)
     elif(demo_config.read_task is not None):
@@ -241,7 +236,8 @@ if __name__=='__main__':
             device = torch.device('cpu')
 
         load_model_path = demo_config.model_config.load_model_path
-        model = custom_load_model(DP(model), f'{load_model_path}/model.pth', strict_check=False)
+        load_model_parameter_blacklist = demo_config.model_config.load_model_parameter_blacklist
+        model = custom_load_model(DP(model), f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=True)
 
         model = model.module.to(device)
 
@@ -261,8 +257,14 @@ if __name__=='__main__':
     # Go across all tasks and perform evaluation
     for idx, task in enumerate(tasks):
         if(run_model):
-            video_writer = VideoWriter(f'{demo_config.output}/{idx}/', "demo", window_size=(1536, 384))
-            rewards, acc_rewards = model_epoch(maze_env, task, model, config.demo_config.policy, device, video_writer, video_text=True)
+            n_step = demo_config.model_config.autoregressive_interval
+            img_size = 384
+            video_writer = VideoWriter(f'{demo_config.output}/{idx}/', "demo", window_size=(n_step * img_size, 2 * img_size))
+            rewards, acc_rewards = model_epoch(maze_env, task, model, demo_config.model_config.policy, device, demo_config.time_step,
+                    video_writer=video_writer, 
+                    video_text=True, 
+                    autoregressive_threshold=demo_config.model_config.autoregressive_threshold, 
+                    autoregressive_interval=demo_config.model_config.autoregressive_interval)
             reward_model.append(rewards)
             acc_reward_model.append(acc_rewards)
             maze_env.save_trajectory(f'{demo_config.output}/{idx}/traj_model_agent.jpg')
