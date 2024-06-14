@@ -133,3 +133,17 @@ class PrefetchDataLoader(NaiveDataLoader):
                 if w.is_alive():  # manually terminate worker if all else fails
                     w.terminate()
     
+def segment_iterator(seg_len, device, *args):
+    """
+    Input shape: [Batch, Length, *]
+    Output: list of [Batch, seg_len, *]
+    """
+    full_len = args[0].shape[1]
+    seg_num = (full_len - 1) // seg_len + 1
+    for seg_id in range(seg_num):
+        res = []
+        b = seg_id * seg_len
+        e = min(b + seg_len, full_len)
+        for arg in args:
+            res.append(arg[:, b:e])
+        yield tuple(res)

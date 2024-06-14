@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
-from dataloader import MazeDataSet, PrefetchDataLoader
+from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
 from utils import Configure
@@ -99,6 +99,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     save_model_path = train_config.save_model_path
     eval_interval = train_config.evaluate_epochs
 
+    segment_length = train_config.segment_length
+
     vae_scheduler.step(train_config.vae_start_step)
     causal_scheduler.step(train_config.causal_start_step)
 
@@ -117,65 +119,68 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     def vae_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
-            obs, bacts, lacts, rews, targets = batch
-            obs = obs.to(device)
-            obs = obs.permute(0, 1, 4, 2, 3)
-            vae_optimizer.zero_grad()
+            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
+                obs = obs.permute(0, 1, 4, 2, 3)
+                vae_optimizer.zero_grad()
 
-            with autocast(dtype=torch.float16, enabled=use_amp):
-                vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
+                with autocast(dtype=torch.float16, enabled=use_amp):
+                    vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
 
-            scaler.scale(vae_loss).backward()
-            clip_grad_norm_(model.module.parameters(), 1.0)
-            scaler.step(vae_optimizer)
-            scaler.update()
+                scaler.scale(vae_loss).backward()
+                clip_grad_norm_(model.module.parameters(), 1.0)
+                scaler.step(vae_optimizer)
+                scaler.update()
 
-            vae_scheduler.step()
-            sigma_scheduler.step()
-            lambda_scheduler.step()
+                vae_scheduler.step()
+                sigma_scheduler.step()
+                lambda_scheduler.step()
 
-            if(main):
-                percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][VAE ROUND] Iteration: %s; Hyperparameter: sigma:%f, lambda:%f; LearningRate: %f Reconstruction Loss: %.04f" % 
-                        (rid, percentage, batch_idx, sigma_scheduler(), lambda_scheduler(), vae_scheduler.get_last_lr()[0], float(vae_loss.detach().cpu().numpy())))
-            sys.stdout.flush()
+                if(main):
+                    percentage = (batch_idx + 1) / total_iteration * 100
+                    lr = vae_scheduler.get_last_lr()[0]
+                    lrec = float(vae_loss.detach().cpu().numpy())
+                    print(f"Epoch: {rid} [ {percentage} %% ][VAE ROUND] Iteration: {batch_idx} Segment: {sub_idx}; " +
+                                f"Hyperparameter: sigma:{sigma_scheduler()}, lambda:{lambda_scheduler()}; " +
+                                f"LearningRate: {lr} Reconstruction Loss: {lrec}")
+                sys.stdout.flush()
 
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            obs, bacts, lacts, rews, targets = batch
-            obs = obs.to(device)
-            obs = obs.permute(0, 1, 4, 2, 3)
-            lacts = lacts.to(device)
-            bacts = bacts.to(device)
-            targets = targets.to(device)
+            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
+                obs = obs.permute(0, 1, 4, 2, 3)
+                print(obs.shape, bacts.shape, lacts.shape, rews.shape, targets.shape)
+                print(obs.dtype, bacts.dtype, lacts.dtype, rews.dtype, targets.dtype)
 
-            causal_optimizer.zero_grad()
-            with autocast(dtype=torch.float16, enabled=use_amp):
-                lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.15)
-                causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
+                causal_optimizer.zero_grad()
+                with autocast(dtype=torch.float16, enabled=use_amp):
+                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20)
+                    causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
 
-            scaler.scale(causal_loss).backward()
-            clip_grad_norm_(model.module.parameters(), 1.0)
-            scaler.step(causal_optimizer)
-            scaler.update()
+                scaler.scale(causal_loss).backward()
+                clip_grad_norm_(model.module.parameters(), 1.0)
+                scaler.step(causal_optimizer)
+                scaler.update()
 
-            causal_optimizer.step()
-            causal_scheduler.step()
+                causal_optimizer.step()
+                causal_scheduler.step()
 
-            if(main):
-                percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; LearningRate:%f; Future Prediction Image: %s; Latent %s; Action Cross Entropy: %s;" % 
-                        (rid, percentage, batch_idx, causal_scheduler.get_last_lr()[0],
-                            float(lobs.detach().cpu().numpy()), float(lz.detach().cpu().numpy()), float(lact.detach().cpu().numpy()))) 
-                if(acc_iter > max_save_iterations and max_save_iterations > 0):
-                    acc_iter = 0
-                    print("Check current validity and save model for safe...")
-                    check_model_validity(model.module)
-                    mod_path, _, _ = model_path(save_model_path, epoch_id)
-                    torch.save(model.state_dict(), mod_path)
+                if(main):
+                    percentage = (batch_idx + 1) / total_iteration * 100
+                    lr = causal_scheduler.get_last_lr()[0]
+                    fobs = float(lobs.detach().cpu().numpy())
+                    fz = float(lz.detach().cpu().numpy())
+                    fact = float(lact.detach().cpu().numpy())
+                    print(f"Epoch: {rid} [ {percentage} %% ][CAUSAL] Iteration: {batch_idx} Segment: {sub_idx}; " +
+                                f"Future Prediction Image: {fobs}; Latent: {fz}; Action CE: {fact}")
+                    if(acc_iter > max_save_iterations and max_save_iterations > 0 and sub_idx < 1):
+                        acc_iter = 0
+                        print("Check current validity and save model for safe...")
+                        check_model_validity(model.module)
+                        mod_path, _, _ = model_path(save_model_path, epoch_id)
+                        torch.save(model.state_dict(), mod_path)
 
     # Example training loop
     vae_stop_epoch = train_config.epoch_vae_stop
@@ -206,9 +211,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     batch_size = config.batch_size
     data_path = config.data_path
     time_step = config.time_step
+    segment_length = config.segment_length
 
     dataset = MazeDataSet(data_path, time_step, verbose=main)
-
     dataloader = PrefetchDataLoader(dataset, batch_size=batch_size)
 
     results = []
@@ -217,47 +222,38 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
     for batch_idx, batch in enumerate(dataloader):
-        obs,bacts,lacts,rews,targets = batch
-        obs = obs.to(device)
-        obs = obs.permute(0, 1, 4, 2, 3)
-        bacts = bacts.to(device)
-        lacts = lacts.to(device)
-        targets = targets.to(device)
-        length = lacts.shape[0] * lacts.shape[1]
+        for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step, segment_length, device, *batch):
+            obs = obs.permute(0, 1, 4, 2, 3)
+            length = lacts.shape[0] * lacts.shape[1]
 
-        with torch.no_grad():
-            #lrec = model.module.vae_loss(obs)
-            lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
+            with torch.no_grad():
+                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
 
-            lobs = cnt * lobs
-            lact = cnt * lact
-            lat = cnt * lat
+                lobs = cnt * lobs
+                lact = cnt * lact
+                lat = cnt * lat
 
-        #if torch.isinf(lrec).any() or torch.isnan(lrec).any():
-        #    print(f"[WARNING] {device} reconstruction loss = NAN/INF, {lrec}")
-        #    lrec.fill_(0.0)
-        if torch.isinf(lobs).any() or torch.isnan(lobs).any():
-            print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
-            lobs.fill_(0.0)
-        if torch.isinf(lact).any() or torch.isnan(lact).any():
-            print("[WARNING] {device} action loss = NAN/INF, {lact}")
-            lact.fill_(0.0)
-        if torch.isinf(lat).any() or torch.isnan(lat).any():
-            print("[WARNING] {device} action loss = NAN/INF, {lat}")
-            lat.fill_(0.0)
+            if torch.isinf(lobs).any() or torch.isnan(lobs).any():
+                print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
+                lobs.fill_(0.0)
+            if torch.isinf(lact).any() or torch.isnan(lact).any():
+                print("[WARNING] {device} action loss = NAN/INF, {lact}")
+                lact.fill_(0.0)
+            if torch.isinf(lat).any() or torch.isnan(lat).any():
+                print("[WARNING] {device} action loss = NAN/INF, {lat}")
+                lat.fill_(0.0)
 
-        #dist.all_reduce(lrec.data)
-        dist.all_reduce(lobs.data)
-        dist.all_reduce(lact.data)
-        dist.all_reduce(lat.data)
-        dist.all_reduce(cnt.data)
+            #dist.all_reduce(lrec.data)
+            dist.all_reduce(lobs.data)
+            dist.all_reduce(lact.data)
+            dist.all_reduce(lat.data)
+            dist.all_reduce(cnt.data)
 
-        #results.append((lrec.cpu(), lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
-        results.append((lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
+            results.append((lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
 
-        if(main):
-            show_bar((batch_idx + 1) / all_length, 100)
-            sys.stdout.flush()
+            if(main):
+                show_bar((batch_idx + 1) / all_length, 100)
+                sys.stdout.flush()
 
     #sum_lrec = 0
     sum_lobs = 0
@@ -271,7 +267,6 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         sum_lat += lat
         sum_cnt += cnt
     sum_cnt = max(1, sum_cnt)
-    #sum_lrec /= sum_cnt
     sum_lobs /= sum_cnt
     sum_lact /= sum_cnt
     sum_lat /= sum_cnt
