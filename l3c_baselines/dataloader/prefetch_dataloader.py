@@ -109,6 +109,9 @@ class PrefetchDataLoader(NaiveDataLoader):
                     (index, data) = self.output_queue.get(timeout=0)
                 except queue.Empty:  # output queue empty, keep trying
                     continue
+                except Exception as e:
+                    continue
+                    print(f"unexpected exception:{e}")
                 if index == self.index:  # found our item, ready to return
                     item = data
                     break
