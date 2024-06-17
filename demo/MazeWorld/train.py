@@ -74,8 +74,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     vae_dataset = MazeDataSet(data_path, time_step_vae, verbose=main)
     causal_dataset = MazeDataSet(data_path, time_step_causal, verbose=main)
 
-    vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae)
-    causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal)
+    vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae, rank=rank, world_size=world_size)
+    causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
@@ -116,9 +116,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     use_amp = train_config.use_amp
     scaler = GradScaler()
 
-    def vae_round(rid, dataloader):
+    def vae_round(rid, dataloader, max_save_iteartions=-1):
+        acc_iter = 0
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
+            acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
@@ -143,6 +145,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                                 f"Hyperparameter: sigma:{sigma_scheduler()}, lambda:{lambda_scheduler()}; " +
                                 f"LearningRate: {lr} Reconstruction Loss: {lrec}")
                 sys.stdout.flush()
+
+            if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
+                acc_iter = 0
+                print("Check current validity and save model for safe...")
+                check_model_validity(model.module)
+                mod_path, _, _ = model_path(save_model_path, epoch_id)
+                torch.save(model.state_dict(), mod_path)
 
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
@@ -175,12 +184,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fact = float(lact.detach().cpu().numpy())
                     print(f"Epoch: {rid} [ {percentage} %% ][CAUSAL] Iteration: {batch_idx} Segment: {sub_idx}; " +
                                 f"Future Prediction Image: {fobs}; Latent: {fz}; Action CE: {fact}")
-                    if(acc_iter > max_save_iterations and max_save_iterations > 0 and sub_idx < 1):
-                        acc_iter = 0
-                        print("Check current validity and save model for safe...")
-                        check_model_validity(model.module)
-                        mod_path, _, _ = model_path(save_model_path, epoch_id)
-                        torch.save(model.state_dict(), mod_path)
+            if(acc_iter > max_save_iterations and max_save_iterations > 0):
+                acc_iter = 0
+                print("Check current validity and save model for safe...")
+                check_model_validity(model.module)
+                mod_path, _, _ = model_path(save_model_path, epoch_id)
+                torch.save(model.state_dict(), mod_path)
 
     # Example training loop
     vae_stop_epoch = train_config.epoch_vae_stop
@@ -214,7 +223,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     segment_length = config.segment_length
 
     dataset = MazeDataSet(data_path, time_step, verbose=main)
-    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size)
+    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size, rank=rank, world_size=world_size)
 
     results = []
     all_length = len(dataloader)

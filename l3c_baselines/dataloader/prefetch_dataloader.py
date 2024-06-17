@@ -10,12 +10,12 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
 
 class NaiveDataLoader(DataLoader):
-    def __init__(self, dataset, rank=0, world_rank=1, batch_size=4, collate_fn=torch_collate):
+    def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):
         self.dataset = dataset
         self.batch_size = batch_size
         self.collate_fn = collate_fn
         self.rank = rank
-        self.world_rank = world_rank
+        self.world_size = world_size
         self.index = 0
 
     def __iter__(self):
@@ -26,17 +26,17 @@ class NaiveDataLoader(DataLoader):
         if self.index >= len(self.dataset):
             # stop iteration once index is out of bounds
             raise StopIteration
-        left_iter = (len(self.dataset) - self.index - 1) // self.world_rank + 1
+        left_iter = (len(self.dataset) - self.index - 1) // self.world_size + 1
         batch_size = min(left_iter, self.batch_size)
         return self.collate_fn([self.get() for _ in range(batch_size)])
 
     def get(self):
         item = self.dataset[self.index]
-        self.index += self.world_rank
+        self.index += self.world_size
         return item
 
     def __len__(self):
-        return (len(self.dataset) - 1) // (self.batch_size * self.world_rank) + 1
+        return (len(self.dataset) - 1) // (self.batch_size * self.world_size) + 1
         
 
 def worker_fn(dataset, index_queue, output_queue):
@@ -54,7 +54,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         self,
         dataset,
         rank=0,
-        world_rank=1,
+        world_size=1,
         batch_size=4,
         num_workers=2,
         prefetch_batches=2,
@@ -63,7 +63,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         super().__init__(dataset, 
             batch_size=batch_size, 
             rank=rank, 
-            world_rank=world_rank, 
+            world_size=world_size, 
             collate_fn=collate_fn)
 
         self.num_workers = num_workers
@@ -91,12 +91,12 @@ class PrefetchDataLoader(NaiveDataLoader):
         while (
             self.prefetch_index < len(self.dataset)
             and self.prefetch_index
-            < self.index + 2 * self.num_workers * self.batch_size * self.world_rank
+            < self.index + 2 * self.num_workers * self.batch_size * self.world_size
         ):
             # if the prefetch_index hasn't reached the end of the dataset
             # and it is not 2 batches ahead, add indexes to the index queues
             self.index_queues[next(self.worker_cycle)].put(self.prefetch_index)
-            self.prefetch_index += self.world_rank
+            self.prefetch_index += self.world_size
 
     def get(self):
         self.prefetch()
@@ -115,7 +115,7 @@ class PrefetchDataLoader(NaiveDataLoader):
                 else:  # item isn't the one we want, cache for later
                     self.cache[index] = data
 
-        self.index += self.world_rank
+        self.index += self.world_size
         return item
 
     def __iter__(self):
