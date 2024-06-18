@@ -141,9 +141,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     percentage = (batch_idx + 1) / total_iteration * 100
                     lr = vae_scheduler.get_last_lr()[0]
                     lrec = float(vae_loss.detach().cpu().numpy())
-                    print(f"Epoch: {rid} [ {percentage} %% ][VAE ROUND] Iteration: {batch_idx} Segment: {sub_idx}; " +
-                                f"Hyperparameter: sigma:{sigma_scheduler()}, lambda:{lambda_scheduler()}; " +
-                                f"LearningRate: {lr} Reconstruction Loss: {lrec}")
+                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][VAE ROUND] Iteration: {batch_idx:05d} Segment: {sub_idx:02d}; " +
+                                f"Hyperparameter: sigma:{sigma_scheduler():.3e}, lambda:{lambda_scheduler():.3e}; " +
+                                f"LearningRate: {lr:.3e} Reconstruction Loss: {lrec:.3e}")
                 sys.stdout.flush()
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
@@ -182,8 +182,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fobs = float(lobs.detach().cpu().numpy())
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
-                    print(f"Epoch: {rid} [ {percentage} %% ][CAUSAL] Iteration: {batch_idx} Segment: {sub_idx}; " +
-                                f"Future Prediction Image: {fobs}; Latent: {fz}; Action CE: {fact}")
+                    print(f"Epoch: {rid:.03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:.03d} Segment: {sub_idx:.02d}; " +
+                                f"Future Prediction Image: {fobs:.3e}; Latent: {fz:.3e}; Action CE: {fact:.3e}")
             if(acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
                 print("Check current validity and save model for safe...")
