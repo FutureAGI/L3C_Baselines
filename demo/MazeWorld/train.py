@@ -160,8 +160,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
-                print(obs.shape, bacts.shape, lacts.shape, rews.shape, targets.shape)
-                print(obs.dtype, bacts.dtype, lacts.dtype, rews.dtype, targets.dtype)
 
                 causal_optimizer.zero_grad()
                 with autocast(dtype=torch.float16, enabled=use_amp):
