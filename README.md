@@ -15,5 +15,4 @@ To evaluate a model run
 cd L3C_Baselines/demo/xxx
 python evaluate.py configuration.yaml --configs key1=value1 key2=value2 ...
 ```
-
-Go to L3C_Baselines/data to generate the datasets directly by specifying some configurations
+Go to L3C_Baselines/data to generate the datasets directly by specifying the configurations
