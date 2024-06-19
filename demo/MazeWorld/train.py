@@ -144,7 +144,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][VAE ROUND] Iteration: {batch_idx:05d} Segment: {sub_idx:02d}; " +
                                 f"Hyperparameter: sigma:{sigma_scheduler():.3e}, lambda:{lambda_scheduler():.3e}; " +
                                 f"LearningRate: {lr:.3e} Reconstruction Loss: {lrec:.3e}")
-                sys.stdout.flush()
+                    sys.stdout.flush()
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
@@ -182,9 +182,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fact = float(lact.detach().cpu().numpy())
                     print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d}; LearningRate: {lr:.3f}" +
                                 f"Future Prediction Image: {fobs:.3e}; Latent: {fz:.3e}; Action CE: {fact:.3e}")
+                    sys.stdout.flush()
+
             if(acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
                 print("Check current validity and save model for safe...")
+                sys.stdout.flush()
                 check_model_validity(model.module)
                 mod_path, _, _ = model_path(save_model_path, epoch_id)
                 torch.save(model.state_dict(), mod_path)
