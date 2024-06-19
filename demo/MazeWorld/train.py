@@ -180,7 +180,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fobs = float(lobs.detach().cpu().numpy())
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
-                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d}; LearningRate: {lr:.3f}" +
+                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d}; LearningRate: {lr:.3e}" +
                                 f"Future Prediction Image: {fobs:.3e}; Latent: {fz:.3e}; Action CE: {fact:.3e}")
                     sys.stdout.flush()
 
