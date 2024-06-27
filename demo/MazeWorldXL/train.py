@@ -16,7 +16,7 @@ from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
 from utils import Configure
-from models import MazeModelBase
+from models import MazeModelXL
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -41,7 +41,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModelBase(config.model_config)
+    model = MazeModelXL(config.model_config)
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters decision transformer: ", count_parameters(model.decformer))
@@ -141,8 +141,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     percentage = (batch_idx + 1) / total_iteration * 100
                     lr = vae_scheduler.get_last_lr()[0]
                     lrec = float(vae_loss.detach().cpu().numpy())
-                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][VAE ROUND] Iteration: {batch_idx:05d} Segment: {sub_idx:02d}; " +
-                                f"Hyperparameter: sigma:{sigma_scheduler():.3e}, lambda:{lambda_scheduler():.3e}; " +
+                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][VAE ROUND] Iteration: {batch_idx:05d} Segment: {sub_idx:02d} " +
+                                f"Hyperparameter: sigma:{sigma_scheduler():.3e}, lambda:{lambda_scheduler():.3e} " +
                                 f"LearningRate: {lr:.3e} Reconstruction Loss: {lrec:.3e}")
                     sys.stdout.flush()
 
@@ -158,6 +158,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
+            model.module.init_mem()
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
@@ -180,8 +181,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fobs = float(lobs.detach().cpu().numpy())
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
-                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d}; LearningRate: {lr:.3e}" +
-                                f"Future Prediction Image: {fobs:.3e}; Latent: {fz:.3e}; Action CE: {fact:.3e}")
+                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d} LearningRate: {lr:.3e} " +
+                                f"Future Prediction Image: {fobs:.3e} Latent: {fz:.3e} Action CE: {fact:.3e}")
                     sys.stdout.flush()
 
             if(acc_iter > max_save_iterations and max_save_iterations > 0):
@@ -282,7 +283,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     sum_lat /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; [Loss] FuturePrediction Image: %s; WorldModel Latent: %s; Action Cross Entropy: %s;" % 
+        print("\n[EVALUATION] Epochs: %s; [Loss] FuturePrediction Image: %s WorldModel Latent: %s Action Cross Entropy: %s" % 
                 (epoch_id, sum_lobs, sum_lat, sum_lact))
         sys.stdout.flush()
 

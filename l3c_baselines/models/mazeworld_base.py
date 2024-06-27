@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, LatentDecoder, VAE
-from modules import DecisionTransformer
+from modules import CausalDecisionModel
 from modules import DiffusionLayers
 from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
 
@@ -32,11 +32,12 @@ class MazeModelBase(nn.Module):
 
         self.vae = VAE(self.latent_size, self.encoder, self.decoder) 
 
-        self.decformer = DecisionTransformer(
+        self.decformer = CausalDecisionModel(
                 self.latent_size, self.action_size, config.n_transformer_block, 
                 self.hidden_size, config.transformer_nhead, config.max_time_step, 
                 checkpoints_density=checkpoints_density,
-                context_window=config.context_window)
+                context_window=config.context_window, 
+                model_type = config.causal_modeling)
 
         self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
         self.wm_type = config.worldmodel_type
