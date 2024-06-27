@@ -34,7 +34,7 @@ class VideoWriter(object):
         self.ind += 1
         img_out = self.cv2.resize(image, self.window_size)
         img_write = image.clip(0, 255).astype(np.uint8)
-        self.cv2.imwrite(f'{self.image_dir}/frame_{self.ind:04d}.jpg', img_write)
+        self.cv2.imwrite(f'{self.image_dir}/frame_{self.ind:06d}.jpg', img_write)
         self.video_writer.write(img_write)
 
     def clear(self):

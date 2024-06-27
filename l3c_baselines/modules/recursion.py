@@ -10,10 +10,13 @@ class SimpleLSTM(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
 
-    def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        output = self.fc(lstm_out[:, -1, :]) 
-        return output
+    def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
+        if(cache is None):
+            lstm_out, new_cache = self.lstm(src)
+        else:
+            lstm_out, new_cache = self.lstm(src, cache)
+        output = self.fc(lstm_out)
+        return output, new_cache
 
 class PRNNCell(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -36,6 +39,7 @@ class PRNNCell(nn.Module):
 
         # 初始化参数
         self.reset_parameters()
+        self.alpha = 1.0e-3
 
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.Wih_a)
@@ -44,13 +48,16 @@ class PRNNCell(nn.Module):
         nn.init.xavier_uniform_(self.Wih_d)
         nn.init.zeros_(self.bih)
 
-    def init_memories(self, batch_size):
-        wih = torch.randn(batch_size, self.hidden_size, self.input_size + self.hidden_size)
+    def init_memories(self, batch_size, device):
+        wih = torch.zeros(batch_size, self.hidden_size, self.input_size + self.hidden_size)
         h = torch.zeros(batch_size, self.hidden_size)
-        return h, wih
+        return h.to(device), wih.to(device)
 
     def forward(self, inputs, memories=None):
-        hidden, wih = memories
+        if(memories is not None):
+            hidden, wih = memories
+        else:
+            hidden, wih = self.init_memories(inputs.shape[0], inputs.device)
 
         x = torch.cat((inputs, hidden), 1)
 
@@ -63,11 +70,10 @@ class PRNNCell(nn.Module):
         y = new_hidden.unsqueeze(2)
         y_ = torch.ones_like(y).to(inputs.device)
 
-        print(torch.bmm(y, x).shape, self.Wih_a.shape)
-        wih = wih + torch.bmm(y, x) * self.Wih_a +\
-                torch.bmm(y_, x) * self.Wih_b +\
-                torch.bmm(y, x_) * self.Wih_c +\
-                torch.bmm(y_, x_) * self.Wih_d
+        wih = wih + self.alpha * (torch.bmm(y, x) * self.Wih_a +
+                torch.bmm(y_, x) * self.Wih_b +
+                torch.bmm(y, x_) * self.Wih_c +
+                torch.bmm(y_, x_) * self.Wih_d)
 
         return new_hidden, wih
 
@@ -78,14 +84,18 @@ class PRNN(nn.Module):
         self.prnn_cell = PRNNCell(input_size, hidden_size) 
         self.fc = nn.Linear(hidden_size, output_size)
 
-    def forward(self, x):
-        h, W = self.prnn_cell.init_memories(x.shape[0])
+    def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
+        if(cache is None):
+            h, W = self.prnn_cell.init_memories(src.shape[0], src.device)
+        else:
+            h, W = cache
         hiddens = []
-        for i in range(x.shape[1]):
-            h, W = self.prnn_cell(x[:, i], (h, W))
+        for i in range(src.shape[1]):
+            h, W = self.prnn_cell(src[:, i], (h, W))
             hiddens.append(h.unsqueeze(1))
         outputs = self.fc(torch.cat(hiddens, dim=1))
-        return outputs, (h, W)
+        new_cache = (h, W)
+        return outputs, new_cache
 
 if __name__=='__main__':
     inputs = torch.randn(4, 8, 64)

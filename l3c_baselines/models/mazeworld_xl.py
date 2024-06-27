@@ -9,9 +9,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, LatentDecoder, VAE
-from modules import DecisionTransformer
 from modules import DiffusionLayers
-from mazeworld_base import MazeModelBase
+from .mazeworld_base import MazeModelBase
 from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
 
 class MazeModelXL(MazeModelBase):
@@ -26,7 +25,7 @@ class MazeModelXL(MazeModelBase):
     def merge_mem(self, cache):
         if(cache is not None and self.memory is not None):
             new_mem = []
-            for mem, ca in zip(memory, cache):
+            for mem, ca in zip(self.memory, cache):
                 new_mem.append(torch.cat((mem, ca), dim=1))
         elif(self.memory is not None):
             new_mem = self.memory
@@ -38,7 +37,7 @@ class MazeModelXL(MazeModelBase):
 
     def update_mem(self, cache):
         memories = self.merge_mem(cache)
-        if(memories[0].shape[1] > self.mem_len):
+        if(memories[0].shape[1] > 2 * self.mem_len):
             new_mem = []
             for memory in memories:
                 new_mem.append(memory[:, -self.mem_len:])
@@ -83,7 +82,14 @@ class MazeModelXL(MazeModelBase):
         return lmse_obs, lmse_z, lce_act, cnt
 
     def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
-        pos_obs_list, pred_act_list, valid_cache = super().inference_step_by_step(observations, actions, T, cur_step, device, n_step=n_step, cache=cache, verbose=verbose)
+        lc = 0
+        lm = 0
+        if(cache is not None):
+            lc = cache[0].shape[1]
+        if(self.memory is not None):
+            lm = self.memory[0].shape[1]
+        print(f"cache:{lc}; memory:{lm}")
+        pred_obs_list, pred_act_list, valid_cache = super().inference_step_by_step(observations, actions, T, cur_step, device, n_step=n_step, cache=cache, verbose=verbose)
 
         if(valid_cache[0].shape[1] > self.mem_len):
             self.update_mem(valid_cache)
