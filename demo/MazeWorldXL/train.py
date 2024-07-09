@@ -185,7 +185,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                                 f"Future Prediction Image: {fobs:.3e} Latent: {fz:.3e} Action CE: {fact:.3e}")
                     sys.stdout.flush()
 
-            if(acc_iter > max_save_iterations and max_save_iterations > 0):
+            if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
                 print("Check current validity and save model for safe...")
                 sys.stdout.flush()
@@ -245,7 +245,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 lat = cnt * lat
 
             if torch.isinf(lobs).any() or torch.isnan(lobs).any():
-                print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
+                print(f"[WARNING] {device} prediction loss = NAN/INF, {lobs}")
                 lobs.fill_(0.0)
             if torch.isinf(lact).any() or torch.isnan(lact).any():
                 print("[WARNING] {device} action loss = NAN/INF, {lact}")

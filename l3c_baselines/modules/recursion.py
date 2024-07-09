@@ -32,8 +32,8 @@ class PRNNCell(nn.Module):
         self.bih = nn.Parameter(torch.Tensor(hidden_size))
 
         # Dopamine gates
-        self.dopamine = nn.Sequential(
-            nn.Linear(input_size + hidden_size, hidden_size),
+        self.gates = nn.Sequential(
+            nn.Linear(input_size + hidden_size, hidden_size * 2),
             nn.Sigmoid(),
         )
 
@@ -61,7 +61,9 @@ class PRNNCell(nn.Module):
 
         x = torch.cat((inputs, hidden), 1)
 
-        dopamine_signal = self.dopamine(x)
+        gate_signal = self.gates(x)
+        forget_gate = gate_signal[:, :self.hidden_size]
+        input_gate = gate_signal[:, self.hidden_size:]
 
         new_hidden = F.tanh(torch.einsum('ij,ikj->ik', x, wih) + self.bih)
 
@@ -70,7 +72,7 @@ class PRNNCell(nn.Module):
         y = new_hidden.unsqueeze(2)
         y_ = torch.ones_like(y).to(inputs.device)
 
-        wih = wih + self.alpha * (torch.bmm(y, x) * self.Wih_a +
+        wih = wih * (1.0 - forget_gate.unsqueeze(2)) + self.alpha * input_gate.unsqueeze(2) * (torch.bmm(y, x) * self.Wih_a +
                 torch.bmm(y_, x) * self.Wih_b +
                 torch.bmm(y, x_) * self.Wih_c +
                 torch.bmm(y_, x_) * self.Wih_d)
