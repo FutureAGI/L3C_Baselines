@@ -36,14 +36,21 @@ class MazeModelXL(MazeModelBase):
         return new_mem
 
     def update_mem(self, cache):
-        memories = self.merge_mem(cache)
-        if(memories[0].shape[1] > 2 * self.mem_len):
-            new_mem = []
-            for memory in memories:
-                new_mem.append(memory[:, -self.mem_len:])
-            self.memory = new_mem
+        if(self.causal_modeling == "TRANSFORMER"):
+            memories = self.merge_mem(cache)
+            if(memories[0].shape[1] > 2 * self.mem_len):
+                new_mem = []
+                for memory in memories:
+                    new_mem.append(memory[:, -self.mem_len:])
+                self.memory = new_mem
+            else:
+                self.memory = memories
+        elif(self.causal_modeling == "LSTM" or self.causal_modeling == "PRNN"):
+            self.memory = ()
+            for mem in cache:
+                self.memory += (mem.detach(),)
         else:
-            self.memory = memories
+            raise Exception(f"No such causal modeling type: {self.causal_modeling}")
             
     def sequential_loss(self, observations, behavior_actions, label_actions, targets, state_dropout=0.0, reduce='mean'):
         self.encoder.requires_grad_(False)
