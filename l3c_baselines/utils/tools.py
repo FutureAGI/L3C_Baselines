@@ -21,6 +21,16 @@ def show_bar(fraction, bar):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def parameters_regularization(*layers):
+    norm = 0
+    cnt = 0
+    for layer in layers:
+        for p in layer.parameters():
+            if(p.requires_grad):
+                norm += (p ** 2).sum()
+                cnt += p.numel()
+    return torch.sqrt(norm / cnt)
+
 def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)
     if not os.path.exists(directory_path):

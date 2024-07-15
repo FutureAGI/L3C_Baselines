@@ -32,28 +32,36 @@ class MazeDataSet(Dataset):
     def __getitem__(self, index):
         path = self.file_list[index]
 
-        observations = np.load(path + '/observations.npy')
-        actions_behavior = np.load(path + '/actions_behavior.npy')
-        actions_label = np.load(path + '/actions_label.npy')
-        rewards = np.load(path + '/rewards.npy')
-        targets = np.load(path + '/targets_location.npy')
-        max_t = actions_behavior.shape[0]
-        assert max_t == rewards.shape[0] and max_t == actions_label.shape[0] and max_t + 1 == observations.shape[0], \
-                "The 0 dimension shape of actions == rewards == label == observations - 1, but get %s, %s, %s and %s" % \
-                (max_t, rewards.shape[0], rewards.shape[0], actions_label.shape[0], observations.shape[0])
+        try:
+            observations = np.load(path + '/observations.npy')
+            actions_behavior = np.load(path + '/actions_behavior.npy')
+            actions_label = np.load(path + '/actions_label.npy')
+            rewards = np.load(path + '/rewards.npy')
+            targets = np.load(path + '/targets_location.npy')
+            max_t = actions_behavior.shape[0]
+            assert max_t == rewards.shape[0] and max_t == actions_label.shape[0] and max_t + 1 == observations.shape[0], \
+                    "The 0 dimension shape of actions == rewards == label == observations - 1, but get %s, %s, %s and %s" % \
+                    (max_t, rewards.shape[0], rewards.shape[0], actions_label.shape[0], observations.shape[0])
 
-        if(self.time_step > max_t):
-            print('[Warning] Load samples from {path} that is shorter ({max_t}) than specified time step ({self.time_step})')
-            n_b = 0
-            n_e = max_t
-        else:
-            n_b = 0 #random.randint(0, max_t - self.time_step)
-            n_e = n_b + self.time_step
-        obs_arr = torch.from_numpy(observations[n_b:(n_e + 1)]).float() 
-        bact_arr = torch.from_numpy(actions_behavior[n_b:n_e]).long() 
-        lact_arr = torch.from_numpy(actions_label[n_b:n_e]).long() 
-        rew_arr = torch.from_numpy(rewards[n_b:n_e]).float()
-        target_arr = torch.from_numpy(targets[n_b:n_e]).float()
+            if(self.time_step > max_t):
+                print(f'[Warning] Load samples from {path} that is shorter ({max_t}) than specified time step ({self.time_step})')
+                n_b = 0
+                n_e = max_t
+            else:
+                n_b = 0
+                n_e = self.time_step
+            obs_arr = torch.from_numpy(observations[n_b:(n_e + 1)]).float() 
+            bact_arr = torch.from_numpy(actions_behavior[n_b:n_e]).long() 
+            lact_arr = torch.from_numpy(actions_label[n_b:n_e]).long() 
+            rew_arr = torch.from_numpy(rewards[n_b:n_e]).float()
+            target_arr = torch.from_numpy(targets[n_b:n_e]).float()
+        except:
+            print(f"Unexpected reading error founded when loading {path}")
+            obs_arr = None
+            bact_arr = None
+            lact_arr = None
+            rew_arr = None
+            target_arr = None
 
         return obs_arr, bact_arr, lact_arr, rew_arr, target_arr
 
