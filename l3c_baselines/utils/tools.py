@@ -29,7 +29,7 @@ def parameters_regularization(*layers):
             if(p.requires_grad):
                 norm += (p ** 2).sum()
                 cnt += p.numel()
-    return torch.sqrt(norm / cnt)
+    return norm / cnt
 
 def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)
@@ -46,8 +46,7 @@ def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.
     model_state_dict = model.state_dict()  
       
     matched_state_dict = {}  
-      
-    print("Verbose Model Parameters List:", model_state_dict.keys())
+    #print("Verbose Model Parameters List:", model_state_dict.keys())
 
     for param_name, param_tensor in saved_state_dict.items():  
         if param_name in model_state_dict:  

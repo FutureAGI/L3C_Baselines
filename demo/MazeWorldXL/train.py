@@ -113,6 +113,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     lossweight_worldmodel_latent = train_config.lossweight_worldmodel_latent
     lossweight_worldmodel_raw = train_config.lossweight_worldmodel_raw
     lossweight_policymodel = train_config.lossweight_policymodel
+    lossweight_l2 = train_config.lossweight_l2
     use_amp = train_config.use_amp
     scaler = GradScaler()
 
@@ -159,13 +160,19 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             model.module.init_mem()
+            start_step = 0
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
                 with autocast(dtype=torch.float16, enabled=use_amp):
-                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20)
-                    causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
+                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20, start_step=start_step)
+                    l2 = model.module.causal_l2()
+                    causal_loss = (lossweight_worldmodel_latent * lz 
+                            + lossweight_worldmodel_raw * lobs
+                            + lossweight_policymodel * lact 
+                            + lossweight_l2 * l2)
+                start_step += bacts.shape[1]
 
                 scaler.scale(causal_loss).backward()
                 clip_grad_norm_(model.module.parameters(), 1.0)
@@ -182,7 +189,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
                     print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d} LearningRate: {lr:.3e} " +
-                                f"Future Prediction Image: {fobs:.3e} Latent: {fz:.3e} Action CE: {fact:.3e}")
+                                f"Future_Prediction_Image: {fobs:.3e} Latent: {fz:.3e} Action_CE: {fact:.3e} L2_Norm: {l2:.3e}")
                     sys.stdout.flush()
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
@@ -233,17 +240,20 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
     for batch_idx, batch in enumerate(dataloader):
+        start_step = 0
+        model.module.init_mem()
         for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step, segment_length, device, *batch):
             obs = obs.permute(0, 1, 4, 2, 3)
             length = lacts.shape[0] * lacts.shape[1]
 
             with torch.no_grad():
-                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
+                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, start_step=start_step)
 
                 lobs = cnt * lobs
                 lact = cnt * lact
                 lat = cnt * lat
 
+            start_step += bacts.shape[1]
             if torch.isinf(lobs).any() or torch.isnan(lobs).any():
                 print(f"[WARNING] {device} prediction loss = NAN/INF, {lobs}")
                 lobs.fill_(0.0)

@@ -139,7 +139,7 @@ class MazeModelBase(nn.Module):
         return lmse_obs, lmse_z, lce_act, cnt
 
     def causal_l2(self):
-        return parameters_regularization(self.decformer, self.act_decoder)
+        return parameters_regularization(self.decformer, self.act_decoder, self.lat_decoder)
         
 
     def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
