@@ -4,44 +4,23 @@
 import gym
 import sys
 import os
-import l3c.mazeworld
+import random
 import time
 import numpy
 import argparse
 import multiprocessing
+import pickle
+import l3c.mazeworld
 from l3c.mazeworld import MazeTaskSampler
 from l3c.mazeworld.agents import SmartSLAMAgent
-import random
+from l3c.mazeworld.envs.maze_task import MazeTaskManager
 
-def run_maze_epoch(n=15,
-        maze_type="Discrete2D", 
-        max_steps=1000, 
-        task_type="NAVIGATION",
-        density=0.40,
+def run_maze_epoch(
+        maze_env,
+        max_steps,
         label_memkr=1.0,
         behavior_memkr=0.25,
-        behavior_noise=0.20,
-        n_landmarks=10,
-        r_landmarks=0.40):
-    print("\n\n--------\n\nRunning agents on maze_type = %s, task_type = %s, n = %d, steps = %s...\n\n"%(maze_type, task_type, n, max_steps))
-    if(maze_type == "Discrete2D"):
-        maze_env = gym.make("mazeworld-discrete-2D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
-    elif(maze_type == "Discrete3D"):
-        maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
-    elif(maze_type == "Continuous3D"):
-        maze_env = gym.make("mazeworld-continuous-3D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
-    else:
-        raise Exception("No such maze world type %s"%task_type)
-
-    task = MazeTaskSampler(n=n, allow_loops=True, 
-            wall_density=density,
-            landmarks_number=n_landmarks,
-            landmarks_avg_reward=r_landmarks,
-            commands_sequence = 10000,
-            verbose=False)
-
-    maze_env.set_task(task)
-
+        behavior_noise=0.20):
     # Must intialize agent after reset
     label_agent = SmartSLAMAgent(maze_env=maze_env, render=False, memory_keep_ratio=label_memkr)
     behavior_agent = SmartSLAMAgent(maze_env=maze_env, render=False, memory_keep_ratio=behavior_memkr)
@@ -92,28 +71,48 @@ def create_directory(directory_path):
 
 def dump_maze(work_id, path_name, epoch_ids, n_list, n_landmarks_list, density_list, 
         label_configs, behavior_configs, 
-        maze_type, max_steps, task_type):
+        maze_type, max_steps, task_type, tasks_from_file):
     for idx in epoch_ids:
         seed = int(idx + time.time() + work_id * 65536)
         numpy.random.seed(seed)
         random.seed(seed)
-        n = random.choice(n_list)
-        n_landmarks = random.choice(n_landmarks_list)
-        density = random.choice(density_list)
         behavior_mem_kr, behavior_noise = random.choice(behavior_configs)
         label_mem_kr = random.choice(label_configs)
 
         print(f"Sampled behavior policy: LTM={behavior_mem_kr},epsilon={behavior_noise}; Sampled reference policy: LTM={label_mem_kr}")
+        if(maze_type == "Discrete2D"):
+            maze_env = gym.make("mazeworld-discrete-2D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
+        elif(maze_type == "Discrete3D"):
+            maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
+        elif(maze_type == "Continuous3D"):
+            maze_env = gym.make("mazeworld-continuous-3D-v1", enable_render=False, max_steps=max_steps, task_type=task_type, resolution=(128, 128))
+        else:
+            raise Exception("No such maze world type %s"%task_type)
+
+        if(tasks_from_file is not None):
+            task = random.choice(tasks_from_file)
+        else:
+            n = random.choice(n_list)
+            n_landmarks = random.choice(n_landmarks_list)
+            density = random.choice(density_list)
+            task = MazeTaskSampler(n=n, allow_loops=True, 
+                    wall_density=density,
+                    landmarks_number=n_landmarks,
+                    landmarks_avg_reward=0.40,
+                    commands_sequence = 10000,
+                    verbose=False)
+
+        print("\n\n--------\n\nRunning agents on maze_type=%s, task_type=%s, steps=%s, scale=%s...\n\n"%
+            (maze_type, task_type, max_steps, task.cell_walls.shape))
+
+        maze_env.set_task(task)
+
         observations, behavior_actions, label_actions, rewards, targets = run_maze_epoch(
-                maze_type=maze_type,
-                max_steps=max_steps,
-                n=n,
-                task_type=task_type,
+                maze_env,
+                max_steps,
                 label_memkr = label_mem_kr,
                 behavior_memkr = behavior_mem_kr,
-                behavior_noise = behavior_noise,
-                density=density,
-                n_landmarks=n_landmarks)
+                behavior_noise = behavior_noise)
 
         file_path = f'{path_name}/record-{idx:06d}'
 
@@ -130,6 +129,8 @@ if __name__=="__main__":
     # Parse the arguments, should include the output file name
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_path", type=str, default="./maze_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
+    parser.add_argument("--task_source", type=str, choices=['FILE', 'NEW'], help="choose task source to generate the trajectory. FILE: tasks sample from existing file; NEW: create new tasks")
+    parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--task_type", type=str, default="NAVIGATION", help="task type, NAVIGATION/SURVIVAL, default:NAVIGATION")
     parser.add_argument("--maze_type", type=str, default="Discrete3D", help="maze type, Discrete2D/Discrete3D/Continuous3D, default:Discrete3D")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
@@ -146,6 +147,20 @@ if __name__=="__main__":
     density_list = list(map(float, args.density.split(",")))
     n_list = list(map(int, args.scale.split(",")))
     n_landmarks_list = list(map(int, args.landmarks.split(",")))
+
+    if(args.task_source == 'NEW'):
+        print("Generating data by sampling new tasks real time")
+        tasks_from_file = None
+    elif(args.task_source == 'FILE' and args.task_file is not None):
+        print("Generating data by sampling from task file: {args.task_file}")
+        tasks_from_file = []
+        with open(args.task_file, 'rb') as fr:
+            task_dicts = pickle.load(fr)
+            for task_dict in task_dicts:
+                task = MazeTaskManager.TaskConfig(**task_dict)
+                tasks_from_file.append(task)
+    else:
+        raise Exception("Must specify --task_file if task_source == FILE")
 
     behavior_configs = []
     label_configs = []
@@ -168,7 +183,7 @@ if __name__=="__main__":
         process = multiprocessing.Process(target=dump_maze, 
                 args=(worker_id, args.output_path, range(n_b, n_e), n_list, n_landmarks_list, density_list, 
                 label_configs, behavior_configs,
-                args.maze_type, args.max_steps, args.task_type))
+                args.maze_type, args.max_steps, args.task_type, tasks_from_file))
         processes.append(process)
         process.start()
 
