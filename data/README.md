@@ -5,6 +5,8 @@ Generate the benchmark data for l3c baselines
 ```shell
 python gen_maze_record.py 
   --output_path OUTPUT_PATH
+  --task_source FILE/NEW
+  --task_file PATH_TO_FILE # Must specify task pickle file if task_source is FILE
   --task_type TASK_TYPE
   --maze_type MAZE_TYPE
   --max_steps MAX_STEPS
