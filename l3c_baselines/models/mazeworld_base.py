@@ -11,7 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, LatentDecoder, VAE
 from modules import CausalDecisionModel
 from modules import DiffusionLayers
-from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post, parameters_regularization
 
 class MazeModelBase(nn.Module):
     def __init__(self, config): 
@@ -20,6 +20,7 @@ class MazeModelBase(nn.Module):
         self.hidden_size = config.transformer_hidden_size
         self.latent_size = config.image_latent_size
         self.action_size = config.action_size
+        self.causal_modeling = config.causal_modeling
         context_warmup = config.loss_context_warmup
         if(hasattr(config, "transformer_checkpoints_density")):
             checkpoints_density = config.transformer_checkpoints_density
@@ -136,6 +137,10 @@ class MazeModelBase(nn.Module):
         cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
         return lmse_obs, lmse_z, lce_act, cnt
+
+    def causal_l2(self):
+        return parameters_regularization(self.decformer, self.act_decoder, self.lat_decoder)
+        
 
     def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
         """

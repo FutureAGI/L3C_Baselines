@@ -15,6 +15,7 @@ model_config:
   context_free: -1
   image_decoder_type: regression
   worldmodel_type: image
+  casual_modeling: TRANSFORMER # LSTM / PRNN / MAMBA
   image_decoder:
     diffusion_steps: 32
 
@@ -77,25 +78,23 @@ demo_config:
 
   model_config:
     load_model_path: "[PATH]"
-    autoregressive_threshold: 128
-    autoregressive_interval: 8
+    autoregressive_steps:
+        - 0
+        - 100
+        - 1000
+        - 2000
+    autoregressive_length: 10
     policy:
       T_ini: 1.0
       T_dec: 0.005
       T_min: 0.01
     load_model_parameter_blacklist:
       - "attn_mask"
-  maze_config:
-    scale: 25
-    density: 0.36
-    n_landmarks: 8
   rule_config:
     mem_kr: 1.0
   run_model: 0
   run_rule: 1
   run_random: 0
-  test_epochs: 2
-  write_task: null
-  read_task: null
+  task_file: "[PATH]"
   write_video: 0
   output: "[PATH]"

@@ -44,6 +44,7 @@ train_config:
   lossweight_policymodel: 0.1
   lossweight_worldmodel_raw: 0.85
   lossweight_worldmodel_latent: 0.05
+  lossweight_l2: 1.0e-6
   use_amp: False
   load_model_parameter_blacklist:
     - "lat_decoder"
@@ -91,16 +92,14 @@ demo_config:
     load_model_parameter_blacklist:
       - "attn_mask"
   maze_config:
-    scale: 25
+    scale: 15
     density: 0.36
-    n_landmarks: 8
+    n_landmarks: 10
   rule_config:
     mem_kr: 1.0
   run_model: 0
   run_rule: 1
   run_random: 0
-  test_epochs: 2
-  write_task: null
-  read_task: null
+  task_file: "[PATH]"
   write_video: 0
   output: "[PATH]"

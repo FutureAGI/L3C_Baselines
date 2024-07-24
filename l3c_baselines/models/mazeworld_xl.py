@@ -51,8 +51,25 @@ class MazeModelXL(MazeModelBase):
                 self.memory += (mem.detach(),)
         else:
             raise Exception(f"No such causal modeling type: {self.causal_modeling}")
+
+    def update_cache(self, cache):
+        if(cache is None):
+            return None
+        if(self.causal_modeling == "TRANSFORMER"):
+            delta = cache[0].shape[1] - 2 * self.mem_len
+            new_cache = []
+            if(delta >= 0):
+                for cac in cache:
+                    new_cache.append(cac[:, -(self.mem_len + delta):])
+            else:
+                new_cache = cache
+        elif(self.causal_modeling == "LSTM" or self.causal_modeling == "PRNN"):
+            new_cache = cache
+        else:
+            raise Exception(f"No such causal modeling type: {self.causal_modeling}")
+        return new_cache
             
-    def sequential_loss(self, observations, behavior_actions, label_actions, targets, state_dropout=0.0, reduce='mean'):
+    def sequential_loss(self, observations, behavior_actions, label_actions, targets, state_dropout=0.0, start_step=0, reduce='mean'):
         self.encoder.requires_grad_(False)
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -61,46 +78,40 @@ class MazeModelXL(MazeModelBase):
         self.lat_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=True, state_dropout=state_dropout)
+        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=self.memory, need_cache=True, state_dropout=state_dropout)
         self.update_mem(cache)
+        b = start_step
+        ez = b + z_pred.shape[1]
+        ea = b + a_pred.shape[1]
         if(self.wm_type == 'image'):
             with torch.no_grad():
                 z_rec_l, _ = self.vae(inputs[:, -1:])
                 z_rec_l = torch.cat((z_rec, z_rec_l), dim=1)
             if(self.is_diffusion):
-                lmse_z = self.lat_decoder.loss_DDPM(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+                lmse_z = self.lat_decoder.loss_DDPM(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, b:ez], reduce=reduce)
                 z_pred = self.lat_decoder(z_rec_l[:, 1:], z_pred)
             else:
                 z_pred = self.lat_decoder(z_pred)
-                lmse_z = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+                lmse_z = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_mask[:, b:ez], reduce=reduce)
             obs_pred = self.vae.decoding(z_pred)
-            lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, :obs_pred.shape[1]], reduce=reduce)
+            lmse_obs = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_mask[:, b:ez], reduce=reduce)
         elif(self.wm_type == 'target'):
             tx = targets[:, :, 0] * torch.cos(targets[:, :, 1])
             ty = targets[:, :, 0] * torch.sin(targets[:, :, 1])
             targets = torch.stack((tx, ty), dim=2)
             target_pred = self.lat_decoder(z_pred)
-            lmse_z = mse_loss_mask(target_pred, targets, mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
+            lmse_z = mse_loss_mask(target_pred, targets, mask=self.loss_mask[:, b:ez], reduce=reduce)
             lmse_obs = torch.tensor(0.0).to(lmse_z.device)
 
-        lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
+        lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, b:ea], reduce=reduce)
         cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
         return lmse_obs, lmse_z, lce_act, cnt
 
     def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
-        lc = 0
-        lm = 0
-        if(cache is not None):
-            lc = cache[0].shape[1]
-        if(self.memory is not None):
-            lm = self.memory[0].shape[1]
-        print(f"cache:{lc}; memory:{lm}")
         pred_obs_list, pred_act_list, valid_cache = super().inference_step_by_step(observations, actions, T, cur_step, device, n_step=n_step, cache=cache, verbose=verbose)
 
-        if(valid_cache[0].shape[1] > self.mem_len):
-            self.update_mem(valid_cache)
-            valid_cache = None
+        valid_cache = self.update_cache(valid_cache)
 
         return pred_obs_list, pred_act_list, valid_cache
 
