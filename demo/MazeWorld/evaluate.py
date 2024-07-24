@@ -28,7 +28,7 @@ TaskConfig = namedtuple("TaskConfig", ["start", "cell_landmarks", "cell_walls", 
 from models import MazeModelBase
 from utils import create_folder, VideoWriter
 from utils import Configure
-from utils import custom_load_model
+from utils import img_pro, custom_load_model
 
 
 def postprocess_image(img, cell_size, scale_factor, actions):
@@ -66,7 +66,7 @@ def reward_smoothing(rewards, kernel_size=192):
     return data_convolved
 
 def model_epoch(maze_env, task, model, policy_config, device, max_step, 
-        autoregressive_threshold=10000000, autoregressive_interval=1, 
+        autoregressive_steps=[], autoregressive_length=10, 
         video_writer=None, video_text=True):
     # Example training loop
     maze_env.set_task(task)
@@ -87,11 +87,12 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
     act_tor = None
     last_obs = obs
     temperature = policy_config.T_ini
+    wm_loss = dict()
     while not done:
-        if(step < autoregressive_threshold):
+        if(step not in autoregressive_steps):
             n_step = 1
         else:
-            n_step = autoregressive_interval
+            n_step = autoregressive_length
         step += n_step
         if(step >= max_step):
             break
@@ -110,6 +111,12 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
             else:
                 acc_rew_arr.append(acc_rew_arr[-1] + max(0.0, next_rew_gt + 0.01))
 
+        if(n_step > 1):
+            if(step not in wm_loss):
+                wm_loss[step] = numpy.zeros((autoregressive_length,), dtype=numpy.float32)
+            for idx, (wm_img, gt_img) in enumerate(zip(pred_obss, obs_arr)):
+                wm_loss[step][idx] += numpy.mean((img_pro(wm_img) - img_pro(gt_img)) ** 2)
+
         if(video_writer is not None):
             img_pred = numpy.concatenate([last_obs] + pred_obss, axis=0)
             img_gt = numpy.concatenate([last_obs] + obs_arr, axis=0)
@@ -118,11 +125,12 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
                 img_syn = postprocess_image(img_syn, 128, 3, pred_acts)
             
             video_writer.add_image(img_syn)
-            print("Step: %d, Reward: %f, Reward Summary: %f" % (step, next_rew_gt, numpy.sum(rew_arr)))
+        
+        print("Step: %d, Reward: %f, Reward Summary: %f" % (step, next_rew_gt, numpy.sum(rew_arr)))
         last_obs = obs_arr[-1]
 
         sys.stdout.flush()
-    return reward_smoothing(rew_arr), acc_rew_arr
+    return reward_smoothing(rew_arr), acc_rew_arr, wm_loss
 
 def random_epoch(maze_env, task):
     # Example training loop
@@ -193,27 +201,10 @@ if __name__=='__main__':
     demo_config = config.demo_config
     os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
 
-    if(demo_config.write_task is not None):
-        #used for dump tasks only
-        maze_config = demo_config.maze_config
+    if(demo_config.task_file is not None):
+        print(f"Reading tasks from {demo_config.task_file}...")
         tasks = []
-        for idx in range(demo_config.test_epochs):
-            task = MazeTaskSampler(n=maze_config.scale, allow_loops=True, 
-                    wall_density=maze_config.density,
-                    landmarks_number=maze_config.n_landmarks,
-                    landmarks_avg_reward=0.5,
-                    commands_sequence = 10000,
-                    verbose=False)
-            task_dict = task._asdict()
-            tasks.append(task_dict)
-        print(f"Writing tasks to {demo_config.write_task} and quit")
-        with open(demo_config.write_task, 'wb') as fw:
-            pickle.dump(tasks, fw)
-        sys.exit(0)
-    elif(demo_config.read_task is not None):
-        print(f"Reading tasks from {demo_config.read_task}...")
-        tasks = []
-        with open(demo_config.read_task, 'rb') as fr:
+        with open(demo_config.task_file, 'rb') as fr:
             task_dicts = pickle.load(fr)
             #print(task_dicts)
             for task_dict in task_dicts:
@@ -221,7 +212,7 @@ if __name__=='__main__':
                 tasks.append(task)
         create_folder(f'{demo_config.output}')
     else:
-        raise Exception("Must set 'demo_config.read_task' if write_task is None")
+        raise Exception("Must set 'demo_config.task_file'")
 
     run_model = demo_config.run_model
     run_rule = demo_config.run_rule
@@ -255,20 +246,32 @@ if __name__=='__main__':
     maze_env = gym.make("mazeworld-discrete-3D-v1", enable_render=False, max_steps=demo_config.time_step, task_type="NAVIGATION", resolution=(128, 128))
 
     # Go across all tasks and perform evaluation
+    task_id_rewards = []
+    wm_losses = dict()
     for idx, task in enumerate(tasks):
         if(run_model):
-            n_step = demo_config.model_config.autoregressive_interval
+            n_step = demo_config.model_config.autoregressive_length
             img_size = 384
-            video_writer = VideoWriter(f'{demo_config.output}/{idx}/', "demo", window_size=(n_step * img_size, 2 * img_size))
-            rewards, acc_rewards = model_epoch(maze_env, task, model, demo_config.model_config.policy, device, demo_config.time_step,
+            if(demo_config.write_video < 1):
+                video_writer = None
+                create_folder(f'{demo_config.output}/{idx}')
+            else:
+                video_writer = VideoWriter(f'{demo_config.output}/{idx}/', "demo", window_size=((n_step + 1) * img_size, 2 * img_size))
+            rewards, acc_rewards, wm_loss = model_epoch(maze_env, task, model, demo_config.model_config.policy, device, demo_config.time_step,
                     video_writer=video_writer, 
                     video_text=True, 
-                    autoregressive_threshold=demo_config.model_config.autoregressive_threshold, 
-                    autoregressive_interval=demo_config.model_config.autoregressive_interval)
+                    autoregressive_steps=demo_config.model_config.autoregressive_steps, 
+                    autoregressive_length=demo_config.model_config.autoregressive_length)
             reward_model.append(rewards)
             acc_reward_model.append(acc_rewards)
+            for key in wm_loss:
+                if key not in wm_losses:
+                    wm_losses[key] = []
+                wm_losses[key].append(wm_loss[key])
+            task_id_rewards.append((idx, acc_rewards[-1]))
             maze_env.save_trajectory(f'{demo_config.output}/{idx}/traj_model_agent.jpg')
-            video_writer.clear()
+            if(video_writer is not None):
+                video_writer.clear()
 
         if(run_rule):
             rewards, acc_rewards = agent_epoch(maze_env, task, demo_config.rule_config.mem_kr)
@@ -290,12 +293,26 @@ if __name__=='__main__':
         rewards_std = numpy.std(reward_model, axis=0)
         acc_rewards_mean = numpy.mean(acc_reward_model, axis=0)
         acc_rewards_std = numpy.std(acc_reward_model, axis=0)
+        wml_stat = dict()
+        for key in wm_losses:
+            wml = numpy.array(wm_losses[key], dtype=numpy.float64)
+            wml_mean = numpy.mean(wml, axis=0)
+            wml_std = numpy.std(wml, axis=0)
+            wml_stat[key] = (wml_mean, wml_std)
+
         string_model = string_mean_var(rewards_mean, rewards_std)
         with open(f'{demo_config.output}/reward_model_agent.txt', 'w') as f_model:
             f_model.write(string_model)
         acc_string_model = string_mean_var(acc_rewards_mean, acc_rewards_std)
         with open(f'{demo_config.output}/acc_reward_model_agent.txt', 'w') as f_model:
             f_model.write(acc_string_model)
+        with open(f'{demo_config.output}/task_reward_model_agent.txt', 'w') as f_model:
+            for idx, r in task_id_rewards:
+                f_model.write(f"{idx}\t{r}")
+        for key in wml_stat:
+            with open(f'{demo_config.output}/wm_loss_{key}.txt', 'w') as f_model:
+                wm_string_model = string_mean_var(*wml_stat[key])
+                f_model.write(wm_string_model)
 
     if(run_rule):
         reward_agent = numpy.array(reward_agent, dtype=numpy.float64)

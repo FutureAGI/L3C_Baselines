@@ -100,8 +100,6 @@ demo_config:
   run_model: 0
   run_rule: 1
   run_random: 0
-  test_epochs: 2
-  write_task: null
-  read_task: null
+  task_file: "[PATH]"
   write_video: 0
   output: "[PATH]"

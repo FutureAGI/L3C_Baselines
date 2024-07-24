@@ -102,6 +102,7 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
         pred_obss, pred_acts, cache = model.inference_step_by_step(obs_arr, act_arr, temperature, step, device, n_step=n_step, cache=cache)
 
         obs_arr = []
+        # The next step (t+1) has already been cached, thus we only need the decisions from t+2
         act_arr = pred_acts[1:]
         for act in pred_acts:
             next_obs_gt, next_rew_gt, done, _ = maze_env.step(act)
@@ -202,27 +203,10 @@ if __name__=='__main__':
     demo_config = config.demo_config
     os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
 
-    if(demo_config.write_task is not None):
-        #used for dump tasks only
-        maze_config = demo_config.maze_config
+    if(demo_config.task_file is not None):
+        print(f"Reading tasks from {demo_config.task_file}...")
         tasks = []
-        for idx in range(demo_config.test_epochs):
-            task = MazeTaskSampler(n=maze_config.scale, allow_loops=True, 
-                    wall_density=maze_config.density,
-                    landmarks_number=maze_config.n_landmarks,
-                    landmarks_avg_reward=0.5,
-                    commands_sequence = 10000,
-                    verbose=False)
-            task_dict = task._asdict()
-            tasks.append(task_dict)
-        print(f"Writing tasks to {demo_config.write_task} and quit")
-        with open(demo_config.write_task, 'wb') as fw:
-            pickle.dump(tasks, fw)
-        sys.exit(0)
-    elif(demo_config.read_task is not None):
-        print(f"Reading tasks from {demo_config.read_task}...")
-        tasks = []
-        with open(demo_config.read_task, 'rb') as fr:
+        with open(demo_config.task_file, 'rb') as fr:
             task_dicts = pickle.load(fr)
             #print(task_dicts)
             for task_dict in task_dicts:
@@ -230,7 +214,7 @@ if __name__=='__main__':
                 tasks.append(task)
         create_folder(f'{demo_config.output}')
     else:
-        raise Exception("Must set 'demo_config.read_task' if write_task is None")
+        raise Exception("Must set 'demo_config.task_file'")
 
     run_model = demo_config.run_model
     run_rule = demo_config.run_rule
