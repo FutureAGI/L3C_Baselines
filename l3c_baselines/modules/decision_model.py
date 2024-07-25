@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from .mamba_minimal import Mamba
-from .recursion import PRNN, SimpleLSTM
+from .recursion import PRNN, SimpleLSTM, MemoryLayers
 from .transformers import ARTransformerEncoder
 
 
@@ -48,16 +48,22 @@ class CausalDecisionModel(nn.Module):
                 context_window=context_window
             )
         elif(model_type == "LSTM"):
-            self.encoder = SimpleLSTM(
+            self.encoder = MemoryLayers(
                 self.d_model,
-                self.d_model * 4,
-                self.d_model
+                self.d_model,
+                4 * self.d_model,
+                SimpleLSTM,
+                num_layers,
+                dropout=0.10
             )
         elif(model_type == "PRNN"):
-            self.encoder = PRNN(
+            self.encoder = MemoryLayer(
                 self.d_model,
-                self.d_model * 4,
-                self.d_model
+                self.d_model,
+                4 * self.d_model,
+                PRNN,
+                num_layers,
+                dropout=0.10
             )
         elif(model_type == "MAMBA"):
             self.encoder = Mamba(
@@ -129,7 +135,7 @@ class CausalDecisionModel(nn.Module):
         return obs_output, act_output, new_cache
 
 if __name__=='__main__':
-    DT = CausalDecisionModel(256, 5, 2, 64, 8, 64, dropout=0.0, checkpoints_density=-1, model_type="MAMBA")
+    DT = CausalDecisionModel(256, 5, 2, 64, 8, 64, dropout=0.0, checkpoints_density=-1, model_type="LSTM")
     inputs_obs = torch.randn((1, 64, 256))
     input_acts = torch.randint(0, 4, (1, 64))
     out_obs_1, out_act_1, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
