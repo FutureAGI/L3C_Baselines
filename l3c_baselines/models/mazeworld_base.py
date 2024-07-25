@@ -140,7 +140,6 @@ class MazeModelBase(nn.Module):
 
     def causal_l2(self):
         return parameters_regularization(self.decformer, self.act_decoder, self.lat_decoder)
-        
 
     def inference_step_by_step(self, observations, actions, T, cur_step, device, n_step=1, cache=None, verbose=True):
         """
@@ -199,7 +198,7 @@ class MazeModelBase(nn.Module):
                     print(f"Action: {valid_act[:, -1]} Raw Output: {a_pred[:, -1]}")
 
                 # Inference Next Observation based on Sampled Action
-                z_pred, a_pred, updated_cache  = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)
+                z_pred, a_pred, updated_cache = self.decformer(z_rec, n_act, cache=updated_cache, need_cache=True)
 
                 # Only the first step uses the ground truth
                 if(step == 0):

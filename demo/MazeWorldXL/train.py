@@ -56,7 +56,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     else:
         model = DDP(model)
 
-
     # Example dataset and dataloader
     train_config = config.train_config
     load_model_path = train_config.load_model_path
@@ -109,7 +108,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     # Perform the first evaluation
     test_config = config.test_config
-    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
     lossweight_worldmodel_latent = train_config.lossweight_worldmodel_latent
     lossweight_worldmodel_raw = train_config.lossweight_worldmodel_raw
     lossweight_policymodel = train_config.lossweight_policymodel

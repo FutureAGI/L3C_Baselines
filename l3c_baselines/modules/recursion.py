@@ -116,7 +116,8 @@ class WrapperMer(nn.Module):
 
     def forward(self, src, cache=None, need_cache=False):
         # Residual Connection
-        outputs, cache = self.temporal_encoder(self.norm1(src), cache=cache, need_cache=need_cache)
+        norm_src = self.norm1(src)
+        outputs, cache = self.temporal_encoder(norm_src, cache=cache, need_cache=need_cache)
 
         outputs = outputs + src
 
@@ -129,7 +130,7 @@ class MemoryLayers(nn.Module):
     def __init__(self, hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, num_layers, dropout=0.1):
         super(MemoryLayers, self).__init__()
         self.num_layers = num_layers
-        self.layers = [WrapperMer(hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, dropout=dropout) for _ in range(self.num_layers)] 
+        self.layers = nn.ModuleList([WrapperMer(hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, dropout=dropout) for _ in range(self.num_layers)])
 
     def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
         # Residual Connection

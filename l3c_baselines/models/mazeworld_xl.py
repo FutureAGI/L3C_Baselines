@@ -46,9 +46,12 @@ class MazeModelXL(MazeModelBase):
             else:
                 self.memory = memories
         elif(self.causal_modeling == "LSTM" or self.causal_modeling == "PRNN"):
-            self.memory = ()
-            for mem in cache:
-                self.memory += (mem.detach(),)
+            self.memory = []
+            for l_cache in cache:
+                mem = ()
+                for lt_cache in l_cache:
+                    mem += (lt_cache.detach(),)
+                self.memory.append(mem)
         else:
             raise Exception(f"No such causal modeling type: {self.causal_modeling}")
 
