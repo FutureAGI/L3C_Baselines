@@ -57,7 +57,7 @@ class CausalDecisionModel(nn.Module):
                 dropout=0.10
             )
         elif(model_type == "PRNN"):
-            self.encoder = MemoryLayer(
+            self.encoder = MemoryLayers(
                 self.d_model,
                 self.d_model,
                 4 * self.d_model,
