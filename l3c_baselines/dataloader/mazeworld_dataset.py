@@ -1,8 +1,8 @@
 import os
 import sys
-import random
 import torch
 import numpy as np
+from numpy import random
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -26,7 +26,8 @@ class MazeDataSet(Dataset):
         if(verbose):
             print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
 
-    def reset(self):
+    def reset(self, seed=0):
+        random.seed(seed)
         random.shuffle(self.file_list)
 
     def __getitem__(self, index):

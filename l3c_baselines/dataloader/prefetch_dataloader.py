@@ -17,18 +17,29 @@ class NaiveDataLoader(DataLoader):
         self.rank = rank
         self.world_size = world_size
         self.index = 0
+        self.local_index = 0
+        self.length = (len(self.dataset) - 1) // (self.batch_size * self.world_size) + 1
+        self.data_volume = len(self.dataset)
 
     def __iter__(self):
         self.index = self.rank
+        self.local_index = 0
         return self
 
     def __next__(self):
-        if self.index >= len(self.dataset):
+        if self.local_index >= self.length:
             # stop iteration once index is out of bounds
             raise StopIteration
-        left_iter = (len(self.dataset) - self.index - 1) // self.world_size + 1
-        batch_size = min(left_iter, self.batch_size)
-        return self.collate_fn([self.get() for _ in range(batch_size)])
+        data = []
+        sub_iter = 0
+        while sub_iter < self.batch_size:
+            # In case the data is invalid, fetch further data
+            sub_data = self.get()
+            if(sub_data is not None):
+                data.append(sub_data)
+                sub_iter += 1
+        self.local_index += 1
+        return self.collate_fn(data)
 
     def get(self):
         item = self.dataset[self.index]
@@ -36,10 +47,9 @@ class NaiveDataLoader(DataLoader):
         return item
 
     def __len__(self):
-        return (len(self.dataset) - 1) // (self.batch_size * self.world_size) + 1
-        
+        return self.length
 
-def worker_fn(dataset, index_queue, output_queue):
+def worker_fn(dataset, length, index_queue, output_queue):
     while True:
         try:
             index = index_queue.get(timeout=0)
@@ -47,7 +57,17 @@ def worker_fn(dataset, index_queue, output_queue):
             continue
         if index is None:
             break
-        output_queue.put((index, dataset[index]))
+
+        if index > length:
+            # Allowing fetch index to exceed max length to accommodate certain mistake
+            real_idx = index % length
+        else:
+            real_idx = index
+        try:
+            output_queue.put((index, dataset[real_idx]))
+        except Exception:
+            print(f"Unexpected error when getting index={index}, actual_index={real_idx}, put None")
+            output_queue.put((index, None))
 
 class PrefetchDataLoader(NaiveDataLoader):
     def __init__(
@@ -73,28 +93,20 @@ class PrefetchDataLoader(NaiveDataLoader):
         self.workers = []
         self.worker_cycle = itertools.cycle(range(num_workers))
         self.cache = {}
-        self.prefetch_index = 0
+        self.prefetch_local_index = 0
 
         for _ in range(num_workers):
             index_queue = multiprocessing.Queue()
             worker = multiprocessing.Process(
-                target=worker_fn, args=(self.dataset, index_queue, self.output_queue)
+                target=worker_fn, args=(self.dataset, self.length, index_queue, self.output_queue)
             )
             worker.daemon = True
             worker.start()
             self.workers.append(worker)
             self.index_queues.append(index_queue)
 
-        self.prefetch()
-
     def prefetch(self):
-        while (
-            self.prefetch_index < len(self.dataset)
-            and self.prefetch_index
-            < self.index + 2 * self.num_workers * self.batch_size * self.world_size
-        ):
-            # if the prefetch_index hasn't reached the end of the dataset
-            # and it is not 2 batches ahead, add indexes to the index queues
+        while (self.prefetch_index < self.index + self.prefetch_batches * self.batch_size * self.world_size):
             self.index_queues[next(self.worker_cycle)].put(self.prefetch_index)
             self.prefetch_index += self.world_size
 
@@ -109,9 +121,6 @@ class PrefetchDataLoader(NaiveDataLoader):
                     (index, data) = self.output_queue.get(timeout=0)
                 except queue.Empty:  # output queue empty, keep trying
                     continue
-                except Exception as e:
-                    continue
-                    print(f"unexpected exception:{e}")
                 if index == self.index:  # found our item, ready to return
                     item = data
                     break
@@ -122,10 +131,10 @@ class PrefetchDataLoader(NaiveDataLoader):
         return item
 
     def __iter__(self):
+        self.local_index = 0
         self.index = self.rank
+        self.prefetch_index = self.index
         self.cache = {}
-        self.dataset.reset()
-        self.prefetch_index = self.rank
         self.prefetch()
         return self
 

@@ -119,6 +119,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     def vae_round(rid, dataloader, max_save_iteartions=-1):
         acc_iter = 0
         total_iteration = len(dataloader)
+        dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
@@ -156,6 +157,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
         total_iteration = len(dataloader)
+        dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             model.module.init_mem()
@@ -238,6 +240,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
 
     if(main):
         print("[EVALUATION] Epochs: %s..." % epoch_id)
+    dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
         start_step = 0
         model.module.init_mem()
