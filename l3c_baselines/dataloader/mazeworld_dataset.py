@@ -56,15 +56,10 @@ class MazeDataSet(Dataset):
             lact_arr = torch.from_numpy(actions_label[n_b:n_e]).long() 
             rew_arr = torch.from_numpy(rewards[n_b:n_e]).float()
             target_arr = torch.from_numpy(targets[n_b:n_e]).float()
+            return obs_arr, bact_arr, lact_arr, rew_arr, target_arr
         except:
             print(f"Unexpected reading error founded when loading {path}")
-            obs_arr = None
-            bact_arr = None
-            lact_arr = None
-            rew_arr = None
-            target_arr = None
-
-        return obs_arr, bact_arr, lact_arr, rew_arr, target_arr
+            return None
 
     def __len__(self):
         return len(self.file_list)
