@@ -38,7 +38,6 @@ class NaiveDataLoader(DataLoader):
             if(sub_data is not None):
                 data.append(sub_data)
                 sub_iter += 1
-        print(len(data), [[type(subsub_data) for subsub_data in sub_data] for sub_data in data])
         self.local_index += 1
         return self.collate_fn(data)
 
@@ -114,7 +113,6 @@ class PrefetchDataLoader(NaiveDataLoader):
 
     def get(self):
         self.prefetch()
-        print(f"Get index {self.index} started, from {self.rank}...")
         sys.stdout.flush()
         if self.index in self.cache:
             item = self.cache[self.index]
@@ -130,7 +128,6 @@ class PrefetchDataLoader(NaiveDataLoader):
                     break
                 else:  # item isn't the one we want, cache for later
                     self.cache[index] = data
-        print(f"...Get index {self.index} finished, from {self.rank}")
         sys.stdout.flush()
 
         self.index += self.world_size
