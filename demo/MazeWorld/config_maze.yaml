@@ -15,7 +15,7 @@ model_config:
   context_free: -1
   image_decoder_type: regression
   worldmodel_type: image
-  casual_modeling: TRANSFORMER # LSTM / PRNN / MAMBA
+  causal_modeling: TRANSFORMER # LSTM / PRNN / MAMBA
   image_decoder:
     diffusion_steps: 32
 
