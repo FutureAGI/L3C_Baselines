@@ -8,15 +8,6 @@ from copy import deepcopy
 from dateutil.parser import parse
 import re
 
-def show_bar(fraction, bar):
-    percentage = int(bar * fraction)
-    empty = bar - percentage
-    sys.stdout.write("\r") 
-    sys.stdout.write("[") 
-    sys.stdout.write("=" * percentage)
-    sys.stdout.write(" " * empty)
-    sys.stdout.write("]") 
-    sys.stdout.write("%.2f %%" % (percentage * 100 / bar))
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

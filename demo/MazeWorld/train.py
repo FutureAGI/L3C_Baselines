@@ -15,7 +15,7 @@ from torch.cuda.amp import autocast, GradScaler
 from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
-from utils import Configure
+from utils import Configure, Logger
 from models import MazeModelBase
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -77,6 +77,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae, rank=rank, world_size=world_size)
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
+    if(main):
+        logger_vae = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
+        logger_causal = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
+
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
 
@@ -109,7 +113,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     # Perform the first evaluation
     test_config = config.test_config
-    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
     lossweight_worldmodel_latent = train_config.lossweight_worldmodel_latent
     lossweight_worldmodel_raw = train_config.lossweight_worldmodel_raw
     lossweight_policymodel = train_config.lossweight_policymodel
@@ -118,7 +122,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     def vae_round(rid, dataloader, max_save_iteartions=-1):
         acc_iter = 0
-        total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
@@ -138,13 +141,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 lambda_scheduler.step()
 
                 if(main):
-                    percentage = (batch_idx + 1) / total_iteration * 100
                     lr = vae_scheduler.get_last_lr()[0]
                     lrec = float(vae_loss.detach().cpu().numpy())
-                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][VAE ROUND] Iteration: {batch_idx:05d} Segment: {sub_idx:02d}; " +
-                                f"Hyperparameter: sigma:{sigma_scheduler():.3e}, lambda:{lambda_scheduler():.3e}; " +
-                                f"LearningRate: {lr:.3e} Reconstruction Loss: {lrec:.3e}")
-                    sys.stdout.flush()
+                    logger_vae.log(batch_idx, sub_idx, sigma_schedular(), lambda_scheduler(), lr, lrec, epoch=rid, iteration=batch_idx, prefix="VAE")
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
@@ -155,7 +154,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
-        total_iteration = len(dataloader)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
@@ -175,16 +173,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 causal_scheduler.step()
 
                 if(main):
-                    percentage = (batch_idx + 1) / total_iteration * 100
                     lr = causal_scheduler.get_last_lr()[0]
                     fobs = float(lobs.detach().cpu().numpy())
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
-                    print(f"Epoch: {rid:03d} [ {percentage:.3f} % ][CAUSAL] Iteration: {batch_idx:03d} Segment: {sub_idx:02d}; LearningRate: {lr:.3e}" +
-                                f"Future Prediction Image: {fobs:.3e}; Latent: {fz:.3e}; Action CE: {fact:.3e}")
-                    sys.stdout.flush()
+                    logger_causal.log(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
-            if(acc_iter > max_save_iterations and max_save_iterations > 0):
+            if(acc_iter > max_save_iterations and max_save_iterations > 0 and main):
                 acc_iter = 0
                 print("Check current validity and save model for safe...")
                 sys.stdout.flush()
@@ -253,7 +248,6 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 print("[WARNING] {device} action loss = NAN/INF, {lat}")
                 lat.fill_(0.0)
 
-            #dist.all_reduce(lrec.data)
             dist.all_reduce(lobs.data)
             dist.all_reduce(lact.data)
             dist.all_reduce(lat.data)
@@ -282,9 +276,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     sum_lat /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; [Loss] FuturePrediction Image: %s; WorldModel Latent: %s; Action Cross Entropy: %s;" % 
-                (epoch_id, sum_lobs, sum_lat, sum_lact))
-        sys.stdout.flush()
+        logger = Logger("loss_wm", "loss_z", "loss_pm")
+        logger.log(sum_lobs, sum_lat, sum_lact, epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
