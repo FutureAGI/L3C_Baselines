@@ -76,6 +76,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae, rank=rank, world_size=world_size)
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
+    if(main):
+        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
+
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
 
@@ -118,9 +122,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     def vae_round(rid, dataloader, max_save_iteartions=-1):
         acc_iter = 0
-        total_iteration = len(dataloader)
         dataloader.dataset.reset(rid)
-        logger = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=total_iteration)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
@@ -142,7 +144,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 if(main):
                     lr = vae_scheduler.get_last_lr()[0]
                     lrec = float(vae_loss.detach().cpu().numpy())
-                    logger.log(batch_idx, sub_idx, sigma_schedular(), lambda_scheduler(), lr, lrec, epoch=rid, iteration=batch_idx, prefix="VAE")
+                    logger_vae.log(batch_idx, sub_idx, sigma_schedular(), lambda_scheduler(), lr, lrec, epoch=rid, iteration=batch_idx, prefix="VAE")
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
@@ -153,9 +155,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
-        total_iteration = len(dataloader)
         dataloader.dataset.reset(rid)
-        logger = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=total_iteration)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             model.module.init_mem()
@@ -186,7 +186,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fobs = float(lobs.detach().cpu().numpy())
                     fz = float(lz.detach().cpu().numpy())
                     fact = float(lact.detach().cpu().numpy())
-                    logger.log(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+                    logger_causal.log(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0

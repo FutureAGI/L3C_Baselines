@@ -78,8 +78,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
     if(main):
-        logger_vae = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
-        logger_causal = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
+        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
 
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
