@@ -77,8 +77,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
     if(main):
-        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
-        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
+        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(causal_dataloader), use_tensorboard=True)
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(vae_dataloader))
 
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
@@ -129,7 +129,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
-                with autocast(dtype=torch.float16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=use_amp):
                     vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
 
                 scaler.scale(vae_loss).backward()

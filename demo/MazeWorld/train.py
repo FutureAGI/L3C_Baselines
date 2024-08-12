@@ -14,9 +14,10 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
-from utils import show_bar, count_parameters, check_model_validity, model_path
-from utils import Configure, Logger
+from utils import count_parameters, check_model_validity, model_path
+from utils import Configure
 from models import MazeModelBase
+from restools.logging import Logger, log_progress, log_debug, log_warn
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -37,17 +38,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     else:
         main = False
 
-    if(main):
-        print("Main gpu", use_gpu, "rank:", rank, device)
+    log_debug("Main gpu", use_gpu, "rank:", rank, device, on=main)
 
     # Create model and move it to GPU with id `gpu`
     model = MazeModelBase(config.model_config)
-    if(main):
-        print("Number of parameters: ", count_parameters(model))
-        print("Number of parameters decision transformer: ", count_parameters(model.decformer))
-        print("Number of parameters action decoder: ", count_parameters(model.act_decoder))
-        print("Number of parameters encoder: ", count_parameters(model.encoder))
-        print("Number of parameters decoder: ", count_parameters(model.decoder))
+    log_debug("Number of parameters: ", count_parameters(model), on=main)
+    log_debug("Number of parameters decision transformer: ", count_parameters(model.decformer), on=main)
 
     model = model.to(device)
 
@@ -78,8 +74,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
 
     if(main):
-        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(vae_dataloader), use_tensorboard=True)
-        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(causal_dataloader))
+        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(causal_dataloader), use_tensorboard=True)
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(vae_dataloader))
 
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
@@ -128,7 +124,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
-                with autocast(dtype=torch.float16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=use_amp):
                     vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
 
                 scaler.scale(vae_loss).backward()
@@ -224,8 +220,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     results = []
     all_length = len(dataloader)
 
-    if(main):
-        print("[EVALUATION] Epochs: %s..." % epoch_id)
+    log_debug("[EVALUATION] Epochs: %s..." % epoch_id, on=main)
     for batch_idx, batch in enumerate(dataloader):
         for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step, segment_length, device, *batch):
             obs = obs.permute(0, 1, 4, 2, 3)
@@ -239,13 +234,13 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 lat = cnt * lat
 
             if torch.isinf(lobs).any() or torch.isnan(lobs).any():
-                print(f"[WARNING] {device} prediction loss = NAN/INF, {lz}")
+                log_warn(f"Device-{rank} lobs loss = NAN/INF, skip")
                 lobs.fill_(0.0)
             if torch.isinf(lact).any() or torch.isnan(lact).any():
-                print("[WARNING] {device} action loss = NAN/INF, {lact}")
+                log_warn(f"Device-{rank} lact loss = NAN/INF, skip")
                 lact.fill_(0.0)
             if torch.isinf(lat).any() or torch.isnan(lat).any():
-                print("[WARNING] {device} action loss = NAN/INF, {lat}")
+                log_warn(f"Device-{rank} lat loss = NAN/INF, skip")
                 lat.fill_(0.0)
 
             dist.all_reduce(lobs.data)
@@ -256,8 +251,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
             results.append((lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
 
             if(main):
-                show_bar((batch_idx + 1) / all_length, 100)
-                sys.stdout.flush()
+                log_progress((batch_idx + 1) / all_length)
 
     #sum_lrec = 0
     sum_lobs = 0
