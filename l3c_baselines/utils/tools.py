@@ -6,6 +6,7 @@ import yaml
 from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
+from collections import defaultdict
 import re
 
 
@@ -115,6 +116,18 @@ def img_post(observations):
 
 def print_memory(info="Default"):
     print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
+
+def gradient_failsafe(model, optimizer, scaler):
+    overflow=False
+    for param in model.parameters():
+        if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
+            print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
+            overflow=True
+    if(overflow):
+        for param in model.parameters():
+            param.grad.zero_()
+        scaler.unscale_(optimizer)
+        optimizer.__setstate__({'state': defaultdict(dict)})
 
 def infer_type(s):
     s = s.strip().lower()

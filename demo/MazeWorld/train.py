@@ -15,7 +15,7 @@ from torch.cuda.amp import autocast, GradScaler
 from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import count_parameters, check_model_validity, model_path
-from utils import Configure
+from utils import Configure, gradient_failsafe
 from models import MazeModelBase
 from collections import defaultdict
 from restools.logging import Logger, log_progress, log_debug, log_warn
@@ -163,11 +163,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 scaler.scale(causal_loss).backward()
 
-                for param in model.module.parameters():
-                    if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
-                        print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
-                        param.grad.zero_()
-                        causal_optimizer.__setstate__({'state': defaultdict(dict)})
+                gradient_failsafe(model.module, causal_optimizer, scaler)
 
                 clip_grad_norm_(model.module.parameters(), 1.0)
                 scaler.step(causal_optimizer)

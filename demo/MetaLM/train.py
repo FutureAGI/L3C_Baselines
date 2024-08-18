@@ -14,9 +14,8 @@ from torch.cuda.amp import autocast, GradScaler
 from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
-from utils import Configure
+from utils import Configure, gradient_failsafe
 from models import LMBase
-from collections import defaultdict
 from restools.logging import Logger, log_progress, log_debug, log_warn
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -63,6 +62,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     max_epochs = train_config.max_epochs
     eval_interval = train_config.evaluation_interval
     use_amp = train_config.use_amp
+    use_amp = train_config.use_scaler
     train_start_step = train_config.start_step
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
@@ -93,17 +93,16 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             with autocast(dtype=torch.float16, enabled=use_amp):
                 loss = model.module.perplexity(feature, label)
 
-            scaler.scale(loss).backward()
+            if(use_scaler):
+                scaler.scale(loss).backward()
+                gradient_failsafe(model.module, optimizer, scaler)
+                clip_grad_norm_(model.module.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
-            for param in model.module.parameters():
-                if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
-                    print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
-                    param.grad.zero_()
-                    optimizer.__setstate__({'state': defaultdict(dict)})
-
-            clip_grad_norm_(model.module.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
             scheduler.step()
 
             if(main):
