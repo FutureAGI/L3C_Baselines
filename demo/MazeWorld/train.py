@@ -17,6 +17,7 @@ from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import count_parameters, check_model_validity, model_path
 from utils import Configure
 from models import MazeModelBase
+from collections import defaultdict
 from restools.logging import Logger, log_progress, log_debug, log_warn
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -161,6 +162,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
 
                 scaler.scale(causal_loss).backward()
+
+                for param in model.module.parameters():
+                    if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
+                        print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
+                        param.grad.zero_()
+                        causal_optimizer.__setstate__({'state': defaultdict(dict)})
+
                 clip_grad_norm_(model.module.parameters(), 1.0)
                 scaler.step(causal_optimizer)
                 scaler.update()

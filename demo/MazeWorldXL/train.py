@@ -16,6 +16,7 @@ from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, check_model_validity, model_path
 from utils import Configure, Logger
+from collections import defaultdict
 from models import MazeModelXL
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -164,7 +165,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
-                with autocast(dtype=torch.float16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=use_amp):
                     lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20, start_step=start_step)
                     l2 = model.module.causal_l2()
                     causal_loss = (lossweight_worldmodel_latent * lz 
@@ -174,6 +175,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 start_step += bacts.shape[1]
 
                 scaler.scale(causal_loss).backward()
+
+                for param in model.module.parameters():
+                    if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
+                        print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
+                        param.grad.zero_()
+                        causal_optimizer.__setstate__({'state': defaultdict(dict)})
+
                 clip_grad_norm_(model.module.parameters(), 1.0)
                 scaler.step(causal_optimizer)
                 scaler.update()

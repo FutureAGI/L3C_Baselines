@@ -214,6 +214,16 @@ if __name__=='__main__':
     else:
         raise Exception("Must set 'demo_config.task_file'")
 
+    if(demo_config.task_downsampling is not None):
+        if(demo_config.task_downsampling < len(tasks)):
+            random.shuffle(tasks)
+        else:
+            factor = demo_config.task_downsampling // len(tasks) + 1
+            tasks *= factor
+            random.shuffle(tasks)
+        tasks = tasks[:demo_config.task_downsampling]
+            
+
     run_model = demo_config.run_model
     run_rule = demo_config.run_rule
     run_random = demo_config.run_random

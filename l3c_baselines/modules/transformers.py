@@ -141,7 +141,7 @@ class ARTransformerStandard(nn.Module):
         self.encoder = ARTransformerEncoder(num_layers, d_model, nhead, max_time_step, dim_feedforward=4*d_model, dropout=dropout)
         self.norm = nn.LayerNorm(d_model, eps=1.0e-5)
 
-        self.output_mapping = nn.Sequential(nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1))
+        self.output_mapping = nn.Sequential([nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1)])
 
     def forward(self, inputs, cache=None, need_cache=True):
         """

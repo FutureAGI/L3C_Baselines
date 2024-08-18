@@ -96,5 +96,6 @@ demo_config:
   run_rule: 1
   run_random: 0
   task_file: "[PATH]"
+  task_downsampling: 64
   write_video: 0
   output: "[PATH]"

@@ -10,12 +10,14 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
-from torch.cuda.amp import autocast
+from torch.cuda.amp import autocast, GradScaler
 from dataloader import LMDataSet
 from utils import custom_load_model, noam_scheduler, LinearScheduler
 from utils import show_bar, count_parameters, model_path
 from utils import Configure
 from models import LMBase
+from collections import defaultdict
+from restools.logging import Logger, log_progress, log_debug, log_warn
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -41,8 +43,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Create model and move it to GPU with id `gpu`
     model = LMBase(config.model_config)
                 
-    if(main):
-        print("Model parameters:", count_parameters(model))
+    log_debug("Number of parameters: ", count_parameters(model), on=main)
+
 
     model = model.to(device)
 
@@ -60,10 +62,15 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     batch_size = config.train_config.batch_size
     max_epochs = train_config.max_epochs
     eval_interval = train_config.evaluation_interval
+    use_amp = train_config.use_amp
+    train_start_step = train_config.start_step
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+
+    if(main):
+        logger = Logger("iteration", "learning_rate", "perplexity", sum_iter=len(dataloader), use_tensorboard=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, noam_decay_interval))
@@ -74,25 +81,33 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Perform the first evaluation
     test_config = config.test_config
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    scaler = GradScaler()
+    scheduler.step(train_start_step)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
         for batch_idx, (feature, label) in enumerate(dataloader):
             feature = feature[:, :time_step].to(device)
             label = label[:, :time_step].to(device)
-            loss = model.module.perplexity(feature, label)
-
             optimizer.zero_grad()
-            loss.backward()
-            clip_grad_norm_(model.module.parameters(), 1.0)
+            with autocast(dtype=torch.float16, enabled=use_amp):
+                loss = model.module.perplexity(feature, label)
 
-            optimizer.step()
+            scaler.scale(loss).backward()
+
+            for param in model.module.parameters():
+                if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
+                    print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
+                    param.grad.zero_()
+                    optimizer.__setstate__({'state': defaultdict(dict)})
+
+            clip_grad_norm_(model.module.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
+
             if(main):
-                percentage = (batch_idx + 1) / total_iteration * 100
-                print("Epoch: %s [ %.2f %% ][MAIN ROUND] Iteration: %s; Learning_Rate:%s; Perplexity: %s;" % 
-                        (rid, percentage, batch_idx, scheduler.get_last_lr()[0], float(loss.detach().cpu().numpy())))
-            sys.stdout.flush()
+                logger.log(batch_idx, scheduler.get_last_lr()[0], float(loss.detach().cpu().numpy()), iteration=batch_idx, epoch=epoch_id)
 
     # Example training loop
     for epoch_id in range(1, max_epochs + 1):
@@ -121,13 +136,11 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
     all_length = len(dataloader)
 
-    if(main):
-        print("[EVALUATION] Epochs: %s..." % epoch_id)
+    log_debug("[EVALUATION] Epochs: %s..." % epoch_id, on=main)
 
     for batch_idx, (feature, label) in enumerate(dataloader):
         feature = feature[:, :time_step].to(device)
         label = label[:, :time_step].to(device)
-        #with autocast():
         with torch.no_grad():
             loss = model.module.perplexity(feature, label)
             length = torch.tensor(feature.shape[0] * feature.shape[1]).to(loss.device)
@@ -140,8 +153,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         results.append((loss.cpu(), length.cpu()))
 
         if(main):
-            show_bar((batch_idx + 1) / all_length, 100)
-            sys.stdout.flush()
+            log_progress((batch_idx + 1) / all_length)
 
     sum_loss = 0
     sum_cnt = 0
@@ -152,7 +164,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     sum_loss /= sum_cnt
 
     if(main):
-        print("\n[EVALUATION] Epochs: %s; Perplexity: %s\n"
+        log_debug("\n[EVALUATION] Epochs: %s; Perplexity: %s\n"
                 % (epoch_id, sum_loss))
         sys.stdout.flush()
 
