@@ -62,7 +62,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     max_epochs = train_config.max_epochs
     eval_interval = train_config.evaluation_interval
     use_amp = train_config.use_amp
-    use_amp = train_config.use_scaler
+    use_scaler = train_config.use_scaler
     train_start_step = train_config.start_step
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
