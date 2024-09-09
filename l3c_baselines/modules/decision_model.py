@@ -20,6 +20,7 @@ class CausalDecisionModel(nn.Module):
             max_time_step, 
             dropout=0.1, 
             context_window=-1,
+            inner_hidden_size=None,
             checkpoints_density=-1,
             model_type="LSTM"):
         super().__init__()
@@ -36,6 +37,8 @@ class CausalDecisionModel(nn.Module):
         # 创建Transformer编码器层
         self.pre_layer = nn.Linear(observation_size, d_model)
         max_seq_len = 2 * max_time_step + 1
+        if(inner_hidden_size is None):
+            inner_hidden_size = 4 * d_model
 
         if(model_type == "TRANSFORMER"):
             self.encoder = ARTransformerEncoder(
@@ -43,7 +46,7 @@ class CausalDecisionModel(nn.Module):
                 d_model, 
                 nhead, 
                 max_seq_len, 
-                dim_feedforward=4*d_model, 
+                dim_feedforward=inner_hidden_size, 
                 dropout=dropout, 
                 context_window=context_window
             )

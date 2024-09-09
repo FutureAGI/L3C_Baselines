@@ -17,13 +17,14 @@ class MazeModelBase(nn.Module):
     def __init__(self, config): 
         super().__init__()
 
-        self.hidden_size = config.transformer_hidden_size
+        self.hidden_size = config.decision_hidden_size
         self.latent_size = config.image_latent_size
         self.action_size = config.action_size
         self.causal_modeling = config.causal_modeling
+        self.inner_hidden_size = config.decision_inner_hidden_size
         context_warmup = config.loss_context_warmup
         if(hasattr(config, "transformer_checkpoints_density")):
-            checkpoints_density = config.transformer_checkpoints_density
+            checkpoints_density = config.decision_checkpoints_density
         else:
             checkpoints_density = -1
 
@@ -34,8 +35,9 @@ class MazeModelBase(nn.Module):
         self.vae = VAE(self.latent_size, self.encoder, self.decoder) 
 
         self.decformer = CausalDecisionModel(
-                self.latent_size, self.action_size, config.n_transformer_block, 
-                self.hidden_size, config.transformer_nhead, config.max_time_step, 
+                self.latent_size, self.action_size, config.n_decision_block, 
+                self.hidden_size, config.decision_nhead, config.max_segment_length, 
+                inner_hidden_size=self.inner_hidden_size,
                 checkpoints_density=checkpoints_density,
                 context_window=config.context_window, 
                 model_type = config.causal_modeling)
