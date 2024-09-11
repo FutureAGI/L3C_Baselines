@@ -13,7 +13,7 @@ import pickle
 import l3c.mazeworld
 from l3c.mazeworld import MazeTaskSampler
 from l3c.mazeworld.agents import SmartSLAMAgent
-from l3c.mazeworld.envs.maze_task import MazeTaskManager
+from l3c.mazeworld.envs.maze_task import MazeTaskManager, Resampler
 
 def run_maze_epoch(
         maze_env,
@@ -104,6 +104,7 @@ def dump_maze(work_id, path_name, epoch_ids, n_list, n_landmarks_list, density_l
 
         print("\n\n--------\n\nRunning agents on maze_type=%s, task_type=%s, steps=%s, scale=%s...\n\n"%
             (maze_type, task_type, max_steps, task.cell_walls.shape))
+        task = Resampler(task)
 
         maze_env.set_task(task)
 

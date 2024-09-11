@@ -5,6 +5,7 @@ model_config:
   map_size: 7
   decision_checkpoints_density: 4
   decision_hidden_size: 768
+  decision_inner_hidden_size: 1536
   decision_nhead: 16
   image_latent_size: 1024
   image_encoder_size: 384
