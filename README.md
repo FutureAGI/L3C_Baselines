@@ -3,6 +3,8 @@ Implementations of baselines for [L3C](https://github.com/FutureAGI/L3C)
 
 Transformers are used as the backbone to modeling Meta-Langauge, Decision Models, World Models.
 
+Notice currently L3C_Baselines only support L3C==0.1.1.8
+
 # Training and Evaluating
 To train a model run
 ```bash
