@@ -46,9 +46,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if(main):
         print("Number of parameters: ", count_parameters(model))
         print("Number of parameters decision transformer: ", count_parameters(model.decformer))
-        print("Number of parameters action decoder: ", count_parameters(model.act_decoder))
-        print("Number of parameters encoder: ", count_parameters(model.encoder))
-        print("Number of parameters decoder: ", count_parameters(model.decoder))
+        print("Number of parameters action encoder: ", count_parameters(model.action_encoder))
+        print("Number of parameters action decoder: ", count_parameters(model.action_decoder))
+        print("Number of parameters image encoder: ", count_parameters(model.encoder))
+        print("Number of parameters image decoder: ", count_parameters(model.decoder))
 
     model = model.to(device)
 
@@ -79,7 +80,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     if(main):
         logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(causal_dataloader), use_tensorboard=True)
-        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(vae_dataloader))
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "reconstruction", "kl-divergence", sum_iter=len(vae_dataloader), 
+                use_tensorboard=True)
 
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
@@ -108,7 +110,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     vae_scheduler.step(train_config.vae_start_step)
     causal_scheduler.step(train_config.causal_start_step)
 
-    if(load_model_path is not None):
+    if(load_model_path is not None and load_model_path.lower() != 'none'):
         model = custom_load_model(model, f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=False)
 
     # Perform the first evaluation
@@ -126,14 +128,14 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
+            for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(time_step_vae, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
                 with autocast(dtype=torch.bfloat16, enabled=use_amp):
                     vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
 
-                scaler.scale(vae_loss).backward()
+                scaler.scale(vae_loss["Loss"]).backward()
                 clip_grad_norm_(model.module.parameters(), 1.0)
                 scaler.step(vae_optimizer)
                 scaler.update()
@@ -144,8 +146,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(main):
                     lr = vae_scheduler.get_last_lr()[0]
-                    lrec = float(vae_loss.detach().cpu().numpy())
-                    logger_vae.log(batch_idx, sub_idx, sigma_schedular(), lambda_scheduler(), lr, lrec, epoch=rid, iteration=batch_idx, prefix="VAE")
+                    lrec = float(vae_loss["Reconstruction-Error"].detach().cpu().numpy())
+                    lkl = float(vae_loss["KL-Divergence"].detach().cpu().numpy())
+                    logger_vae.log(batch_idx, sub_idx, sigma_scheduler(), lambda_scheduler(), 
+                            lr, lrec, lkl, epoch=rid, iteration=batch_idx, prefix="VAE")
 
             if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
                 acc_iter = 0
@@ -161,12 +165,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             acc_iter += 1
             model.module.init_mem()
             start_step = 0
-            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
+            for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(time_step_causal, segment_length, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=use_amp):
-                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20, start_step=start_step)
+                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bactd, lacti, bevs, state_dropout=0.20, start_step=start_step)
                     l2 = model.module.causal_l2()
                     causal_loss = (lossweight_worldmodel_latent * lz 
                             + lossweight_worldmodel_raw * lobs
@@ -243,18 +247,18 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     for batch_idx, batch in enumerate(dataloader):
         start_step = 0
         model.module.init_mem()
-        for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step, segment_length, device, *batch):
+        for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(time_step, segment_length, device, *batch):
             obs = obs.permute(0, 1, 4, 2, 3)
-            length = lacts.shape[0] * lacts.shape[1]
+            length = lacti.shape[0] * lacti.shape[1]
 
             with torch.no_grad():
-                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, start_step=start_step)
+                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bactd, lacti, bevs, start_step=start_step)
 
                 lobs = cnt * lobs
                 lact = cnt * lact
                 lat = cnt * lat
 
-            start_step += bacts.shape[1]
+            start_step += bacti.shape[1]
             if torch.isinf(lobs).any() or torch.isnan(lobs).any():
                 print(f"[WARNING] {device} prediction loss = NAN/INF, {lobs}")
                 lobs.fill_(0.0)

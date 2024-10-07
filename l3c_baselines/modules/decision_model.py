@@ -12,8 +12,7 @@ class CausalDecisionModel(nn.Module):
     Take Observations and actions, output d_models
     """
     def __init__(self, 
-            observation_size, 
-            action_vocab_size, 
+            observation_size,
             num_layers, 
             d_model, 
             nhead, 
@@ -29,9 +28,6 @@ class CausalDecisionModel(nn.Module):
         self.max_time_step = max_time_step
         self.num_layers = num_layers
 
-        # 创建动作编码层
-        self.action_vocab_size = action_vocab_size
-        self.action_embedding = nn.Embedding(action_vocab_size, d_model)
         self.checkpoints_density = checkpoints_density
 
         # 创建Transformer编码器层
@@ -92,11 +88,12 @@ class CausalDecisionModel(nn.Module):
         """
         Input Size:
             observations:[B, NT, H], float
-            actions:[B, NT], int 
+            actions:[B, NT, H], float
             cache: [B, NC, H]
         """
         B, NT, H = observations.shape
-        assert actions.shape[0] == B and actions.shape[1] == NT, "The shape of actions should be [%s, %s], but get %s" % (B, NT, actions.shape)
+        assert actions.shape[0] == B and actions.shape[1] == NT and actions.shape[2] == self.d_model, \
+                "The shape of actions should be [%s, %s, %s], but get %s" % (B, NT, self.d_model, actions.shape)
 
         # Add state dropouts
         device = observations.device
@@ -112,7 +109,7 @@ class CausalDecisionModel(nn.Module):
         observation_in = self.pre_layer(observation_in).view(B, NT, 1, -1)
 
         # Input actions: [B, NT, 1, H]
-        action_in = self.action_embedding(actions).view(B, NT, 1, -1)
+        action_in = actions.view(B, NT, 1, -1)
 
         # [B, NT, 2, H]
         outputs = torch.cat([observation_in, action_in], dim=2)
@@ -140,7 +137,7 @@ class CausalDecisionModel(nn.Module):
 if __name__=='__main__':
     DT = CausalDecisionModel(256, 5, 2, 64, 8, 64, dropout=0.0, checkpoints_density=-1, model_type="LSTM")
     inputs_obs = torch.randn((1, 64, 256))
-    input_acts = torch.randint(0, 4, (1, 64))
+    input_acts = torch.randint(0, 4, (1, 64, 256))
     out_obs_1, out_act_1, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
     out_obs_2, out_act_2, cache_2 = DT(inputs_obs[:, 32:], input_acts[:, 32:], cache=cache_1, need_cache=True)
     out_obs_3, out_act_3, cache_3 = DT(inputs_obs, input_acts, need_cache=True)

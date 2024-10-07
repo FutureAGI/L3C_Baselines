@@ -141,7 +141,9 @@ def infer_type(s):
         return s == 'true'
     elif s in ['yes', 'no']:
         return s == 'yes'
-    elif s in ['None', 'null', '~']:
+    
+    # None type
+    if s in ['None', 'null', 'none', 'NONE', 'NULL', 'Null']:
         return None
     
     # Check for integer
