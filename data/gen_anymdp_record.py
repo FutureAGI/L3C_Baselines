@@ -4,27 +4,25 @@
 import gym
 import sys
 import os
-import random
 import time
 import numpy
 import argparse
 import multiprocessing
 import pickle
 import l3c.mazeworld
+from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler, Resampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverMBRL, AnyMDPSolverQ
 
 def run_epoch(
         env,
         max_steps,
-        avg_steps_reset = 500,
+        avg_steps_reset = 200,
         behavior_noise=[0.0, 0.0],
         behavior_policy_type="Opt",
         label_policy_type="Opt"
         ):
     # Must intialize agent after reset
-
-    state, info = env.reset()
     steps = 0
     acc_steps = 0
     
@@ -35,67 +33,72 @@ def run_epoch(
     # Steps to reset the 
     cur_reset_steps=resample_reset_steps(avg_steps_reset)
     naction = env.action_space.n
-    bnoise = numpy.arange(behavior_noise[0], behavior_noise[1], max_steps)
+    bnoise = numpy.linspace(behavior_noise[0], behavior_noise[1], max_steps + 1)
 
     state_list = list()
     lact_list = list()
     bact_list = list()
-    bsolver = AnyMDPSolver
+    reward_list = list()
+
+    if(behavior_policy_type.lower() == "opt"):
+        bsolver = AnyMDPSolverOpt(env)
+    elif(behavior_policy_type.lower() == "mbrl"):
+        bsolver = AnyMDPSolverMBRL(env)
+    elif(behavior_policy_type.lower() == "q"):
+        bsolver = AnyMDPSolverQ(env)
+    else:
+        raise ValueError("Unknown policy type: {}".format(behavior_policy_type))
+    
+    if(label_policy_type.lower() == "opt"):
+        lsolver = AnyMDPSolverOpt(env)
+    elif(label_policy_type.lower() == "mbrl"):
+        lsolver = AnyMDPSolverMBRL(env)
+    elif(label_policy_type.lower() == "q"):
+        lsolver = AnyMDPSolverQ(env)
+    else:
+        raise ValueError("Unknown policy type: {}".format(label_policy_type))
+
+    state, info = env.reset()
 
     while steps < max_steps:
         steps += 1
         acc_steps += 1
         if(acc_steps >= cur_reset_steps):
             next_state, info = env.reset()
-            action = naction
+            bact = naction
+            lact = naction
             acc_steps = 0
+            reward = 0.0
         else:
-            if(random.random() < bnoise):
-                bact = solver.policy(state)
+            if(random.random() < bnoise[steps]):
+                bact = random.choice(range(naction))
             else:
-                bact = random.choice(range(n_action))
-            next_state, reward, done, info = env.step(action)
-            solver.learner(state, action, next_state, reward, done)
-        
-        state_list.append[state]
-        bact_list.append(bact)
-        state = next_state
+                bact = bsolver.policy(state)
 
+            lact = lsolver.policy(state)
+            next_state, reward, done, info = env.step(bact)
+            try:
+                bsolver.learner(state, bact, next_state, reward, done)
+                lsolver.learner(state, bact, next_state, reward, done)
+            except Exception as e:
+                pass
+
+        state_list.append(state)
+        bact_list.append(bact)
+        lact_list.append(lact)
+        reward_list.append(reward)
+
+        state = next_state
 
     behavior_noise_decay = random.random() / max_steps
     step = 0
 
-    while not done:
-        lact_id = label_agent.step(observation, reward)
-        bact_id = behavior_agent.step(observation, reward)
-        true_noise = behavior_noise * (1.0 - behavior_noise_decay * step)
-        if(random.random() < true_noise):
-            bact_id = maze_env.action_space.sample()
-
-        bact_id_list.append(bact_id)
-        lact_id_list.append(lact_id)
-        bact_val_list.append(maze_env.list_actions[bact_id])
-        lact_val_list.append(maze_env.list_actions[lact_id])
-
-        obs, reward, done, info = maze_env.step(bact_id)
-        observation_list.append(observation)
-        reward_list.append(reward)
-        bev_list.append(maze_env.get_local_map()[1])
-        cmd_list.append(info["command"])
-
-        sum_reward += reward
-        step += 1
-
-    print("Finish running, sum reward = %f, steps = %d\n"%(sum_reward, len(observation_list)-1))
+    print("Finish running, sum reward = %f, steps = %d\n"%(numpy.sum(reward_list), len(state_list)-1))
 
     return {
-            "observations": numpy.array(observation_list, dtype=numpy.uint8),
-            "actions_behavior_id": numpy.array(bact_id_list, dtype=numpy.uint8),
-            "actions_behavior_val": numpy.array(bact_val_list, dtype=numpy.float32),
-            "actions_label_id": numpy.array(lact_id_list, dtype=numpy.uint8),
-            "actions_label_val": numpy.array(lact_val_list, dtype=numpy.float32),
-            "commands": numpy.array(cmd_list, dtype=numpy.uint8),
-            "BEVs": numpy.array(bev_list, dtype=numpy.uint8),
+            "states": numpy.array(state_list, dtype=numpy.uint32),
+            "actions_behavior": numpy.array(bact_list, dtype=numpy.uint32),
+            "actions_label": numpy.array(lact_list, dtype=numpy.uint32),
             "rewards": numpy.array(reward_list, dtype=numpy.float32)
             }
 
@@ -103,62 +106,50 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def dump_maze(work_id, path_name, epoch_ids, n_range, 
-        label_configs, behavior_configs, 
+def dump_anymdp(work_id, path_name, epoch_ids, nstates, nactions,
+        behavior_noise,
+        behavior_policy_type,
+        label_policy_type,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
     for idx in epoch_ids:
         seed = int(idx + time.time() + work_id * 65536)
         numpy.random.seed(seed)
         random.seed(seed)
-        behavior_mem_kr, behavior_noise = random.choice(behavior_configs)
-        label_mem_kr = random.choice(label_configs)
 
-        print(f"Sampled behavior policy: LTM={behavior_mem_kr},epsilon={behavior_noise}; Sampled reference policy: LTM={label_mem_kr}")
-        maze_env = gym.make("mazeworld-v2", enable_render=False, max_steps=max_steps, resolution=(128, 128))
+        env = gym.make("anymdp-v0", max_steps=max_steps)
 
         if(tasks_from_file is not None):
             # Resample the start position and commands sequence from certain tasks
             task = Resampler(random.choice(tasks_from_file))
         else:
-            n = random.choice(n_list)
-            n_landmarks = random.choice(n_landmarks_list)
-            density = random.choice(density_list)
-            task = MazeTaskSampler(n_range=n_range, allow_loops=True, 
-                    landmarks_number_range=(6, 10),
-                    commands_sequence = 10000,
-                    verbose=True)
+            task = AnyMDPTaskSampler()
 
-        maze_env.set_task(task)
-        results = run_maze_epoch(
-                maze_env,
-                max_steps,
-                label_memkr = label_mem_kr,
-                behavior_memkr = behavior_mem_kr,
-                behavior_noise = behavior_noise)
+        env.set_task(task)
+        results = run_epoch(env, max_steps, 
+                            behavior_noise=behavior_noise,
+                            behavior_policy_type=behavior_policy_type,
+                            label_policy_type=label_policy_type)
+        print(results)
 
         file_path = f'{path_name}/record-{idx:06d}'
 
         create_directory(file_path)
-        numpy.save("%s/observations.npy" % file_path, results["observations"])
-        numpy.save("%s/actions_behavior_id.npy" % file_path, results["actions_behavior_id"])
-        numpy.save("%s/actions_label_id.npy" % file_path, results["actions_label_id"])
-        numpy.save("%s/actions_behavior_val.npy" % file_path, results["actions_behavior_val"])
-        numpy.save("%s/actions_label_val.npy" % file_path, results["actions_label_val"])
-        numpy.save("%s/commands.npy" % file_path, results["commands"])
-        numpy.save("%s/BEVs.npy" % file_path, results["BEVs"])
+        numpy.save("%s/observations.npy" % file_path, results["states"])
+        numpy.save("%s/actions_behavior.npy" % file_path, results["actions_behavior"])
+        numpy.save("%s/actions_label.npy" % file_path, results["actions_label"])
         numpy.save("%s/rewards.npy" % file_path, results["rewards"])
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", type=str, default="./maze_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
+    parser.add_argument("--output_path", type=str, default="./anymdp_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
     parser.add_argument("--task_source", type=str, choices=['FILE', 'NEW'], help="choose task source to generate the trajectory. FILE: tasks sample from existing file; NEW: create new tasks")
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
-    parser.add_argument("--n_range", type=str, default="9,21", help="a list of scales separated with comma to randomly choose")
-    parser.add_argument('--reference_policy_config', nargs='*', help="List of all LTM ratio, randomly select one for generating reference policy, format: ltm1, ltm2, ...")
-    parser.add_argument('--behavior_policy_config', nargs='*', help="List of all LTM ratio and epsilons, randomly select one for generating behavior policy, format ltm1,eps1 ltm2,eps2 ...")
+    parser.add_argument('--reference_policy', choices=['OPT', 'MBRL', 'Q'], default='OPT', help="Reference Policy Type")
+    parser.add_argument('--behavior_policy', choices=['OPT', 'MBRL', 'Q'], default='OPT', help="Behavior Policy Type")
+    parser.add_argument('--behavior_policy_noise', type=str, default="0.0,0.0", help="behavior policy noise, format: min,max")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
     parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
@@ -174,17 +165,8 @@ if __name__=="__main__":
     else:
         raise Exception("Must specify --task_file if task_source == FILE")
 
-    nmin, nmax = args.n_range.split(",")
-    n_range = [float(nmin), float(nmax)]
-
-    behavior_configs = []
-    label_configs = []
-
-    for val in args.reference_policy_config:
-        label_configs.append(float(val))
-    for val in args.behavior_policy_config:
-        ltm, eps = val.split(",")
-        behavior_configs.append((float(ltm), float(eps)))
+    bn_min, bn_max = args.behavior_policy_noise.split(",")
+    behavior_noise = (float(bn_min), float(bn_max))
 
     worker_splits = args.epochs / args.workers + 1.0e-6
     processes = []
@@ -195,10 +177,9 @@ if __name__=="__main__":
         n_e = int(n_e_t)
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
-        process = multiprocessing.Process(target=dump_maze, 
-                args=(worker_id, args.output_path, range(n_b, n_e), n_range,
-                label_configs, behavior_configs,
-                args.max_steps, tasks_from_file))
+        process = multiprocessing.Process(target=dump_anymdp, 
+                args=(worker_id, args.output_path, range(n_b, n_e), 128, 5, behavior_noise, 
+                      args.behavior_policy, args.reference_policy, args.max_steps, tasks_from_file))
         processes.append(process)
         process.start()
 
