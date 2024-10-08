@@ -1,5 +1,5 @@
 from .vae import VAE
-from .res_nets import ResBlock, Encoder, Decoder, MapDecoder, ActionDecoder, LatentDecoder
+from .res_nets import ResBlock, Encoder, Decoder, MapDecoder, ActionEncoder, ActionDecoder, LatentDecoder
 from .transformers import ARTransformerEncoderLayer, ARTransformerEncoder, ARTransformerStandard
 from .diffusion import DiffusionLayers
 from .rope_mha import RoPEMultiheadAttention

@@ -8,7 +8,7 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionDecoder, LatentDecoder, VAE
+from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionEncoder, ActionDecoder, LatentDecoder, VAE
 from modules import CausalDecisionModel
 from modules import DiffusionLayers
 from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post, parameters_regularization
@@ -19,7 +19,6 @@ class MazeModelBase(nn.Module):
 
         self.hidden_size = config.decision_hidden_size
         self.latent_size = config.image_latent_size
-        self.action_size = config.action_size
         self.causal_modeling = config.causal_modeling
         self.inner_hidden_size = config.decision_inner_hidden_size
         context_warmup = config.loss_context_warmup
@@ -28,21 +27,25 @@ class MazeModelBase(nn.Module):
         else:
             checkpoints_density = -1
 
+        # 创建动作编码层
         self.encoder = Encoder(config.image_size, 3, config.image_encoder_size, config.n_residual_block)
 
         self.decoder = Decoder(config.image_size, self.latent_size, config.image_encoder_size, 3, config.n_residual_block)
 
         self.vae = VAE(self.latent_size, self.encoder, self.decoder) 
 
+        self.action_encoder = ActionEncoder(config.action_input_type, self.hidden_size)
+
+        self.action_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, config.action_output_type)
+
         self.decformer = CausalDecisionModel(
-                self.latent_size, self.action_size, config.n_decision_block, 
+                self.latent_size, config.n_decision_block, 
                 self.hidden_size, config.decision_nhead, config.max_segment_length, 
                 inner_hidden_size=self.inner_hidden_size,
                 checkpoints_density=checkpoints_density,
                 context_window=config.context_window, 
                 model_type = config.causal_modeling)
 
-        self.act_decoder = ActionDecoder(self.hidden_size, 2 * self.hidden_size, self.action_size, dropout=0.0)
         self.wm_type = config.worldmodel_type
 
         loss_mask = torch.cat((
@@ -86,16 +89,18 @@ class MazeModelBase(nn.Module):
         """
         
         # Encode with VAE
-        B, NT = actions.shape
+        B, NT, H = actions.shape
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
 
-
         # Temporal Encoders
-        z_pred, a_pred, new_cache = self.decformer(z_rec, actions, cache=cache, need_cache=need_cache, state_dropout=state_dropout)
+
+        act_hidden = self.action_encoder(actions)
+
+        z_pred, a_pred, new_cache = self.decformer(z_rec, act_hidden, cache=cache, need_cache=need_cache, state_dropout=state_dropout)
 
         # Decode Action [B, N_T, action_size]
-        a_pred = self.act_decoder(a_pred)
+        a_pred = self.action_decoder(a_pred)
 
         return z_rec, z_pred, a_pred, new_cache
 
@@ -110,7 +115,8 @@ class MazeModelBase(nn.Module):
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.decformer.requires_grad_(True)
-        self.act_decoder.requires_grad_(True)
+        self.action_encoder.requires_grad_(True)
+        self.action_decoder.requires_grad_(True)
         self.lat_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
@@ -135,7 +141,10 @@ class MazeModelBase(nn.Module):
             lmse_z = mse_loss_mask(target_pred, targets, mask=self.loss_mask[:, :z_pred.shape[1]], reduce=reduce)
             lmse_obs = torch.tensor(0.0).to(lmse_z.device)
 
-        lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
+        if(not self.action_decoder.is_continuous):
+            lce_act = ce_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
+        else:
+            lce_act = mse_loss_mask(a_pred, label_actions, mask=self.loss_mask[:, :a_pred.shape[1]], reduce=reduce)
         cnt = torch.tensor(label_actions.shape[0] * label_actions.shape[1], dtype=torch.int, device=label_actions.device)
 
         return lmse_obs, lmse_z, lce_act, cnt

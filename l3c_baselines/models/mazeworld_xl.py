@@ -77,8 +77,9 @@ class MazeModelXL(MazeModelBase):
         self.decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.decformer.requires_grad_(True)
-        self.act_decoder.requires_grad_(True)
         self.lat_decoder.requires_grad_(True)
+        self.action_encoder.requires_grad_(True)
+        self.action_decoder.requires_grad_(True)
 
         inputs = img_pro(observations)
         z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=self.memory, need_cache=True, state_dropout=state_dropout)

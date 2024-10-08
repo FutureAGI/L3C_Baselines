@@ -26,9 +26,9 @@ class Encoder(nn.Module):
     def __init__(self, img_size, in_channel, out_channel, n_res_block):
         super().__init__()
 
-        channel_b1 = out_channel // 16
-        channel_b2 = out_channel // 8
-        channel_b3 = out_channel // 4
+        channel_b1 = out_channel // 64
+        channel_b2 = out_channel // 32
+        channel_b3 = out_channel // 16
         cur_size = img_size // 8
         fin_channel = cur_size * cur_size * channel_b3
 
@@ -88,9 +88,9 @@ class Decoder(nn.Module):
     ):
         super().__init__()
 
-        channel_b1 = hidden_size // 2
+        channel_b1 = hidden_size // 8
+        self.ini_channel = hidden_size // 32
         self.ini_size = img_size // 8
-        self.ini_channel = hidden_size // 4
         ini_mapping = self.ini_size * self.ini_size * self.ini_channel
 
         self.input_mapping = nn.Sequential(nn.Linear(in_channel, hidden_size), nn.LeakyReLU(), nn.Linear(hidden_size, ini_mapping), nn.LeakyReLU())
@@ -151,12 +151,39 @@ class MapDecoder(nn.Module):
         out = self.blocks(out).permute(0, 3, 1, 2)
         return out
 
+class ActionEncoder(nn.Module):
+    def __init__(
+        self,
+        input_type,
+        hidden_size,
+        dropout=0.10
+    ):
+        super().__init__()
+
+        if(input_type.startswith("Discrete")):
+            input_size = int(input_type.replace("Discrete", ""))
+            self.is_continuous = False
+            self.act_encoder_layer = nn.Embedding(input_size, hidden_size)
+        elif(input_type.startswith("Continuous")):
+            input_size = int(input_type.replace("Continuous", ""))
+            self.is_continuous = True
+            self.act_encoder_layer = nn.Sequential(
+                    nn.Linear(input_size, 2 * hidden_size),
+                    nn.GELU(),
+                    nn.Linear(2 * hidden_size, hidden_size)
+                    )
+        else:
+            raise Exception(f"action input type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
+
+    def forward(self, input):
+        return self.act_encoder_layer(input)
+
 class ActionDecoder(nn.Module):
     def __init__(
         self,
         input_size,
         hidden_size,
-        output_size,
+        output_type,  # Output Type is selected between "ContinousXX" and "DiscreteXX"
         dropout=0.10
     ):
         super().__init__()
@@ -169,9 +196,18 @@ class ActionDecoder(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_size, input_size),
             nn.GELU())
-
-        self.act_decoder_post = nn.Linear(input_size, output_size)
-        self.act_decoder_output = nn.Softmax(dim=-1)
+        if(output_type.startswith("Discrete")):
+            output_size = int(output_type.replace("Discrete", ""))
+            self.is_continuous = False
+            self.act_decoder_post = nn.Linear(input_size, output_size)
+            self.act_decoder_output = nn.Softmax(dim=-1)
+        elif(output_type.startswith("Continuous")):
+            output_size = int(output_type.replace("Continuous", ""))
+            self.is_continuous = True
+            self.act_decoder_post = nn.Linear(input_size, output_size)
+            self.act_decoder_output = nn.Identity()
+        else:
+            raise Exception(f"action output type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
 
     def forward(self, input, T=1.0):
         src = self.layer_norm(input)

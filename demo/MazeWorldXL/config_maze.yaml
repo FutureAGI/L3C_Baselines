@@ -1,19 +1,20 @@
 ---
 model_config:
   image_size: 128
-  action_size: 5
+  action_input_type: Continuous2
+  action_output_type: Discrete16
   map_size: 7
   decision_checkpoints_density: 4
   decision_hidden_size: 768
   decision_inner_hidden_size: 1536
   decision_nhead: 16
   image_latent_size: 1024
-  image_encoder_size: 384
+  image_encoder_size: 1024
   n_residual_block: 2
   n_decision_block: 18
   max_time_step: 16000
   max_segment_length: 2000
-  loss_context_warmup: 500
+  loss_context_warmup: 1000
   context_window: -1
   memory_length: 1000
   image_decoder_type: regression
@@ -72,7 +73,7 @@ test_config:
   batch_size: 1
   data_path: "[PATH]"
   master_port: "12201"
-  load_model_path: ""
+  load_model_path: None
   time_step: 16000
   segment_length: 1000
 

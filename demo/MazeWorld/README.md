@@ -1,6 +1,0 @@
-This is a demo of L3C basic baselines with causal transformer
-To train the casual modeling of L3C_Baselines, run the following command: 
-```bash
-export CUDA_VISIBLE_DEVICES=...
-python train.py configuration.yaml --configs key1=value1 key2=value2 ...
-```
