@@ -8,8 +8,8 @@ from l3c.anymdp import AnyMDPTaskSampler, Resampler
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_states", type=int, default=64, help="number of states")
-    parser.add_argument("--n_actions", type=int, default=64, help="number of actions")
+    parser.add_argument("--n_states", type=int, default=128, help="number of states")
+    parser.add_argument("--n_actions", type=int, default=5, help="number of actions")
     parser.add_argument("--task_number", type=int, default=1, help="multiple epochs:default:1")
     parser.add_argument("--output_path", type=str, help="output file name")
     args = parser.parse_args()
