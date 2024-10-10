@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post, parameters_regularization
-from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock, VAE
+from l3c_baselines.modules import ImageEncoder, ImageDecoder
 from decision_model import SADecisionModel
 
 class E2EObjNavSA(nn.Module):
@@ -17,18 +17,17 @@ class E2EObjNavSA(nn.Module):
         super().__init__()
 
         # 创建动作编码层
-        self.img_encoder = EncodeBlock(config.image_encoder_block)
+        self.img_encoder = ImageEncoder(config.image_encoder_block)
 
-        self.img_decoder = DecodeBlock(config.image_decoder_block)
+        self.img_decoder = ImageDecoder(config.image_decoder_block)
 
         self.decision_model = SADecisionModel(config.decision_block)
 
-        self.vae = VAE(config.image_encode_size, self.img_encoder, self.img_decoder) 
+        self.vae = VAE(config.vae_latent_size, self.img_encoder, self.img_decoder) 
 
         loss_weight = torch.cat((
                 torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                torch.full((1, config.max_time_step - config.context_warmup,), 1.0)), dim=1)
-        self.register_buffer('loss_weight', loss_weight)
+s        self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
 

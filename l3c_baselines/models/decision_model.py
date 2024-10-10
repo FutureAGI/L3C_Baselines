@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock
+from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
 from l3c_baselines.utils import format_cache
 
 class SADecisionModel(nn.Module):
@@ -20,10 +20,10 @@ class SADecisionModel(nn.Module):
         mask_embeddings = torch.randn(1, 1, config.state_encode.input_size)
         self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
-        self.s_encoder = EncodeBlock(config.state_encode)
-        self.a_encoder = EncodeBlock(config.action_encode)
-        self.s_decoder = DecodeBlock(config.state_decode)
-        self.a_decoder = DecodeBlock(config.action_decode)
+        self.s_encoder = MLPEncoder(config.state_encode)
+        self.a_encoder = MLPEncoder(config.action_encode)
+        self.s_decoder = ResidualMLPDecoder(config.state_decode)
+        self.a_decoder = ResidualMLPDecoder(config.action_decode)
 
     def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """

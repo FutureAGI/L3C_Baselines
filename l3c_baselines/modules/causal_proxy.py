@@ -8,7 +8,7 @@ from .transformers import ARTransformerEncoder
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .proxy_base import ProxyBase
 
-class CausalBlock(ProxyBase):
+class CausalBlock(nn.Module):
     """
     Take Observations and actions, output d_models
     """

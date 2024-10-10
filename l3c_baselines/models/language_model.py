@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock
+from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
 from l3c_baselines.utils import format_cache
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask
 
@@ -14,13 +14,13 @@ class LanguageModel(nn.Module):
         super().__init__()
 
         # 创建动作编码层
-        self.word_emb = EncodeBlock(config.word_embeddings)
+        self.word_emb = MLPEncoder(config.word_embeddings)
 
         self.nvocab = config.vocab_size
 
         self.encoder = CausalBlock(config.causal_block)
 
-        self.output_mapping = DecodeBlock(config.output_layers)
+        self.output_mapping = ResidualMLPDecoder(config.output_layers)
 
         loss_weight = torch.cat((
                 torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
