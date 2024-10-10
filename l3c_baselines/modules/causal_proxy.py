@@ -6,14 +6,13 @@ from .mamba_minimal import Mamba
 from .recursion import PRNN, SimpleLSTM, MemoryLayers
 from .transformers import ARTransformerEncoder
 from .blockrec_wrapper import BlockRecurrentWrapper
-from .proxy_base import ProxyBase
 
 class CausalBlock(nn.Module):
     """
     Take Observations and actions, output d_models
     """
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__()
 
         if(config.model_type == "TRANSFORMER"):
             main_encoder = ARTransformerEncoder(

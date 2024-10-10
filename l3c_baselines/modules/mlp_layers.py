@@ -7,10 +7,12 @@ class MLPEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.input_size = config.input_size
+        input_size = config.input_size
         hidden_size = config.hidden_size # Can be int or a list of ints
         dropout = config.dropout
         input_type = config.input_type.lower()
+
+        self.input_size = input_size
 
         if(input_type.startswith("discrete")):
             self.is_continuous = False
@@ -43,12 +45,14 @@ class ResidualMLPDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        output_type = output_type.lower()
+        output_type = config.output_type.lower()
         input_size = config.input_size
         hidden_size = config.hidden_size
         dropout = config.dropout
         layer_norm = config.layer_norm
         residual_connect = config.residual_connect
+
+        self.input_size = input_size
         
         if(layer_norm):
             self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
@@ -74,13 +78,16 @@ class ResidualMLPDecoder(nn.Module):
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 self.decoder_pre = get_layers([input_size] + list(hidden_size[:-1]) + [input_size], dropout)
                 self.decoder_post = get_layers([input_size, hidden_size[-1]], dropout)
+                self.output_size = hidden_size[-1]
             else:
                 raise Exception("if use residual connection, the hidden size must have at least two layers")
         else:
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 self.decoder_pre = get_layers([input_size] + list(hidden_size), dropout)
+                self.output_size = hidden_size[-1]
             else:
                 self.decoder_pre = get_layers([input_size, hidden_size], dropout)
+                self.output_size = hidden_size
             self.decoder_post = None
 
         if(output_type.startswith("discrete")):
