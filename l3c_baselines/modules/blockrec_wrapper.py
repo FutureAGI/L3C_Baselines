@@ -22,12 +22,13 @@ class BlockRecurrentWrapper(nn.Module):
         """
         super().__init__()
 
-        self.clear_memory()
+        self.reset()
         self.temporal_module = temporal_module
         self.mem_len = memory_length
         self.memory_type = memory_type.lower()
 
-    def clear_memory(self):
+    def reset(self):
+        # This will clear the memory and the cache
         self.memory = None
         
     def merge_memory_in_cache(self, cache):

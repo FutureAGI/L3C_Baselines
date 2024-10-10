@@ -55,9 +55,11 @@ class CausalBlock(ProxyBase):
         else:
             raise Exception("No such causal model: %s" % model_type)
         
+        self.need_reset = False
         if(config.use_blockrecurrence):
             main_encoder = BlockRecurrentWrapper(main_encoder, config.memory_length, 
                     memory_type = config.memory_type)
+            self.need_reset = True
 
         if(config.use_layer_norm):
             self.layer_norm = nn.LayerNorm(config.hidden_size, eps=1.0e-5)
@@ -71,6 +73,10 @@ class CausalBlock(ProxyBase):
         kwargs["checkpoints_density"] = self.checkpoints_density
         out, cache = self.layers.forward(*args, **kwargs)
         return self.layer_norm(out), cache
+    
+    def reset(self):
+        if(self.need_reset):
+            self.layers.reset()
 
 if __name__=='__main__':
     DT = CausalModeling(config)

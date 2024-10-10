@@ -25,7 +25,7 @@ class SADecisionModel(nn.Module):
         self.s_decoder = DecodeBlock(config.state_decode)
         self.a_decoder = DecodeBlock(config.action_decode)
 
-    def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0):
+    def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -73,9 +73,12 @@ class SADecisionModel(nn.Module):
         obs_output = self.s_decoder(outputs[:, :, 1])
 
         # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, 0])
+        act_output = self.a_decoder(outputs[:, :, 0], T=T)
 
         return obs_output, act_output, new_cache
+
+    def reset(self):
+        self.causal_model.reset()
 
 if __name__=='__main__':
     import sys
