@@ -1,13 +1,14 @@
 import os
+import re
 import sys
-import torch
-from torch import nn
 import yaml
+import torch
+import numpy
+from torch import nn
 from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
 from collections import defaultdict
-import re
 
 
 def count_parameters(model):
@@ -22,6 +23,22 @@ def parameters_regularization(*layers):
                 norm += (p ** 2).sum()
                 cnt += p.numel()
     return norm / cnt
+
+def format_cache(cache, prefix=''):
+    if(cache is None):
+        return prefix + ' None'
+    elif(isinstance(cache, numpy.ndarray) or isinstance(cache, torch.Tensor)):
+        return prefix + ' ' + str(cache.shape)
+    elif(isinstance(cache, list) or isinstance(cache, tuple)):
+        ret_str = prefix + f'List of length {len(cache)}:\n['
+        for subc in cache[:-1]:
+            ret_str += format_cache(subc, prefix + ' -')
+            ret_str += '\n'
+        ret_str += format_cache(cache[-1], prefix + ' -')
+        ret_str += ']'
+        return ret_str
+    else:
+        return prefix + ' ' + str(type(cache))
 
 def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)

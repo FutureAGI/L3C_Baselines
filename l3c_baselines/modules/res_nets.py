@@ -126,17 +126,16 @@ class MLPEncoder(nn.Module):
     def __init__(
         self,
         input_type,
+        input_size,
         hidden_size, # Can be a int or a list of ints
         dropout=0.0
     ):
         super().__init__()
 
         if(input_type.startswith("Discrete")):
-            input_size = int(input_type.replace("Discrete", ""))
             self.is_continuous = False
             self.encoder_layer = nn.Embedding(input_size, hidden_size)
         elif(input_type.startswith("Continuous")):
-            input_size = int(input_type.replace("Continuous", ""))
             self.is_continuous = True
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 layers = []
@@ -159,9 +158,9 @@ class MLPEncoder(nn.Module):
 class ResidualMLPDecoder(nn.Module):
     def __init__(
         self,
+        output_type,  # Output Type is selected between "Continous" and "Discrete"
         input_size,
         hidden_size,  # Can be a int or a list of ints
-        output_type,  # Output Type is selected between "ContinousXX" and "DiscreteXX"
         dropout=0.10,
         layer_norm=True,
         residual_connect=True
@@ -173,46 +172,46 @@ class ResidualMLPDecoder(nn.Module):
         else:
             self.layer_norm = nn.Identity()
 
+        def get_layers(io_list, dropout):
+            if(len(io_list) < 2):
+                return nn.Identity()
+            elif(len(io_list) < 3):
+                return nn.Linear(io_list[0], io_list[1])
+            else:
+                layers = []
+                for i in range(len(io_list) - 2):
+                    layers.append(nn.Linear(io_list[i], io_list[i+1]))
+                    layers.append(nn.GELU())
+                    layers.append(nn.Dropout(dropout))
+                layers.append(nn.Linear(io_list[-2], io_list[-1]))
+                return nn.Sequential(*layers)
+
         self.residual_connect = residual_connect
         if(residual_connect):
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
-                hiddens = list(hidden_size) + [input_size]
+                self.decoder_pre = get_layers([input_size] + list(hidden_size[:-1]) + [input_size], dropout)
+                self.decoder_post = get_layers([input_size, hidden_size[-1]], dropout)
             else:
-                hiddens = [hidden_size, input_size]
+                raise Exception("if use residual connection, the hidden size must have at least two layers")
         else:
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
-                hiddens = list(hidden_size)
+                self.decoder_pre = get_layers([input_size] + list(hidden_size), dropout)
             else:
-                hiddens = [hidden_size]
-
-        layers = []
-        ph = input_size
-        for h in hidden_size[:-1]:
-            layers.append(nn.Linear(ph, h))
-            layers.append(nn.GELU())
-            layers.append(nn.Dropout(dropout))
-            ph = h
-        layers.append(nn.Linear(ph, input_size))
-        self.decoder_layer_pre = nn.Sequential(*layers)
+                self.decoder_pre = get_layers([input_size, hidden_size], dropout)
+            self.decoder_post = None
 
         if(output_type.startswith("Discrete")):
-            output_size = int(output_type.replace("Discrete", ""))
             self.is_continuous = False
-            self.decoder_layer_post = nn.Linear(hiddens[-1], output_size)
-            self.decoder_layer_output = nn.Softmax(dim=-1)
+            self.decoder_output = nn.Softmax(dim=-1)
         elif(output_type.startswith("Continuous")):
-            output_size = int(output_type.replace("Continuous", ""))
             self.is_continuous = True
-            self.decoder_layer_post = nn.Linear(hiddens[-1], output_size)
-            self.decoder_layer_output = nn.Identity()
+            self.decoder_output = nn.Identity()
         else:
-            raise Exception(f"action output type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
+            raise Exception(f"action output type must be Continuous or Discrete, unrecognized `{output_type}`")
 
     def forward(self, input, T=1.0):
         src = self.layer_norm(input)
-        out = self.act_decoder_pre(src)
+        out = self.decoder_pre(src)
         if(self.residual_connect):
-            out = self.act_decoder_post(out + src)
-        else:
-            out = self.act_decoder_post(out)
-        return self.act_decoder_output(out / T)
+            out = self.decoder_post(out + src)
+        return self.decoder_output(out / T)

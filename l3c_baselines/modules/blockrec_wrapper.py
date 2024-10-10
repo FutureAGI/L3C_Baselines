@@ -20,7 +20,8 @@ class BlockRecurrentWrapper(nn.Module):
         """
         Memory_Type: "kv", "mem"
         """
-        super().__init__(config)
+        super().__init__()
+
         self.clear_memory()
         self.temporal_module = temporal_module
         self.mem_len = memory_length
@@ -55,19 +56,8 @@ class BlockRecurrentWrapper(nn.Module):
         # Else, we keep the cache and the memory
         if(self.memory_type == "kv"):
             new_cache = self.merge_memory_in_cache(cache)
-            if(new_cache[0].shape[1] > 2 * self.mem_len):
-                b = (new_cache[0].shape[1] // self.mem_len) * self.mem_len
-                new_mem = []
-                for mem in new_cache:
-                    new_mem.append(mem[:, (b-self.mem_len):b])
-                self.memory = new_mem
-                if(b >= new_cache[0].shape[1]):
-                    new_cache = None
-                else:
-                    new_cache = [c[:, b:] for c in new_cache]
-            else:
-                # If the cache is not long enough, keep the memory and the cache
-                new_cache = cache
+            self.memory = [c[:, -self.mem_len:] for c in new_cache]
+            new_cache = None
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
             self.memory = []
@@ -83,7 +73,11 @@ class BlockRecurrentWrapper(nn.Module):
         return new_cache
             
     def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1):
-        output, new_cache = self.temporal_module(src, cache=self.merge_memory_in_cache(cache), need_cache=True, checkpoints_density=checkpoints_density)
+        output, new_cache = self.temporal_module.forward(
+                src, 
+                cache=self.merge_memory_in_cache(cache), 
+                need_cache=need_cache, 
+                checkpoints_density=checkpoints_density)
         new_cache = self.update_memory_cache(new_cache)
         return output, new_cache
 

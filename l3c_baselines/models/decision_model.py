@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock
-
+from l3c_baselines.utils import format_cache
 
 class SADecisionModel(nn.Module):
     """
@@ -15,9 +15,9 @@ class SADecisionModel(nn.Module):
         self.causal_model = CausalBlock(config.causal_block)
 
         # 创建Type向量[1, 1, NP, C]
-        type_embeddings = torch.randn(1, 1, 2, d_model)
+        type_embeddings = torch.randn(1, 1, 2, config.causal_block.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
-        mask_embeddings = torch.randn(1, 1, observation_size)
+        mask_embeddings = torch.randn(1, 1, config.state_encode.input_size)
         self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
         self.s_encoder = EncodeBlock(config.state_encode)
@@ -36,7 +36,7 @@ class SADecisionModel(nn.Module):
         Ba = a_arr.shape[0]
         NTa = a_arr.shape[1]
 
-        assert Ba == B and (NTa + 1) == NT
+        assert Ba == B and NTa == NT
 
         # Add state dropouts
         device = s_arr.device
@@ -64,8 +64,7 @@ class SADecisionModel(nn.Module):
         outputs = outputs.view(B, NT * 2, -1)
 
         # Temporal Encoders
-        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache, 
-                                          checkpoints_density=self.encoder.checkpoints_density)
+        outputs, new_cache = self.causal_model(outputs, cache=cache, need_cache=need_cache)
 
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
@@ -74,18 +73,21 @@ class SADecisionModel(nn.Module):
         obs_output = self.s_decoder(outputs[:, :, 1])
 
         # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, 0]）
+        act_output = self.a_decoder(outputs[:, :, 0])
 
         return obs_output, act_output, new_cache
 
 if __name__=='__main__':
-    DT = SADecisionModel(256, 5, 2, 64, 8, 64, dropout=0.0, checkpoints_density=-1, model_type="LSTM")
-    inputs_obs = torch.randn((1, 64, 256))
-    input_acts = torch.randint(0, 4, (1, 64, 256))
-    out_obs_1, out_act_1, cache_1 = DT(inputs_obs[:, :32], input_acts[:, :32], need_cache=True)
-    out_obs_2, out_act_2, cache_2 = DT(inputs_obs[:, 32:], input_acts[:, 32:], cache=cache_1, need_cache=True)
-    out_obs_3, out_act_3, cache_3 = DT(inputs_obs, input_acts, need_cache=True)
-    print(out_obs_3[:, :32] - out_obs_1)
-    print(out_act_3[:, :32] - out_act_1)
-    print(out_obs_3[:, 32:] - out_obs_2)
-    print(out_act_3[:, 32:] - out_act_2)
+    import sys
+    from l3c_baselines.utils import Configure
+    config = Configure()
+    config.from_yaml(sys.argv[1])
+    SADM = SADecisionModel(config.model_config.decision_block)
+    cache = None
+    for seg in range(10):
+        i_s = torch.rand((4, 64, 128))
+        i_a = torch.randint(0, 4, (4, 64))
+        o_s, o_a, cache = SADM.forward(i_s, i_a, cache=cache)
+        print(seg, o_s.shape, o_a.shape)
+        print(format_cache(cache, "Cache"))
+        print(format_cache(SADM.causal_model.layers.memory, "Memory"))
