@@ -19,7 +19,7 @@ class ResBlock(nn.Module):
 
         return out
 
-class Encoder(nn.Module):
+class ImageEncoder(nn.Module):
     """
     Change [B*NT, C_in, 128, 128] to [B*NT, C_out]
     """
@@ -74,7 +74,7 @@ class Encoder(nn.Module):
     def forward(self, input):
         return self.blocks(input)
 
-class Decoder(nn.Module):
+class ImageDecoder(nn.Module):
     """
     Change [B*NT, C_in] to [B*NT, C_out, 128, 128]
     """
@@ -122,122 +122,97 @@ class Decoder(nn.Module):
         img = img.view(-1, self.ini_channel, self.ini_size, self.ini_size)
         return self.blocks(img)
 
-class MapDecoder(nn.Module):
-    def __init__(
-        self, 
-        in_channel, 
-        hidden,
-        out_channel, 
-        map_size,
-    ):
-        super().__init__()
-
-        self.input_mapping = nn.Linear(in_channel, map_size * map_size * hidden)
-        self.map_size = map_size
-        self.hidden = hidden
-
-        blocks = [
-            nn.GELU(),
-            nn.Linear(hidden, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, out_channel),
-        ]
-
-        self.blocks = nn.Sequential(*blocks)
-
-    def forward(self, input):
-        out = self.input_mapping(input)
-        out = out.view(-1, self.map_size, self.map_size, self.hidden)
-        out = self.blocks(out).permute(0, 3, 1, 2)
-        return out
-
-class ActionEncoder(nn.Module):
+class MLPEncoder(nn.Module):
     def __init__(
         self,
         input_type,
-        hidden_size,
-        dropout=0.10
+        hidden_size, # Can be a int or a list of ints
+        dropout=0.0
     ):
         super().__init__()
 
         if(input_type.startswith("Discrete")):
             input_size = int(input_type.replace("Discrete", ""))
             self.is_continuous = False
-            self.act_encoder_layer = nn.Embedding(input_size, hidden_size)
+            self.encoder_layer = nn.Embedding(input_size, hidden_size)
         elif(input_type.startswith("Continuous")):
             input_size = int(input_type.replace("Continuous", ""))
             self.is_continuous = True
-            self.act_encoder_layer = nn.Sequential(
-                    nn.Linear(input_size, 2 * hidden_size),
-                    nn.GELU(),
-                    nn.Linear(2 * hidden_size, hidden_size)
-                    )
+            if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
+                layers = []
+                ph = input_size
+                for h in hidden_size[:-1]:
+                    layers.append(nn.Linear(ph, h))
+                    layers.append(nn.GELU())
+                    layers.append(nn.Dropout(dropout))
+                    ph = h
+                layers.append(nn.Linear(ph, hidden_size[-1]))
+                self.encoder_layer = nn.Sequential(*layers)
+            else:
+                self.encoder_layer = nn.Linear(input_size, hidden_size)
         else:
             raise Exception(f"action input type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
 
     def forward(self, input):
-        return self.act_encoder_layer(input)
+        return self.encoder_layer(input)
 
-class ActionDecoder(nn.Module):
+class ResidualMLPDecoder(nn.Module):
     def __init__(
         self,
         input_size,
-        hidden_size,
+        hidden_size,  # Can be a int or a list of ints
         output_type,  # Output Type is selected between "ContinousXX" and "DiscreteXX"
-        dropout=0.10
+        dropout=0.10,
+        layer_norm=True,
+        residual_connect=True
     ):
         super().__init__()
 
-        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
+        if(layer_norm):
+            self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
+        else:
+            self.layer_norm = nn.Identity()
 
-        self.act_decoder_pre = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, input_size),
-            nn.GELU())
+        self.residual_connect = residual_connect
+        if(residual_connect):
+            if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
+                hiddens = list(hidden_size) + [input_size]
+            else:
+                hiddens = [hidden_size, input_size]
+        else:
+            if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
+                hiddens = list(hidden_size)
+            else:
+                hiddens = [hidden_size]
+
+        layers = []
+        ph = input_size
+        for h in hidden_size[:-1]:
+            layers.append(nn.Linear(ph, h))
+            layers.append(nn.GELU())
+            layers.append(nn.Dropout(dropout))
+            ph = h
+        layers.append(nn.Linear(ph, input_size))
+        self.decoder_layer_pre = nn.Sequential(*layers)
+
         if(output_type.startswith("Discrete")):
             output_size = int(output_type.replace("Discrete", ""))
             self.is_continuous = False
-            self.act_decoder_post = nn.Linear(input_size, output_size)
-            self.act_decoder_output = nn.Softmax(dim=-1)
+            self.decoder_layer_post = nn.Linear(hiddens[-1], output_size)
+            self.decoder_layer_output = nn.Softmax(dim=-1)
         elif(output_type.startswith("Continuous")):
             output_size = int(output_type.replace("Continuous", ""))
             self.is_continuous = True
-            self.act_decoder_post = nn.Linear(input_size, output_size)
-            self.act_decoder_output = nn.Identity()
+            self.decoder_layer_post = nn.Linear(hiddens[-1], output_size)
+            self.decoder_layer_output = nn.Identity()
         else:
             raise Exception(f"action output type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
 
     def forward(self, input, T=1.0):
         src = self.layer_norm(input)
         out = self.act_decoder_pre(src)
-        out = self.act_decoder_post(out + src)
+        if(self.residual_connect):
+            out = self.act_decoder_post(out + src)
+        else:
+            out = self.act_decoder_post(out)
         return self.act_decoder_output(out / T)
-
-class LatentDecoder(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        output_size,
-        dropout=0.10
-    ):
-        super().__init__()
-
-        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
-
-        self.lat_decoder_pre = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, input_size),
-            nn.GELU())
-
-        self.lat_decoder_post = nn.Linear(input_size, output_size)
-
-    def forward(self, input):
-        src = self.layer_norm(input)
-        out = self.lat_decoder_pre(src)
-        out = self.lat_decoder_post(out + src)
-        return out

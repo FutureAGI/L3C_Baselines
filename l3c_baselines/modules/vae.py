@@ -13,8 +13,8 @@ class VAE(nn.Module):
         self.hidden_size = hidden_size
         self.encoder = encoder
         self.decoder = decoder
-        self.layer_mean = nn.Linear(encoder.hidden_size, hidden_size)
-        self.layer_var = nn.Linear(encoder.hidden_size, hidden_size)
+        self.layer_mean = nn.Linear(encoder.output_size, hidden_size)
+        self.layer_var = nn.Linear(encoder.output_size, hidden_size)
     
     def forward(self, inputs):
         # input shape: [B, NT, C, W, H]
