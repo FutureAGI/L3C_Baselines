@@ -206,7 +206,8 @@ if __name__=="__main__":
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(observation, action, action)
-    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config.demo_config.model_config.policy)
+    rec_img, img_out, act_out, cache = model.inference_step_by_step(
+            observation[:, :5], action[:, :4], 1.0, 0, observation.device)
     print("vae:", vae_loss, "sequential:", losses)
     print(img_out[0].shape, act_out.shape)
     print(len(cache))
