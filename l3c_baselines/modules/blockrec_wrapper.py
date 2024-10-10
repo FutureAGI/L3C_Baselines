@@ -10,7 +10,8 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-from utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from l3c_baselines.utils import format_cache
 
 class BlockRecurrentWrapper(nn.Module):
     """
@@ -56,9 +57,11 @@ class BlockRecurrentWrapper(nn.Module):
         # For KV cache, in case the memory + cache > 2 * memory_length, we update the memory
         # Else, we keep the cache and the memory
         if(self.memory_type == "kv"):
-            new_cache = self.merge_memory_in_cache(cache)
-            self.memory = [c[:, -self.mem_len:] for c in new_cache]
-            new_cache = None
+            if(cache is not None):
+                self.memory = [c[:, -self.mem_len:] for c in cache]
+            else:
+                self.memory = None
+            return None
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
             self.memory = []
@@ -67,28 +70,37 @@ class BlockRecurrentWrapper(nn.Module):
                 for lt_cache in l_cache:
                     mem += (lt_cache.detach(),)
                 self.memory.append(mem)
-            new_cache = cache
+            return cache
         else:
             raise Exception(f"No such memory type: {self.memory_type}")
-    
-        return new_cache
+
+    def update_cache_only(self, cache):
+        if(self.memory_type == 'kv'):
+            if(self.memory is None):
+                return cache
+            else:
+                new_cache = []
+                for m,c in zip(self.memory, cache):
+                    m_len = m.shape[1]
+                    new_cache.append(c[m_len:])
+                return new_cache
+        elif(self.memory_type == "mem"):
+            return cache
+        else:
+            raise Exception(f"No such memory type: {self.memory_type}")
             
-    def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1):
+    def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1, update_memory=True):
+        # when update memory = False, inference won't update the memory, but will update the cache
         output, new_cache = self.temporal_module.forward(
                 src, 
                 cache=self.merge_memory_in_cache(cache), 
-                need_cache=need_cache, 
+                need_cache=True, 
                 checkpoints_density=checkpoints_density)
-        new_cache = self.update_memory_cache(new_cache)
+        if(update_memory):
+            new_cache = self.update_memory_cache(new_cache)
+        elif(need_cache):
+            new_cache = self.update_cache_only(new_cache)
+        else:
+            new_cache = None
+
         return output, new_cache
-
-if __name__=="__main__":
-    from utils import Configure
-    config=Configure()
-    config.from_yaml(sys.argv[1])
-
-    inputs = torch.randint(0, 1024, (4, 64))
-    ART2 = ARTransformerEncoder()
-    out_nlp, cache = ART2(inputs, need_cache=True)
-    out_nlp2, cache = ART2(inputs, cache=cache, need_cache=True)
-    print(out_nlp.shape, out_nlp2.shape)

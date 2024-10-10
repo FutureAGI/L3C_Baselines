@@ -8,12 +8,9 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from modules import Encoder, Decoder, ResBlock, MapDecoder, ActionEncoder, ActionDecoder, LatentDecoder, VAE
-from modules import CausalDecisionModel
-from modules import DiffusionLayers
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post, parameters_regularization
-from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock
-from .decision_model import SADecisionModel
+from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock, VAE
+from decision_model import SADecisionModel
 
 class E2EObjNavSA(nn.Module):
     def __init__(self, config): 
@@ -24,7 +21,7 @@ class E2EObjNavSA(nn.Module):
 
         self.img_decoder = DecodeBlock(config.image_decoder_block)
 
-        self.decision_model = SADecisionModel(config.decision_model_block)
+        self.decision_model = SADecisionModel(config.decision_block)
 
         self.vae = VAE(config.image_encode_size, self.img_encoder, self.img_decoder) 
 
@@ -34,8 +31,10 @@ class E2EObjNavSA(nn.Module):
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
+
+        self.policy_loss = config.policy_loss_type.lower()
         
-    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0):
+    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0, update_memory=True):
         """
         Input Size:
             observations:[B, NT, C, W, H]
@@ -44,11 +43,14 @@ class E2EObjNavSA(nn.Module):
         """
         
         # Encode with VAE
-        B, NT, H = actions.shape
+        B = actions.shape[0]
+        NT = actions.shape[1]
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
 
-        z_pred, a_pred, new_cache = self.decision_model(z_rec, actions, cache=cache, need_cache=need_cache, state_dropout=state_dropout)
+        z_pred, a_pred, new_cache = self.decision_model(z_rec, actions, 
+                cache=cache, need_cache=need_cache, state_dropout=state_dropout, 
+                update_memory=update_memory)
 
         return z_rec, z_pred, a_pred, new_cache
 
@@ -62,6 +64,7 @@ class E2EObjNavSA(nn.Module):
                         additional_info=None, # Kept for passing additional information
                         start_position=0, 
                         state_dropout=0.0, 
+                        update_memory=True,
                         reduce='mean'):
         
         self.img_encoder.requires_grad_(False)
@@ -72,7 +75,9 @@ class E2EObjNavSA(nn.Module):
         inputs = img_pro(observations)
 
         # Predict the latent representation of action and next frame (World Model)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, cache=None, need_cache=False, state_dropout=state_dropout)
+        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, 
+                cache=None, need_cache=False, state_dropout=state_dropout,
+                update_memory=update_memory)
         
         # Encode the last frame to latent space
         with torch.no_grad():
@@ -94,12 +99,12 @@ class E2EObjNavSA(nn.Module):
         loss["wm-image"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
 
         # Decision Model Loss
-        if(config.policy_loss.lower()=='crossentropy'):
-            assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8, torch.uint32]
-            loss_weight = label_actions.ge(0) * label_actions.lt(self.input_size) * self.loss_weight[:, ps:pe]
-            truncated_actions = torch.clip(label_actions, 0, self.input_size - 1)
+        if(self.policy_loss == 'crossentropy'):
+            assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
+            loss_weight = label_actions.ge(0) * label_actions.lt(self.nactions) * self.loss_weight[:, ps:pe]
+            truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
             loss["pm"] = ce_loss_mask(a_pred, truncated_actions, mask=loss_weight, reduce=reduce)
-        elif(config.policy_loss.lower()=='mse'):
+        elif(self.policy_loss == 'mse'):
             loss["pm"] = mse_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce=reduce)
         loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=label_actions.device)
         loss["causal-l2"] = parameters_regularization(self.decision_model)
@@ -139,7 +144,10 @@ class E2EObjNavSA(nn.Module):
         # Only use ground truth
         if(Nobs > 1):
             with torch.no_grad():
-                z_rec, z_pred, a_pred, valid_cache  = self.forward(valid_obs[:, :-1], valid_act[:, :-1], cache=cache, need_cache=True)
+                z_rec, z_pred, a_pred, valid_cache  = self.forward(
+                        valid_obs[:, :-1], valid_act[:, :-1], 
+                        cache=cache, need_cache=True,
+                        update_memory=True)
         else:
             valid_cache = cache
 
@@ -163,7 +171,10 @@ class E2EObjNavSA(nn.Module):
                     print(f"Action: {valid_act[:, -1]} Raw Output: {a_pred[:, -1]}")
 
                 # Inference Next Observation based on Sampled Action
-                z_pred, a_pred, updated_cache = self.decision_model(z_rec, n_act, cache=updated_cache, need_cache=True)
+                # Do not update the memory based on current imagination
+                z_pred, a_pred, updated_cache = self.decision_model(z_rec, n_act, 
+                        cache=updated_cache, need_cache=True, 
+                        update_memory=(step==0))
 
                 # Only the first step uses the ground truth
                 if(step == 0):
@@ -186,7 +197,7 @@ if __name__=="__main__":
     config=Configure()
     config.from_yaml(sys.argv[1])
 
-    model = MazeModelBase(config.model_config)
+    model = E2EObjNavSA(config.model_config)
 
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
@@ -194,8 +205,8 @@ if __name__=="__main__":
     local_map = torch.randn(8, 32, 3, 7, 7)
 
     vae_loss = model.vae_loss(observation)
-    losses = model.sequential_loss(observation, action)
-    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config.demo_config.policy)
+    losses = model.sequential_loss(observation, action, action)
+    rec_img, img_out, act_out, cache = model.inference_step_by_step(observation[:, :1], config.demo_config.model_config.policy)
     print("vae:", vae_loss, "sequential:", losses)
     print(img_out[0].shape, act_out.shape)
     print(len(cache))

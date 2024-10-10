@@ -25,7 +25,7 @@ class SADecisionModel(nn.Module):
         self.s_decoder = DecodeBlock(config.state_decode)
         self.a_decoder = DecodeBlock(config.action_decode)
 
-    def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0):
+    def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -64,7 +64,7 @@ class SADecisionModel(nn.Module):
         outputs = outputs.view(B, NT * 2, -1)
 
         # Temporal Encoders
-        outputs, new_cache = self.causal_model(outputs, cache=cache, need_cache=need_cache)
+        outputs, new_cache = self.causal_model(outputs, cache=cache, need_cache=need_cache, update_memory=update_memory)
 
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
@@ -90,7 +90,7 @@ if __name__=='__main__':
     for seg in range(10):
         i_s = torch.rand((4, 64, 128))
         i_a = torch.randint(0, 4, (4, 64))
-        o_s, o_a, cache = SADM.forward(i_s, i_a, cache=cache)
+        o_s, o_a, cache = SADM.forward(i_s, i_a, cache=cache, update_memory=False)
         print(seg, o_s.shape, o_a.shape)
         print(format_cache(cache, "Cache"))
         print(format_cache(SADM.causal_model.layers.memory, "Memory"))

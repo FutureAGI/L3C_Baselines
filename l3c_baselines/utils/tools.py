@@ -192,8 +192,9 @@ def infer_type(s):
     return s
 
 class Configure(object):
-    def __init__(self, data=None):
+    def __init__(self, data=None, name="RootConfig"):
         super().__setattr__("__config", dict())
+        super().__setattr__("__name", name)
         if(data is not None):
             super().__getattribute__("__config").update(data)
 
@@ -210,14 +211,21 @@ class Configure(object):
         for key in config:
             del config[key]
 
+    def has_attr(self, attr):
+        config = super().__getattribute__("__config")
+        if attr in config:
+            return True
+        return False
+
     def __getattr__(self, attr):
         config = super().__getattribute__("__config")
         if attr in config:
             value = config[attr]
             if isinstance(value, dict):
-                return Configure(value)
+                return Configure(value, attr)
             return value
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}'")
+        name = super().__getattribute__("__name")
+        raise AttributeError(f"'{name}' object has no attribute '{attr}'")
 
     def __setattr__(self, attr, value):
         d = super().__getattribute__("__config")

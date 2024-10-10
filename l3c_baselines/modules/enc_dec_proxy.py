@@ -29,9 +29,13 @@ class EncodeBlock(ProxyBase):
             )
         else:
             raise Exception("No such causal model: %s" % model_type)
-        
-        self.input_size = config.input_size
-        self.output_size = config.hidden_size
+
+        if(config.has_attr("input_size")):
+            self.input_size = config.input_size
+        if(isinstance(config.hidden_size, list) or isinstance(config.hidden_size, tuple)):
+            self.output_size = config.hidden_size[-1]
+        else:
+            self.output_size = config.hidden_size
     
 class DecodeBlock(ProxyBase):
     """
@@ -60,5 +64,9 @@ class DecodeBlock(ProxyBase):
         else:
             raise Exception("No such causal model: %s" % model_type)
 
-        self.input_size = config.input_size
-        self.output_size = config.hidden_size
+        if(config.has_attr("input_size")):
+            self.input_size = config.input_size
+        if(isinstance(config.hidden_size, list) or isinstance(config.hidden_size, tuple)):
+            self.output_size = config.hidden_size[-1]
+        else:
+            self.output_size = config.hidden_size

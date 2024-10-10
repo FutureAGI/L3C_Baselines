@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from l3c_baselines.modules import EncodeBlock, DecodeBlock, CausalBlock
+from l3c_baselines.utils import format_cache
+from l3c_baselines.utils import ce_loss_mask, mse_loss_mask
 
 class LanguageModel(nn.Module):
     """
@@ -26,14 +28,14 @@ class LanguageModel(nn.Module):
         self.register_buffer('loss_weight', loss_weight)
 
 
-    def forward(self, inputs, cache=None, need_cache=True, T=1.0):
+    def forward(self, inputs, cache=None, need_cache=True, T=1.0, update_memory=True):
         """
         Input Size:
             inputs:[B, NT], int
         """
         outputs = self.word_emb(inputs)
 
-        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache)
+        outputs, new_cache = self.encoder(outputs, cache=cache, need_cache=need_cache, update_memory=update_memory)
 
         outputs = self.output_mapping(outputs, T=T)
 
@@ -42,18 +44,18 @@ class LanguageModel(nn.Module):
     def reset(self):
         self.encoder.reset()
 
-    def perplexity(self, inputs, outputs, start_position=0):
+    def perplexity(self, inputs, outputs, start_position=0, use_loss_weight=True, update_memory=True):
         seq_len = inputs.shape[1]
-        logits, new_cache = self.forward(inputs, need_cache=False, use_loss_weight=True)
-        loss_weight = (logits.lt(self.nvocab)) * (logits.ge(0))
+        logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
+        loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
         return ce_loss_mask(logits, outputs, gamma=0, mask=loss_weight)
 
-    def perplexity_array(self, inputs, outputs, start_position=0, use_loss_weight=True):
+    def perplexity_array(self, inputs, outputs, start_position=0, use_loss_weight=True, update_memory=True):
         seq_len = inputs.shape[1]
-        logits, new_cache = self.forward(inputs, need_cache=False)
-        loss_weight = (logits.lt(self.nvocab)) * (logits.ge(0))
+        logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
+        loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
         return ce_loss_mask(logits, outputs, gamma=0, mask=loss_weight, reduce=None)
@@ -82,8 +84,21 @@ class LanguageModel(nn.Module):
 
 
 if __name__=='__main__':
-    inputs = torch.randint(0, 1024, (4, 64))
-    ART2 = LanguageModel(1024, 8, 128, 8, 1024, checkpoints_density=4)
-    out_nlp, cache = ART2(inputs, need_cache=True)
-    out_nlp2, cache = ART2(inputs, cache=cache, need_cache=True)
-    print(out_nlp.shape, out_nlp2.shape)
+    import sys
+    from l3c_baselines.utils import Configure
+    config = Configure()
+    config.from_yaml(sys.argv[1])
+    LM = LanguageModel(config.model_config)
+    cache = None
+    sp = 0
+    for seg in range(5):
+        inputs = torch.randint(0, 128, (4, 64))
+        outputs, cache = LM.forward(inputs, cache=cache)
+        print(seg, outputs.shape)
+        print(format_cache(cache, "Cache"))
+        print(format_cache(LM.encoder.layers.memory, "Memory1"))
+        ppl = LM.perplexity(inputs[:, :-1], inputs[:, 1:], start_position=sp, update_memory=False)
+        print(format_cache(LM.encoder.layers.memory, "Memory2"))
+        sp += seg
+        print(ppl)
+        print(ppl.shape)
