@@ -10,7 +10,7 @@ class LanguageModel(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, config):
+    def __init__(self, config， verbose=False):
         super().__init__()
 
         # 创建动作编码层
@@ -26,6 +26,10 @@ class LanguageModel(nn.Module):
                 torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
                 torch.full((1, config.max_time_step - config.context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_weight', loss_weight)
+
+        if(verbose):
+            print("Language Model initialized, total params: {}".format(count_parameters(self)))
+
 
 
     def forward(self, inputs, cache=None, need_cache=True, T=1.0, update_memory=True):

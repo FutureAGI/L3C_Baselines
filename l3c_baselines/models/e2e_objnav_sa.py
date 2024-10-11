@@ -8,12 +8,13 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post, parameters_regularization
+from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
 from decision_model import SADecisionModel
 
 class E2EObjNavSA(nn.Module):
-    def __init__(self, config): 
+    def __init__(self, config, verbose=False): 
         super().__init__()
 
         # 创建动作编码层
@@ -32,6 +33,13 @@ s        self.register_buffer('loss_weight', loss_weight)
         self.nactions = config.action_dim
 
         self.policy_loss = config.policy_loss_type.lower()
+
+        if(verbose):
+            print("E2EObjNavSA initialized, total params: {}".format(count_parameters(self)))
+            print("image_encoder params: {}; image_decoder_params: {}; decision_model_params: {}".format(
+                count_parameters(self.img_encoder), 
+                count_parameters(self.img_decoder), 
+                count_parameters(self.decision_model)))
         
     def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0, update_memory=True):
         """
@@ -95,7 +103,7 @@ s        self.register_buffer('loss_weight', loss_weight)
 
         # World Model Loss - Raw Image
         obs_pred = self.vae.decoding(z_pred)
-        loss["wm-image"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-raw"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
 
         # Decision Model Loss
         if(self.policy_loss == 'crossentropy'):
