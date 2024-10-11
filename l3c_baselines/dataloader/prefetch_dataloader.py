@@ -8,6 +8,7 @@ import numpy as np
 import multiprocessing
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
+from restools.logging import log_warn, log_fatal
 
 class NaiveDataLoader(DataLoader):
     def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):
@@ -163,12 +164,21 @@ def segment_iterator(full_len, seg_len, device, *args):
     Output: list of [Batch, seg_len, *]
     """
     arg_ext = []
+
+    # Make sure full_len is shorter than args
     for arg in args:
         arg_len = arg.shape[1]
-        if(arg_len > full_len):
+        if(full_len > arg_len):
+            full_len = min(full_len, arg_len)
+
+    for arg in args:
+        arg_len = arg.shape[1]
+        if(arg_len == full_len + 1):
             arg_ext.append(True)
-        else:
+        elif(arg_len == full_len):
             arg_ext.append(False)
+        else:
+            log_fatal(f"Dataloader - segement_iterator: revised length {full_len} is not matched with {arg_len}")
 
     seg_num = (full_len - 1) // seg_len + 1
     for seg_id in range(seg_num):

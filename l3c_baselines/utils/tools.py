@@ -158,14 +158,15 @@ class DistStatistics(object):
         else:
             self.is_average = False
             print("No 'count' keyword detected, statistics will be summed but not averaged")
-        self.reset(self.keys)
+        self.reset()
 
     def reset(self):
         self._data = dict()
-        for key in keys:
+        for key in self.keys:
             self._data[key] = []
 
     def add_with_safty(self, device, **kwargs):
+        zeroflag = False
         for key, value in kwargs.items():
             if torch.isinf(value).any() or torch.isnan(value).any():
                 print(f"[WARNING] '{device}' stating '{value}' suffering prediction loss = NAN/INF, fill with 0")

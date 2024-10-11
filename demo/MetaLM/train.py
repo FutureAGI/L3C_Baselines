@@ -11,10 +11,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
-from l3c_baselines.dataloader import LMDataSet
+from l3c_baselines.dataloader import LMDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import show_bar, count_parameters, model_path
-from l3c_baselines.utils import Configure, gradient_failsafe
+from l3c_baselines.utils import show_bar, model_path
+from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
 from l3c_baselines.models import LanguageModel
 from restools.logging import Logger, log_progress, log_debug, log_warn
 
@@ -54,8 +54,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     test_config = config.test_config
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=train_config.batch_size, sampler=sampler)
+    dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
     if(main):
         logger = Logger("iteration", "learning_rate", "perplexity", sum_iter=len(dataloader), use_tensorboard=True)
@@ -74,10 +73,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     test_config = config.test_config
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
     scaler = GradScaler()
-    scheduler.step(train_start_step)
+    scheduler.step(train_config.lr_start_step)
 
     def main_round(rid, dataloader):
         total_iteration = len(dataloader)
+        acc_iter = 0
 
         for batch_idx, (feature, label) in enumerate(dataloader):
             acc_iter += 1
@@ -85,15 +85,15 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             model.module.reset()
             start_position = 0
             for sub_idx, fea, lab in segment_iterator(
-                            train_config.seq_len, train_config.seg_len, device, feature, label):
+                    train_config.seq_len, train_config.seg_len, device, feature, label):
                 fea = fea.to(device)
                 lab = lab.to(device)
                 optimizer.zero_grad()
-                with autocast(dtype=torch.bfloat16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     loss = model.module.perplexity(fea, lab, start_position=start_position)
                 start_position += fea.shape[1]
 
-                if(use_scaler):
+                if(train_config.use_scaler):
                     scaler.scale(loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
                     clip_grad_norm_(model.module.parameters(), 1.0)
@@ -106,7 +106,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 scheduler.step()
 
                 if(main):
-                    logger.log(batch_idx, 
+                    logger(batch_idx, 
                                scheduler.get_last_lr()[0], 
                                float(loss.detach().cpu().numpy()), 
                                iteration=batch_idx, 
@@ -143,8 +143,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         start_position = 0
         for sub_idx, fea, lab in segment_iterator(
                         config.seq_len, config.seg_len, device, feature, label):
-            fea = fea[:, :time_step].to(device)
-            lab = lab[:, :time_step].to(device)
+            fea = fea.to(device)
+            lab = lab.to(device)
             with torch.no_grad():
                 loss = model.module.perplexity(fea, lab)
                 cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
@@ -159,7 +159,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         stat_res = stat()
         logger = Logger(*stat_res.keys())
-        logger.log(*stat_res.values(), epoch=epoch_id)
+        logger(*stat_res.values(), epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

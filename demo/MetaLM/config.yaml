@@ -55,7 +55,10 @@ train_config:
 test_config:
   batch_size: 4
   file_size: 500
-  time_step: 1024
+
+  seq_len: 4096
+  seg_len: 1024
+
   data_path: ./data
   master_port: "12303"
   load_model_path: [PATH]

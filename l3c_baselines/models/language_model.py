@@ -5,6 +5,8 @@ from torch.nn import functional as F
 from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
 from l3c_baselines.utils import format_cache
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask
+from l3c_baselines.utils import count_parameters
+from restools.logging import log_fatal
 
 class LanguageModel(nn.Module):
     """
@@ -24,7 +26,7 @@ class LanguageModel(nn.Module):
 
         loss_weight = torch.cat((
                 torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                torch.full((1, config.max_time_step - config.context_warmup,), 1.0)), dim=1)
+                torch.full((1, config.max_position - config.context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_weight', loss_weight)
 
         if(verbose):
@@ -52,6 +54,9 @@ class LanguageModel(nn.Module):
         seq_len = inputs.shape[1]
         logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
         loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
+        if(self.loss_weight.shape[1] < start_position + seq_len):
+            log_fatal(f"specified max_position {self.loss_weight.shape[1]} is shorter" +
+                    f" than sequence length {start_position + seq_len}, quit")
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
         return ce_loss_mask(logits, outputs, gamma=0, mask=loss_weight)
