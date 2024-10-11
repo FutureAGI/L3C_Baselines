@@ -27,8 +27,9 @@ class E2EObjNavSA(nn.Module):
         self.vae = VAE(config.vae_latent_size, self.img_encoder, self.img_decoder) 
 
         loss_weight = torch.cat((
-                torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-s        self.register_buffer('loss_weight', loss_weight)
+                    torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
+                    torch.full((1, config.max_time_step - config.context_warmup,), 1.0)), dim=1)
+        self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
 

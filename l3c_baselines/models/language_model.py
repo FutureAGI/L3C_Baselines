@@ -10,7 +10,7 @@ class LanguageModel(nn.Module):
     """
     Take Observations and actions, output d_models
     """
-    def __init__(self, config， verbose=False):
+    def __init__(self, config, verbose=False):
         super().__init__()
 
         # 创建动作编码层
