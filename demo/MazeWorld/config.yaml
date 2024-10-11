@@ -1,160 +1,168 @@
 ---
 model_config:
-      context_warmup: 512
-      max_time_step: 3200
-      image_encode_size: 128
-      action_dim: 4
-      policy_loss_type: CrossEntropy
-      image_encoder_block:
-          model_type: ResNet
-          img_size: 128
-          hidden_size: 128
-          n_res_block: 2
-      image_decoder_block:
-          model_type: ResNet
-          input_size: 128
-          hidden_size: 128
-          img_size: 128
-          n_res_block: 2
-      decision_block:
-          state_encode:
-              model_type: MLP
-              input_type: Continuous
-              input_size: 128
-              hidden_size: 256
-              dropout: 0.0
-          action_encode:
-              model_type: MLP
-              input_type: Discrete
-              input_size: 4
-              hidden_size: 256
-              dropout: 0.0
-          state_decode:
-              model_type: MLP
-              output_type: Continuous
-              input_size: 256
-              hidden_size:
-                  - 256
-                  - 128
-              layer_norm: True
-              residual_connect: True
-              dropout: 0.0
-          action_decode:
-              model_type: MLP
-              output_type: Discrete
-              input_size: 256
-              hidden_size:
-                  - 256
-                  - 4
-              layer_norm: True
-              residual_connect: True
-              dropout: 0.0
-          causal_block_2:
-              model_type: LSTM
-              num_layers: 4
-              hidden_size: 256
-              inner_hidden_size: 64
-              dropout: 0.10
-              checkpoints_density: -1
-              use_layer_norm: True
-              use_blockrecurrence: True
-              memory_length: -1
-              memory_type: MEM
-          causal_block:
-              model_type: TRANSFORMER
-              num_layers: 4
-              hidden_size: 256
-              nhead: 8
-              inner_hidden_size: 512
-              dropout: 0.10
-              context_window: -1
-              checkpoints_density: -1
-              position_encoding_size: 2048
-              use_layer_norm: True
-              use_blockrecurrence: True
-              memory_length: 768
-              memory_type: KV
+  context_warmup: 512
+  max_time_step: 3200
+  vae_latent_size: 128
+  action_dim: 4
+  policy_loss_type: CrossEntropy
+  image_encoder_block:
+  img_size: 128
+  hidden_size: 128
+  n_res_block: 2
+
+  image_decoder_block:
+  input_size: 128
+  hidden_size: 128
+  img_size: 128
+  n_res_block: 2
+
+  decision_block:
+  state_encode:
+      input_type: Continuous
+      input_size: 128
+      hidden_size: 256
+      dropout: 0.0
+
+  action_encode:
+      input_type: Discrete
+      input_size: 4
+      hidden_size: 256
+      dropout: 0.0
+
+  state_decode:
+      output_type: Continuous
+      input_size: 256
+      hidden_size:
+          - 256
+          - 128
+      layer_norm: True
+      residual_connect: True
+      dropout: 0.0
+
+  action_decode:
+      output_type: Discrete
+      input_size: 256
+      hidden_size:
+          - 256
+          - 4
+      layer_norm: True
+      residual_connect: True
+      dropout: 0.0
+
+  causal_block:
+      model_type: TRANSFORMER
+      num_layers: 4
+      hidden_size: 256
+      nhead: 8
+      inner_hidden_size: 512
+      dropout: 0.10
+      context_window: -1
+      checkpoints_density: -1
+      position_encoding_size: 2048
+      use_layer_norm: True
+      use_blockrecurrence: True
+      memory_length: 768
+      memory_type: KV
+          
+  causal_block_2:
+      model_type: LSTM
+      num_layers: 4
+      hidden_size: 256
+      inner_hidden_size: 64
+      dropout: 0.10
+      checkpoints_density: -1
+      use_layer_norm: True
+      use_blockrecurrence: True
+      memory_length: -1
+      memory_type: MEMORY
+
 
 train_config:
-  max_epochs: 50
-  batch_size_vae: 1
-  batch_size_causal: 1
-  epoch_vae_stop: 2
-  epoch_causal_start: 3
-  time_step_vae: 16000
-  time_step_causal: 16000
-  learning_rate_vae: 2.0e-4
-  learning_rate_causal: 5.0e-4
-  learning_rate_vae_decay_interval: 1000
-  learning_rate_causal_decay_interval: 1000
-  vae_start_step: 50000
-  causal_start_step: 50000
-  segment_length: 1000
-  data_path: "[PATH]"
-  save_model_path: "./checkpoints"
-  load_model_path: None
-  master_port: "12300"
-  max_save_iterations: 5000
-  evaluate_epochs: 1
-  lossweight_policymodel: 0.01
-  lossweight_worldmodel_raw: 0.90
-  lossweight_worldmodel_latent: 0.09
-  lossweight_l2: 1.0e-6
-  use_amp: False
-  load_model_parameter_blacklist:
-    - "lat_decoder"
-    - "act_decoder"
-    - "decformer"
+		max_epochs: 50
+		batch_size_vae: 1
+		batch_size_causal: 1
+		epoch_vae_stop: 2
+		epoch_causal_start: 3
 
-  sigma_scheduler: 1000
-  sigma_value:
-    - 0.0
-    - 0.1
-    - 0.2
-    - 1.0
+		seq_len_vae: 16000
+		seq_len_causal: 16000
+		seg_len_vae: 100
+    seg_len_causal: 1000
 
-  lambda_scheduler: 1000
-  lambda_value:
-    - 0.0
-    - 1.0e-7
-    - 1.0e-6
-    - 1.0e-5
+		lr_vae: 2.0e-4
+		lr_causal: 5.0e-4
+		lr_vae_decay_interval: 1000
+		lr_causal_decay_interval: 1000
+		lr_vae_start_step: 50000
+		lr_causal_start_step: 50000
+
+		data_path: "[PATH]"
+		save_model_path: "./checkpoints"
+		load_model_path: None
+		master_port: "12300"
+		max_save_iterations: 5000
+		evaluate_epochs: 1
+
+		lossweight_policymodel: 0.01
+		lossweight_worldmodel_raw: 0.90
+		lossweight_worldmodel_latent: 0.09
+		lossweight_l2: 1.0e-6
+
+		use_amp: False
+    use_scaler: False
+
+		load_model_parameter_blacklist:
+				- "decision_model"
+
+		sigma_scheduler: 1000
+		sigma_value:
+				- 0.0
+				- 0.1
+				- 0.2
+				- 1.0
+
+		lambda_scheduler: 1000
+		lambda_value:
+				- 0.0
+				- 1.0e-7
+				- 1.0e-6
+				- 1.0e-5
 
 test_config:
-  batch_size: 1
-  data_path: "[PATH]"
-  master_port: "12201"
-  load_model_path: None
-  time_step: 16000
-  segment_length: 1000
+		batch_size: 1
+		data_path: "[PATH]"
+		master_port: "12201"
+		load_model_path: None
+		seq_len: 16000
+		seg_len: 1000
 
 demo_config:
-  master_port: "12211"
-  time_step: 2048
+		master_port: "12211"
+		time_step: 2048
 
-  model_config:
-    load_model_path: "[PATH]"
-    autoregressive_steps:
-        - 0
-        - 100
-        - 1000
-        - 2000
-    autoregressive_length: 10
-    policy:
-      T_ini: 1.0
-      T_dec: 0.005
-      T_min: 0.01
-    load_model_parameter_blacklist:
-      - "attn_mask"
-  maze_config:
-    scale: 15
-    density: 0.36
-    n_landmarks: 10
-  rule_config:
-    mem_kr: 1.0
-  run_model: 0
-  run_rule: 1
-  run_random: 0
-  task_file: "[PATH]"
-  write_video: 0
-  output: "[PATH]"
+		model_config:
+				load_model_path: "[PATH]"
+				autoregressive_steps:
+								- 0
+								- 100
+								- 1000
+								- 2000
+				autoregressive_length: 10
+				policy:
+						T_ini: 1.0
+						T_dec: 0.005
+						T_min: 0.01
+				load_model_parameter_blacklist:
+						- "attn_mask"
+		maze_config:
+				scale: 15
+				density: 0.36
+				n_landmarks: 10
+		rule_config:
+				mem_kr: 1.0
+		run_model: 0
+		run_rule: 1
+		run_random: 0
+		task_file: "[PATH]"
+		write_video: 0
+		output: "[PATH]"
