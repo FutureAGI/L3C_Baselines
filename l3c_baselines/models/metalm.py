@@ -41,37 +41,7 @@ class LMBase(nn.Module):
 
         return output, new_cache
 
-    def perplexity(self, inputs, outputs):
-        seq_len = inputs.shape[1]
-        logits, new_cache = self.forward(inputs, need_cache=False)
-        return ce_loss_mask(logits, outputs, gamma=0, mask=self.loss_mask[:, :seq_len])
 
-    def perplexity_array(self, inputs, outputs):
-        seq_len = inputs.shape[1]
-        logits, new_cache = self.forward(inputs, need_cache=False)
-        return ce_loss_mask(logits, outputs, gamma=0, reduce=None)
-
-    def inference_seg(self, inputs, L, T_default=1, T_setting=None, cache=None):
-        with torch.no_grad():
-            sampled_outputs = inputs
-            outputs = inputs
-            T = T_default
-            for _ in range(L):
-                logits, cache = self.forward(sampled_outputs, cache=cache, need_cache=True)
-                logp = torch.log(logits[:, -1])
-                logp = logp / T
-                logits = F.softmax(logp, dim=-1)
-                sampled_outputs = torch.multinomial(logits, num_samples=1)
-                #sampled_outputs = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
-                outputs = torch.cat([outputs, sampled_outputs], dim=-1)
-                if(T_setting is not None):
-                    assert sampled_outputs.shape[0] == 1, "T_setting is only for batch_size=1"
-                    token = sampled_outputs[0][-1].item()
-                    if token in T_setting:
-                        T = T_setting[token]
-                    else:
-                        T = T_default
-        return outputs
 
 if __name__=="__main__":
     from utils import Configure

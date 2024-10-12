@@ -8,6 +8,7 @@ import numpy as np
 import multiprocessing
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class NaiveDataLoader(DataLoader):
     def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):
@@ -34,7 +35,11 @@ class NaiveDataLoader(DataLoader):
         sub_iter = 0
         while sub_iter < self.batch_size:
             # In case the data is invalid, fetch further data
-            sub_data = self.get()
+            try:
+                sub_data = self.get()
+            except Exception as e:
+                log_warn("Error fetching data from dataset: ", e)
+                continue
             if(sub_data is not None):
                 data.append(sub_data)
                 sub_iter += 1
@@ -78,7 +83,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         world_size=1,
         batch_size=4,
         num_workers=2,
-        prefetch_batches=2,
+        prefetch_batches=1,
         collate_fn=torch_collate,
     ):
         super().__init__(dataset, 
@@ -115,19 +120,17 @@ class PrefetchDataLoader(NaiveDataLoader):
         self.prefetch()
         sys.stdout.flush()
         if self.index in self.cache:
-            item = self.cache[self.index]
-            del self.cache[self.index]
+            item = self.cache.pop(self.index)
         else:
-            while True:
-                try:
-                    (index, data) = self.output_queue.get(timeout=0)
-                except queue.Empty:  # output queue empty, keep trying
-                    continue
-                if index == self.index:  # found our item, ready to return
+            try:
+                (index, data) = self.output_queue.get(timeout=60)
+                if index == self.index:
                     item = data
-                    break
-                else:  # item isn't the one we want, cache for later
+                else:
                     self.cache[index] = data
+                    return self.get()
+            except queue.Empty:
+                raise StopIteration("Data fetch timeout from the output queue.")
         sys.stdout.flush()
 
         self.index += self.world_size
@@ -143,41 +146,51 @@ class PrefetchDataLoader(NaiveDataLoader):
 
     def __del__(self):
         try:
-            # Stop each worker by passing None to its index queue
-            for i, w in enumerate(self.workers):
+            for i in range(len(self.workers)):
                 self.index_queues[i].put(None)
-                w.join(timeout=5.0)
-            for q in self.index_queues:  # close all queues
-                q.cancel_join_thread()
-                q.close()
-            self.output_queue.cancel_join_thread()
-            self.output_queue.close()
-        finally:
             for w in self.workers:
-                if w.is_alive():  # manually terminate worker if all else fails
+                w.join()
+            for q in self.index_queues:
+                q.close()
+                q.cancel_join_thread()
+            self.output_queue.close()
+            self.output_queue.cancel_join_thread()
+        except Exception as e:
+            for w in self.workers:
+                if w.is_alive():
                     w.terminate()
+            raise e
     
 def segment_iterator(full_len, seg_len, device, *args):
     """
     Input shape: [Batch, Length, *]
     Output: list of [Batch, seg_len, *]
+    args: either torch.Tensor or tuple(torch.Tensor, ext)
     """
-    arg_ext = []
-    for arg in args:
-        arg_len = arg.shape[1]
-        if(arg_len > full_len):
-            arg_ext.append(True)
+    data_ext = []
+    data = []
+
+    # Make sure full_len is shorter than args
+    for i,arg in enumerate(args):
+        if(isinstance(arg, tuple) or isinstance(arg, list)):
+            sdata, ext = arg
+        elif(isinstance(arg, torch.Tensor)):
+            sdata = arg
+            ext = 0
         else:
-            arg_ext.append(False)
+            log_fatal(f"Unrecognized data type {type(arg)}")
+        ext = max(0, ext)
+        data_ext.append(ext)
+        data.append(sdata)
+        arg_len = sdata.shape[1]
+        # Make sure we have enough space
+        full_len = min(full_len, arg_len - ext)
 
     seg_num = (full_len - 1) // seg_len + 1
     for seg_id in range(seg_num):
         res = [seg_id]
         b = seg_id * seg_len
         e = min(b + seg_len, full_len)
-        for i,arg in enumerate(args):
-            if(arg_ext[i]):
-                res.append(arg[:, b:e+1].to(device))
-            else:
-                res.append(arg[:, b:e].to(device))
+        for sdata, ext in zip(data, data_ext):
+            res.append(sdata[:, b:e+ext].to(device))
         yield tuple(res)

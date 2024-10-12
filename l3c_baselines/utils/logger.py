@@ -59,7 +59,7 @@ class Logger(object):
 
 
 # Paint a progress bar
-def show_bar(fraction, bar):
+def show_bar(fraction, bar=100):
     percentage = int(bar * fraction)
     empty = bar - percentage
     sys.stdout.write("[" + "=" * percentage + " " * empty + "]" + "%.2f %%\r" % (percentage * 100 / bar))

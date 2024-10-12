@@ -6,17 +6,20 @@ import numpy
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import time
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
-from l3c_baselines.dataloader import LMDataSet, PrefetchDataLoader, segment_iterator
+from collections import defaultdict
+
+from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import show_bar, model_path
-from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
-from l3c_baselines.models import LanguageModel
-from restools.logging import Logger, log_progress, log_debug, log_warn
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path
+from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
+from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -40,7 +43,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = LanguageModel(config.model_config, verbose=main)
+    model = AnyMDPRSA(config.model_config, verbose=main)
 
     model = model.to(device)
 
@@ -53,73 +56,102 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     train_config = config.train_config
     test_config = config.test_config
 
-    dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
+    # Initialize the Dataset and DataLoader
+    dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
+    # Initialize the Logger
     if(main):
-        logger = Logger("iteration", "learning_rate", "perplexity", sum_iter=len(dataloader), use_tensorboard=True)
+        logger = Logger("iteration", "segment", "learning_rate", "loss_worldmodel_reward", "loss_worldmodel_state", "loss_policymodel", sum_iter=len(dataloader), use_tensorboard=True)
 
+
+    # Initialize the optimizers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, train_config.lr_decay_interval))
 
+    # Initialize the learning rate schedulers
+    lr_scheduler = lambda x:noam_scheduler(x, train_config.lr_decay_interval)
+    scheduler = LambdaLR(optimizer, lr_lambda=lr_scheduler)
+
+    scheduler.step(train_config.lr_start_step)
+
+    # Load the model if specified in the configuration
     if(train_config.has_attr("load_model_path") and 
             train_config.load_model_path is not None and 
             train_config.load_model_path.lower() != 'none'):
-        model = custom_load_model(model, 
-                                  f'{train_config.load_model_path}/model.pth', 
+        model = custom_load_model(model, f'{train_config.load_model_path}/model.pth', 
+                                  black_list=train_config.load_model_parameter_blacklist, 
                                   strict_check=False)
 
     # Perform the first evaluation
-    test_config = config.test_config
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
     scaler = GradScaler()
-    scheduler.step(train_config.lr_start_step)
+
+    # main training loop
 
     def main_round(rid, dataloader):
-        total_iteration = len(dataloader)
         acc_iter = 0
-
-        for batch_idx, (feature, label) in enumerate(dataloader):
+        dataloader.dataset.reset(rid)
+        for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             # Important: Must reset the model before each segment
             model.module.reset()
             start_position = 0
-            for sub_idx, fea, lab in segment_iterator(
-                    train_config.seq_len, train_config.seg_len, device, feature, label):
-                fea = fea.to(device)
-                lab = lab.to(device)
+            r2go = rewards2go(batch[-1])
+            for sub_idx, states, bactions, lactions, rewards in segment_iterator(
+                        train_config.seq_len, train_config.seg_len, device, 
+                        (batch[0], 1), batch[1], batch[2], (r2go, 1)):
                 optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
-                    loss = model.module.perplexity(fea, lab, start_position=start_position)
-                start_position += fea.shape[1]
+                    # Calculate THE LOSS
+                    loss = model.module.sequential_loss(
+                        states, bactions, lactions, rewards, state_dropout=0.20, reward_dropout=0.20,
+                        start_position=start_position)
+                    causal_loss = (train_config.lossweight_worldmodel_states * loss["wm-s"]
+                            + train_config.lossweight_worldmodel_rewards * loss["wm-r"]
+                            + train_config.lossweight_policymodel * loss["pm"])
+                start_position += bactions.shape[1]
 
                 if(train_config.use_scaler):
-                    scaler.scale(loss).backward()
+                    scaler.scale(causal_loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
                     clip_grad_norm_(model.module.parameters(), 1.0)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    loss.backward()
+                    causal_loss.backward()
                     optimizer.step()
 
+                optimizer.step()
                 scheduler.step()
 
                 if(main):
-                    logger(batch_idx, 
-                               scheduler.get_last_lr()[0], 
-                               float(loss.detach().cpu().numpy()), 
-                               iteration=batch_idx, 
-                               epoch=epoch_id)
+                    lr = scheduler.get_last_lr()[0]
+                    fwms = float(loss["wm-s"].detach().cpu().numpy())
+                    fwmr = float(loss["wm-r"].detach().cpu().numpy())
+                    fpm = float(loss["pm"].detach().cpu().numpy())
+                    logger(batch_idx, sub_idx, lr, fwms, fwmr, fpm, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+
+            if(main and train_config.has_attr("max_save_iterations") 
+                            and acc_iter > train_config.max_save_iterations 
+                            and train_config.max_save_iterations > 0):
+                acc_iter = 0
+                log_debug("Check current validity and save model for safe...")
+                sys.stdout.flush()
+                check_model_validity(model.module)
+                mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
+                torch.save(model.state_dict(), mod_path)
 
     # Example training loop
     for epoch_id in range(1, train_config.max_epochs + 1):
         model.train()
+        # To save the model within an epoch to prevent failure at the end of the epoch
         main_round(epoch_id, dataloader)
+        if(main):  # Check whether model is still valid
+            check_model_validity(model.module)
         if(main and epoch_id % train_config.evaluation_interval == 0):
-            mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
+            log_debug(f"Save Model for Epoch-{epoch_id}")
+            mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
-            #torch.save(optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
@@ -129,31 +161,36 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
 
+    dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
+    dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
+
     results = []
-    dataset = LMDataSet(config.data_path, config.file_size, verbose=main)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=config.batch_size, sampler=sampler)
     all_length = len(dataloader)
 
-    if(main):
-        log_debug("Start Evaluation...")
-        log_progress(0)
-    stat = DistStatistics("perplexity", "count")
+    stat = DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count")
 
-    for batch_idx, (feature, label) in enumerate(dataloader):
-        model.module.reset()
+    if(main):
+        log_debug("Start evaluation ...")
+        log_progress(0)
+    dataset.reset(0)
+    for batch_idx, batch in enumerate(dataloader):
         start_position = 0
-        for sub_idx, fea, lab in segment_iterator(
-                        config.seq_len, config.seg_len, device, feature, label):
-            fea = fea.to(device)
-            lab = lab.to(device)
+        model.module.reset()
+        r2go = rewards2go(batch[-1])
+        for sub_idx, states, bactions, lactions, rewards in segment_iterator(
+                    config.seq_len, config.seg_len, device, 
+                    (batch[0], 1), batch[1], batch[2], (r2go, 1)):
             with torch.no_grad():
-                loss = model.module.perplexity(fea, lab)
-                cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
+                loss = model.module.sequential_loss(
+                            states, bactions, lactions, rewards, start_position=start_position)
 
             stat.add_with_safty(rank, 
-                                perplexity=loss, 
-                                count=cnt)
+                                loss_wm_s=loss["wm-s"], 
+                                loss_wm_r=loss["wm-r"], 
+                                loss_pm=loss["pm"],
+                                count=loss["count"])
+
+            start_position += bactions.shape[1]
 
         if(main):
             log_progress((batch_idx + 1) / all_length)

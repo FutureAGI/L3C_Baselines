@@ -1,15 +1,15 @@
+#! /bin/bash
+#
 if [[ $# -lt 2 ]]; then
 	echo "Usage: $0 output_directory task_source_file"
 exit 1
 fi
 echo "Output to $1"
-python gen_maze_record.py \
+python3 gen_maze_record.py \
   --output_path $1 \
   --task_source FILE \
   --task_file $2 \
-  --task_type NAVIGATION \
-  --maze_type Discrete3D \
-  --max_steps 16000 \
+  --max_steps 160 \
   --reference_policy_config 1.0 \
   --behavior_policy_config \
   		0.02,0.10 \
@@ -59,7 +59,6 @@ python gen_maze_record.py \
 		0.25,0.90 \
 		0.25,0.95 \
   --start_index 0 \
-  --landmarks 10 \
-  --scale 15 \
+  --n_range 15,15 \
   --epochs 64 \
   --workers 8

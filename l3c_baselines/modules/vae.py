@@ -13,8 +13,8 @@ class VAE(nn.Module):
         self.hidden_size = hidden_size
         self.encoder = encoder
         self.decoder = decoder
-        self.layer_mean = nn.Linear(encoder.hidden_size, hidden_size)
-        self.layer_var = nn.Linear(encoder.hidden_size, hidden_size)
+        self.layer_mean = nn.Linear(encoder.output_size, hidden_size)
+        self.layer_var = nn.Linear(encoder.output_size, hidden_size)
     
     def forward(self, inputs):
         # input shape: [B, NT, C, W, H]
@@ -38,9 +38,10 @@ class VAE(nn.Module):
         outputs = outputs.reshape(nB, nT, *outputs.shape[1:])
         return outputs
 
-    def loss(self, inputs, _lambda=1.0e-5, _sigma=1.0):
+    def loss(self, inputs, _sigma=0.0):
         outputs, z_exp, z_log_var = self.reconstruct(inputs, _sigma = _sigma)
         kl_loss = torch.mean(-0.5 * torch.sum(1 + z_log_var - torch.square(z_exp) - torch.exp(z_log_var), axis=1))
         reconstruction_loss = mse_loss_mask(outputs, inputs)
 
-        return reconstruction_loss + _lambda * kl_loss
+        return {"Reconstruction-Error": reconstruction_loss,
+                "KL-Divergence": kl_loss}

@@ -19,16 +19,22 @@ class ResBlock(nn.Module):
 
         return out
 
-class Encoder(nn.Module):
+class ImageEncoder(nn.Module):
     """
     Change [B*NT, C_in, 128, 128] to [B*NT, C_out]
     """
-    def __init__(self, img_size, in_channel, out_channel, n_res_block):
+    def __init__(self, config):
         super().__init__()
 
-        channel_b1 = out_channel // 16
-        channel_b2 = out_channel // 8
-        channel_b3 = out_channel // 4
+        img_size = config.img_size
+        in_channel = 3 # Consider only RGB channels currently
+        out_channel = config.hidden_size
+        n_res_block = config.n_res_block
+        self.output_size = out_channel
+
+        channel_b1 = out_channel // 64
+        channel_b2 = out_channel // 32
+        channel_b3 = out_channel // 16
         cur_size = img_size // 8
         fin_channel = cur_size * cur_size * channel_b3
 
@@ -74,23 +80,23 @@ class Encoder(nn.Module):
     def forward(self, input):
         return self.blocks(input)
 
-class Decoder(nn.Module):
+class ImageDecoder(nn.Module):
     """
     Change [B*NT, C_in] to [B*NT, C_out, 128, 128]
     """
-    def __init__(
-        self, 
-        img_size,
-        in_channel, 
-        hidden_size,
-        out_channel, 
-        n_res_block, 
-    ):
+    def __init__(self, config):
         super().__init__()
 
-        channel_b1 = hidden_size // 2
+        img_size = config.img_size
+        in_channel = config.input_size
+        hidden_size = config.hidden_size
+        out_channel = 3 # Consider only RGB channels currently
+        n_res_block = config.n_res_block
+        self.output_size = out_channel
+
+        channel_b1 = hidden_size // 8
+        self.ini_channel = hidden_size // 32
         self.ini_size = img_size // 8
-        self.ini_channel = hidden_size // 4
         ini_mapping = self.ini_size * self.ini_size * self.ini_channel
 
         self.input_mapping = nn.Sequential(nn.Linear(in_channel, hidden_size), nn.LeakyReLU(), nn.Linear(hidden_size, ini_mapping), nn.LeakyReLU())
@@ -121,87 +127,3 @@ class Decoder(nn.Module):
         img = self.input_mapping(inputs)
         img = img.view(-1, self.ini_channel, self.ini_size, self.ini_size)
         return self.blocks(img)
-
-class MapDecoder(nn.Module):
-    def __init__(
-        self, 
-        in_channel, 
-        hidden,
-        out_channel, 
-        map_size,
-    ):
-        super().__init__()
-
-        self.input_mapping = nn.Linear(in_channel, map_size * map_size * hidden)
-        self.map_size = map_size
-        self.hidden = hidden
-
-        blocks = [
-            nn.GELU(),
-            nn.Linear(hidden, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, out_channel),
-        ]
-
-        self.blocks = nn.Sequential(*blocks)
-
-    def forward(self, input):
-        out = self.input_mapping(input)
-        out = out.view(-1, self.map_size, self.map_size, self.hidden)
-        out = self.blocks(out).permute(0, 3, 1, 2)
-        return out
-
-class ActionDecoder(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        output_size,
-        dropout=0.10
-    ):
-        super().__init__()
-
-        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
-
-        self.act_decoder_pre = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, input_size),
-            nn.GELU())
-
-        self.act_decoder_post = nn.Linear(input_size, output_size)
-        self.act_decoder_output = nn.Softmax(dim=-1)
-
-    def forward(self, input, T=1.0):
-        src = self.layer_norm(input)
-        out = self.act_decoder_pre(src)
-        out = self.act_decoder_post(out + src)
-        return self.act_decoder_output(out / T)
-
-class LatentDecoder(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        output_size,
-        dropout=0.10
-    ):
-        super().__init__()
-
-        self.layer_norm = nn.LayerNorm(input_size, eps=1.0e-5)
-
-        self.lat_decoder_pre = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, input_size),
-            nn.GELU())
-
-        self.lat_decoder_post = nn.Linear(input_size, output_size)
-
-    def forward(self, input):
-        src = self.layer_norm(input)
-        out = self.lat_decoder_pre(src)
-        out = self.lat_decoder_post(out + src)
-        return out

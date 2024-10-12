@@ -25,7 +25,7 @@ TaskConfig = namedtuple("TaskConfig", ["start", "cell_landmarks", "cell_walls", 
     "cell_size", "wall_height", "agent_height", "initial_life", "max_life",
     "step_reward", "goal_reward", "landmarks_rewards", "landmarks_coordinates", "landmarks_refresh_interval", "commands_sequence"])
 
-from models import MazeModelBase
+from models import MazeModelXL
 from utils import create_folder, VideoWriter
 from utils import Configure
 from utils import img_pro, custom_load_model
@@ -88,6 +88,7 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
     last_obs = obs
     temperature = policy_config.T_ini
     wm_loss = dict()
+    model.init_mem()
     while not done:
         if(step not in autoregressive_steps):
             n_step = 1
@@ -101,6 +102,7 @@ def model_epoch(maze_env, task, model, policy_config, device, max_step,
         pred_obss, pred_acts, cache = model.inference_step_by_step(obs_arr, act_arr, temperature, step, device, n_step=n_step, cache=cache)
 
         obs_arr = []
+        # The next step (t+1) has already been cached, thus we only need the decisions from t+2
         act_arr = pred_acts[1:]
         for act in pred_acts:
             next_obs_gt, next_rew_gt, done, _ = maze_env.step(act)
@@ -214,22 +216,12 @@ if __name__=='__main__':
     else:
         raise Exception("Must set 'demo_config.task_file'")
 
-    if(demo_config.task_downsampling is not None):
-        if(demo_config.task_downsampling < len(tasks)):
-            random.shuffle(tasks)
-        else:
-            factor = demo_config.task_downsampling // len(tasks) + 1
-            tasks *= factor
-            random.shuffle(tasks)
-        tasks = tasks[:demo_config.task_downsampling]
-            
-
     run_model = demo_config.run_model
     run_rule = demo_config.run_rule
     run_random = demo_config.run_random
 
     if(run_model):
-        model = MazeModelBase(config.model_config)
+        model = MazeModelXL(config.model_config)
         use_gpu = torch.cuda.is_available()
         if(use_gpu):
             device = torch.device(f'cuda:0')
