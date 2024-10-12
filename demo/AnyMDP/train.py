@@ -13,9 +13,9 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
-from restools.logging import Logger, log_progress, log_debug, log_warn, log_fatal
 
-from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
 from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
@@ -57,7 +57,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     test_config = config.test_config
 
     # Initialize the Dataset and DataLoader
-    dataset = MazeDataSet(train_config.data_path, train_config.seq_len, verbose=main)
+    dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
     # Initialize the Logger
@@ -88,7 +88,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     # main training loop
 
-    def main_round(rid, dataloader, max_save_iterations=-1):
+    def main_round(rid, dataloader):
         acc_iter = 0
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
@@ -98,7 +98,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             start_position = 0
             r2go = rewards2go(batch[-1])
             for sub_idx, states, bactions, lactions, rewards in segment_iterator(
-                        train_config.seq_len, train_config.seg_len, device, *batch[:-1], r2go):
+                        train_config.seq_len, train_config.seg_len, device, 
+                        (batch[0], 1), batch[1], batch[2], (r2go, 1)):
                 optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
@@ -128,7 +129,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fwms = float(loss["wm-s"].detach().cpu().numpy())
                     fwmr = float(loss["wm-r"].detach().cpu().numpy())
                     fpm = float(loss["pm"].detach().cpu().numpy())
-                    logger_causal.log(batch_idx, sub_idx, lr, fwms, fwmr, fpm, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+                    logger(batch_idx, sub_idx, lr, fwms, fwmr, fpm, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
@@ -144,25 +145,24 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     for epoch_id in range(1, train_config.max_epochs + 1):
         model.train()
         # To save the model within an epoch to prevent failure at the end of the epoch
-        main_round(epoch_id, dataloader, max_save_iterations=max_save_iterations)
+        main_round(epoch_id, dataloader)
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
-        if(main and epoch_id % train_config.eval_interval == 0):
+        if(main and epoch_id % train_config.evaluation_interval == 0):
             log_debug(f"Save Model for Epoch-{epoch_id}")
-                sys.stdout.flush()
-            mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
+            mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
 
         model.eval()
         # Perform the evaluation according to interval
-        if(epoch_id % train_config.eval_interval == 0):
+        if(epoch_id % train_config.evaluation_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
 def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
 
-    dataset = MazeDataSet(config.data_path, config.seq_len, verbose=main)
-    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size, rank=rank, world_size=world_size)
+    dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
+    dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
 
     results = []
     all_length = len(dataloader)
@@ -174,27 +174,23 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         log_progress(0)
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
-        start_step = 0
+        start_position = 0
         model.module.reset()
         r2go = rewards2go(batch[-1])
         for sub_idx, states, bactions, lactions, rewards in segment_iterator(
-                    config.seq_len, config.seg_len, device, *batch[:-1], r2go):
+                    config.seq_len, config.seg_len, device, 
+                    (batch[0], 1), batch[1], batch[2], (r2go, 1)):
             with torch.no_grad():
                 loss = model.module.sequential_loss(
-                            states, bactions, lactions, rewards, start_step=start_step)
-
-                lraw = loss["wm-s"] * loss["count"]
-                llat = loss["wm-r"] * loss["count"]
-                lpm = loss["pm"] * loss["count"]
-                cnt = loss["count"]
+                            states, bactions, lactions, rewards, start_position=start_position)
 
             stat.add_with_safty(rank, 
-                                loss_wm_s=lraw, 
-                                loss_wm_r=llat, 
-                                loss_pm=lpm,
-                                count=cnt)
+                                loss_wm_s=loss["wm-s"], 
+                                loss_wm_r=loss["wm-r"], 
+                                loss_pm=loss["pm"],
+                                count=loss["count"])
 
-            start_step += bactions.shape[1]
+            start_position += bactions.shape[1]
 
         if(main):
             log_progress((batch_idx + 1) / all_length)
@@ -202,7 +198,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         stat_res = stat()
         logger = Logger(*stat_res.keys())
-        logger.log(*stat_res.values(), epoch=epoch_id)
+        logger(*stat_res.values(), epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

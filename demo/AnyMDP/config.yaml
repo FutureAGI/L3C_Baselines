@@ -1,45 +1,33 @@
 ---
 model_config:
-  context_warmup: 512
-  max_time_step: 3200
-  vae_latent_size: 128
-  action_dim: 4
+  context_warmup: 1536
+  max_position_loss_weighting: 32000
+  action_dim: 5
   policy_loss_type: CrossEntropy
-  image_encoder_block:
-  img_size: 128
-  hidden_size: 128
-  n_res_block: 2
 
-  image_decoder_block:
-  input_size: 128
-  hidden_size: 128
-  img_size: 128
-  n_res_block: 2
-
-  decision_block:
   state_encode:
       input_type: Discrete
       input_size: 128
-      hidden_size: 256
+      hidden_size: 512
       dropout: 0.0
 
   action_encode:
       input_type: Discrete
-      input_size: 4
-      hidden_size: 256
+      input_size: 6
+      hidden_size: 512
       dropout: 0.0
 
   reward_encode:
       input_type: Continuous
       input_size: 1
-      hidden_size: 256
+      hidden_size: 512
       dropout: 0.0
 
   state_decode:
       output_type: Discrete
-      input_size: 256
+      input_size: 512
       hidden_size:
-          - 256
+          - 512
           - 128
       layer_norm: True
       residual_connect: True
@@ -47,37 +35,37 @@ model_config:
 
   action_decode:
       output_type: Discrete
-      input_size: 256
+      input_size: 512
       hidden_size:
-          - 256
-          - 4
+          - 512
+          - 6
       layer_norm: True
       residual_connect: True
       dropout: 0.0
 
   reward_decode:
       output_type: Continuous
-      input_size: 256
+      input_size: 512
       hidden_size:
-          - 256
-          - 4
+          - 512
+          - 1
       layer_norm: True
       residual_connect: True
       dropout: 0.0
 
   causal_block:
       model_type: TRANSFORMER
-      num_layers: 4
-      hidden_size: 256
-      nhead: 8
-      inner_hidden_size: 512
+      num_layers: 12
+      hidden_size: 512
+      nhead: 16
+      inner_hidden_size: 1024
       dropout: 0.10
       context_window: -1
       checkpoints_density: -1
-      position_encoding_size: 2048
+      position_encoding_size: 3072
       use_layer_norm: True
       use_blockrecurrence: True
-      memory_length: 768
+      memory_length: 1536
       memory_type: KV
           
   causal_block_2:
@@ -94,68 +82,69 @@ model_config:
 
 
 train_config:
-		max_epochs: 50
-		batch_size: 1
+    max_epochs: 50
+    batch_size: 4
 
-		seq_len: 16000
-		seg_len: 1000
+    seq_len: 16000
+    seg_len: 500
 
-		lr: 5.0e-4
-		lr_decay_interval: 1000
+    lr: 5.0e-4
+    lr_decay_interval: 1000
+    lr_start_step: 0
 
-		data_path: "[PATH]"
-		save_model_path: "./checkpoints"
-		load_model_path: None
-		master_port: "12300"
-		max_save_iterations: 5000
-		evaluate_epochs: 1
+    data_path: [PATH]
+    save_model_path: "./checkpoints"
+    load_model_path: None
+    master_port: "12400"
+    max_save_iterations: 5000
+    evaluation_interval: 1
 
-		lossweight_policymodel: 0.20
-		lossweight_worldmodel_state: 0.60
-		lossweight_worldmodel_reward: 0.20
-		lossweight_l2: 0.0
+    lossweight_policymodel: 0.20
+    lossweight_worldmodel_states: 0.60
+    lossweight_worldmodel_rewards: 0.20
+    lossweight_l2: 0.0
 
-		use_amp: False
+    use_amp: False
     use_scaler: False
 
-		load_model_parameter_blacklist:
-				- "decision_model"
+    load_model_parameter_blacklist:
+        - "decision_model"
 
 test_config:
-		batch_size: 1
-		data_path: "[PATH]"
-		master_port: "12201"
-		load_model_path: None
-		seq_len: 16000
-		seg_len: 1000
+    batch_size: 1
+    data_path: [PATH]
+    master_port: "12201"
+    load_model_path: None
+    seq_len: 16000
+    seg_len: 500
 
 demo_config:
-		master_port: "12211"
-		time_step: 2048
+    master_port: "12211"
+    time_step: 2048
 
-		model_config:
-				load_model_path: "[PATH]"
-				autoregressive_steps:
-								- 0
-								- 100
-								- 1000
-								- 2000
-				autoregressive_length: 10
-				policy:
-						T_ini: 1.0
-						T_dec: 0.005
-						T_min: 0.01
-				load_model_parameter_blacklist:
-						- "attn_mask"
-		maze_config:
-				scale: 15
-				density: 0.36
-				n_landmarks: 10
-		rule_config:
-				mem_kr: 1.0
-		run_model: 0
-		run_rule: 1
-		run_random: 0
-		task_file: "[PATH]"
-		write_video: 0
-		output: "[PATH]"
+    model_config:
+        load_model_path: "[PATH]"
+        autoregressive_steps:
+            - 0
+            - 100
+            - 1000
+            - 2000
+        autoregressive_length: 10
+        policy:
+            T_ini: 1.0
+            T_dec: 0.005
+            T_min: 0.01
+        load_model_parameter_blacklist:
+            - "attn_mask"
+    maze_config:
+        scale: 15
+        density: 0.36
+        n_landmarks: 10
+    rule_config:
+        mem_kr: 1.0
+    run_model: 0
+    run_rule: 1
+    run_random: 0
+    task_file: "[PATH]"
+    write_video: 0
+    output: "[PATH]"

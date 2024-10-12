@@ -32,7 +32,8 @@ class SADecisionModel(nn.Module):
             actions:[B, NT, H], float
             cache: [B, NC, H]
         """
-        B, NT, H = s_arr.shape
+        B = s_arr.shape[0]
+        NT = s_arr.shape[1]
         Ba = a_arr.shape[0]
         NTa = a_arr.shape[1]
 
@@ -89,13 +90,15 @@ class RSADecisionModel(nn.Module):
         super().__init__()
 
         self.causal_model = CausalBlock(config.causal_block)
+        self.hidden_size = config.causal_block.hidden_size
 
         # 创建Type向量[1, 1, NP, C]
-        type_embeddings = torch.randn(1, 1, 3, config.causal_block.hidden_size)
+        type_embeddings = torch.randn(1, 1, 3, self.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
-        mask_embeddings = torch.randn(1, 1, config.state_encode.input_size)
-        self.mask_query_s = nn.Parameter(mask_embeddings, requires_grad=True)
-        self.mask_query_r = nn.Parameter(mask_embeddings, requires_grad=True)
+        mask_embeddings_s = torch.randn(1, 1, self.hidden_size)
+        mask_embeddings_r = torch.randn(1, 1, self.hidden_size)
+        self.mask_query_s = nn.Parameter(mask_embeddings_s, requires_grad=True)
+        self.mask_query_r = nn.Parameter(mask_embeddings_r, requires_grad=True)
 
         self.s_encoder = MLPEncoder(config.state_encode)
         self.r_encoder = MLPEncoder(config.reward_encode)
@@ -111,38 +114,39 @@ class RSADecisionModel(nn.Module):
             actions:[B, NT, H], float
             cache: [B, NC, H]
         """
-        B, NT, H = s_arr.shape
+        B = s_arr.shape[0]
+        NT = s_arr.shape[1]
         Ba = a_arr.shape[0]
         NTa = a_arr.shape[1]
         Br = r_arr.shape[0]
         NTr = r_arr.shape[1]
 
-        assert Br == Ba and Ba == B and NTr == NTa and NTa == NT
+        assert Br == Ba and Ba == B and NTr == NTa and NT == NTr
 
         # Add state dropouts
         device = s_arr.device
         p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
         p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-        eps = torch.randn((B, NT, H)).to(device)
+        eps = torch.randn((B, NT, self.hidden_size)).to(device)
         dp_eps = torch.bernoulli(p_noise)
         dp_mask = torch.bernoulli(p_mask)
 
         # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
-        observation_in = s_arr + eps * dp_eps
+        observation_in = self.s_encoder(s_arr) + eps * dp_eps
         observation_in = observation_in * (1 - dp_mask) + self.mask_query_s * dp_mask
-        observation_in = self.s_encoder(observation_in).view(B, NT, 1, -1)
+        observation_in = observation_in.view(B, NT, 1, -1)
 
         # Add reward dropouts
         pr_noise = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
         pr_mask = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-        eps = torch.randn((B, NT, H)).to(device)
+        eps = torch.randn((B, NT, self.hidden_size)).to(device)
         dpr_eps = torch.bernoulli(pr_noise)
         dpr_mask = torch.bernoulli(pr_mask)
 
         # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
-        reward_in = r_arr + eps * dpr_eps
+        reward_in = self.r_encoder(r_arr.view(Br, NTr, 1)) + eps * dpr_eps
         reward_in = reward_in * (1 - dpr_mask) + self.mask_query_r * dpr_mask
-        reward_in = self.s_encoder(reward_in).view(B, NT, 1, -1)
+        reward_in = reward_in.view(B, NT, 1, -1)
 
         # Input actions: [B, NT, 1, H]
         action_in = self.a_encoder(a_arr).view(B, NT, 1, -1)
@@ -171,7 +175,7 @@ class RSADecisionModel(nn.Module):
         # Predict a_0, a_1, ..., a_t
         rew_output = self.r_decoder(outputs[:, :, 2])
 
-        return rew_output, obs_output, act_output, new_cache
+        return obs_output, act_output, rew_output, new_cache
 
     def reset(self):
         self.causal_model.reset()

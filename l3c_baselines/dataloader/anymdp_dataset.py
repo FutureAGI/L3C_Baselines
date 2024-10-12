@@ -40,14 +40,12 @@ class AnyMDPDataSet(Dataset):
             actions_behavior = np.load(path + '/actions_behavior.npy')
             actions_label = np.load(path + '/actions_label.npy')
             rewards = np.load(path + '/rewards.npy')
-            max_t = actions_behavior.shape[0]
+            max_t = min(actions_label.shape[0], 
+                        rewards.shape[0], 
+                        actions_behavior.shape[0],
+                        observations.shape[0])
 
             # Shape Check
-            assert max_t == rewards.shape[0]
-            assert max_t == actions_behavior.shape[0]
-            assert max_t == actions_label.shape[0]
-            assert max_t + 1 == observations.shape[0]
-
             if(self.time_step > max_t):
                 print(f'[Warning] Load samples from {path} that is shorter ({max_t}) than specified time step ({self.time_step})')
                 n_b = 0
@@ -55,9 +53,9 @@ class AnyMDPDataSet(Dataset):
             else:
                 n_b = 0
                 n_e = self.time_step
-            obs_arr = torch.from_numpy(observations[n_b:(n_e + 1)]).long() 
-            bact_arr = torch.from_numpy(actions_behavior[n_b:n_e]).long() 
-            lact_arr = torch.from_numpy(actions_label[n_b:n_e]).long() 
+            obs_arr = torch.from_numpy(observations[n_b:n_e].astype("int32")).long() 
+            bact_arr = torch.from_numpy(actions_behavior[n_b:n_e].astype("int32")).long() 
+            lact_arr = torch.from_numpy(actions_label[n_b:n_e].astype("int32")).long() 
             reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
 
             return obs_arr, bact_arr, lact_arr, reward_arr
@@ -75,4 +73,4 @@ if __name__=="__main__":
     dataset = AnyMDPDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
     obs, bact, lact, rewards = dataset[0]
-    print(obs.shape, bact.shape, lact.shape, rewards.shape, bevs.shape)
+    print(obs.shape, bact.shape, lact.shape, rewards.shape)

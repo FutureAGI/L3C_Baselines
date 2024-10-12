@@ -6,7 +6,7 @@ from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
 from l3c_baselines.utils import format_cache
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask
 from l3c_baselines.utils import count_parameters
-from restools.logging import log_fatal
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class LanguageModel(nn.Module):
     """

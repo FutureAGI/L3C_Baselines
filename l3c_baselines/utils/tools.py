@@ -150,14 +150,16 @@ class DistStatistics(object):
     """
     Provide distributed statistics
     """
-    def __init__(self, *keys):
+    def __init__(self, *keys, verbose=False):
         self.keys = keys
         if("count" in keys):
             self.is_average = True
-            print("Found 'count' keyword in keys, statistics will be averaged by count")
+            if(verbose):
+                log_debug("Found 'count' keyword in keys, statistics will be averaged by count")
         else:
             self.is_average = False
-            print("No 'count' keyword detected, statistics will be summed but not averaged")
+            if(verbose):
+                log_debug("No 'count' keyword detected, statistics will be summed but not averaged")
         self.reset()
 
     def reset(self):

@@ -76,6 +76,3 @@ class CausalBlock(nn.Module):
     def reset(self):
         if(self.need_reset):
             self.layers.reset()
-
-if __name__=='__main__':
-    DT = CausalModeling(config)

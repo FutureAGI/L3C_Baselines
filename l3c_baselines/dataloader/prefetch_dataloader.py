@@ -8,7 +8,7 @@ import numpy as np
 import multiprocessing
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
-from restools.logging import log_warn, log_fatal
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class NaiveDataLoader(DataLoader):
     def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):
@@ -83,7 +83,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         world_size=1,
         batch_size=4,
         num_workers=2,
-        prefetch_batches=2,
+        prefetch_batches=1,
         collate_fn=torch_collate,
     ):
         super().__init__(dataset, 
@@ -165,32 +165,32 @@ def segment_iterator(full_len, seg_len, device, *args):
     """
     Input shape: [Batch, Length, *]
     Output: list of [Batch, seg_len, *]
+    args: either torch.Tensor or tuple(torch.Tensor, ext)
     """
-    arg_ext = []
+    data_ext = []
+    data = []
 
     # Make sure full_len is shorter than args
-    for arg in args:
-        arg_len = arg.shape[1]
-        if(full_len > arg_len):
-            full_len = min(full_len, arg_len)
-
-    for arg in args:
-        arg_len = arg.shape[1]
-        if(arg_len == full_len + 1):
-            arg_ext.append(True)
-        elif(arg_len == full_len):
-            arg_ext.append(False)
+    for i,arg in enumerate(args):
+        if(isinstance(arg, tuple) or isinstance(arg, list)):
+            sdata, ext = arg
+        elif(isinstance(arg, torch.Tensor)):
+            sdata = arg
+            ext = 0
         else:
-            log_fatal(f"Dataloader - segement_iterator: revised length {full_len} is not matched with {arg_len}")
+            log_fatal(f"Unrecognized data type {type(arg)}")
+        ext = max(0, ext)
+        data_ext.append(ext)
+        data.append(sdata)
+        arg_len = sdata.shape[1]
+        # Make sure we have enough space
+        full_len = min(full_len, arg_len - ext)
 
     seg_num = (full_len - 1) // seg_len + 1
     for seg_id in range(seg_num):
         res = [seg_id]
         b = seg_id * seg_len
         e = min(b + seg_len, full_len)
-        for i,arg in enumerate(args):
-            if(arg_ext[i]):
-                res.append(arg[:, b:e+1].to(device))
-            else:
-                res.append(arg[:, b:e].to(device))
+        for sdata, ext in zip(data, data_ext):
+            res.append(sdata[:, b:e+ext].to(device))
         yield tuple(res)

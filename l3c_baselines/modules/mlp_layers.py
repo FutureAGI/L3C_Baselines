@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from restools.logging import log_fatal
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 
 class MLPEncoder(nn.Module):

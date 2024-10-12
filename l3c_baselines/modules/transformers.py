@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from .rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
 from torch.utils.checkpoint import checkpoint
-from restools.logging import log_warn, log_fatal
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class ARTransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
