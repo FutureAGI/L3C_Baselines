@@ -35,7 +35,11 @@ class NaiveDataLoader(DataLoader):
         sub_iter = 0
         while sub_iter < self.batch_size:
             # In case the data is invalid, fetch further data
-            sub_data = self.get()
+            try:
+                sub_data = self.get()
+            except Exception as e:
+                log_warn("Error fetching data from dataset: ", e)
+                continue
             if(sub_data is not None):
                 data.append(sub_data)
                 sub_iter += 1
