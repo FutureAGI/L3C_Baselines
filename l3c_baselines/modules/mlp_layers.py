@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from restools.logging import log_fatal
 
 
 class MLPEncoder(nn.Module):
@@ -36,7 +37,7 @@ class MLPEncoder(nn.Module):
                 self.encoder_layer = nn.Linear(input_size, hidden_size)
                 self.output_size = hidden_size
         else:
-            raise Exception(f"action input type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
+            log_fatal(f"action input type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
 
     def forward(self, input):
         return self.encoder_layer(input)
@@ -80,7 +81,7 @@ class ResidualMLPDecoder(nn.Module):
                 self.decoder_post = get_layers([input_size, hidden_size[-1]], dropout)
                 self.output_size = hidden_size[-1]
             else:
-                raise Exception("if use residual connection, the hidden size must have at least two layers")
+                log_fatal("if use residual connection, the hidden size must have at least two layers")
         else:
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 self.decoder_pre = get_layers([input_size] + list(hidden_size), dropout)
@@ -97,7 +98,7 @@ class ResidualMLPDecoder(nn.Module):
             self.is_continuous = True
             self.decoder_output = nn.Identity()
         else:
-            raise Exception(f"action output type must be Continuous or Discrete, unrecognized `{output_type}`")
+            raise log_fatal(f"action output type must be Continuous or Discrete, unrecognized `{output_type}`")
 
     def forward(self, input, T=1.0):
         src = self.layer_norm(input)

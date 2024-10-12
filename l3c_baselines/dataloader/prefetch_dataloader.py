@@ -144,19 +144,27 @@ class PrefetchDataLoader(NaiveDataLoader):
 
     def __del__(self):
         try:
-            # Stop each worker by passing None to its index queue
-            for i, w in enumerate(self.workers):
+            # 通知每个工作进程停止工作
+            for i in range(len(self.workers)):
                 self.index_queues[i].put(None)
-                w.join(timeout=5.0)
-            for q in self.index_queues:  # close all queues
-                q.cancel_join_thread()
-                q.close()
-            self.output_queue.cancel_join_thread()
-            self.output_queue.close()
-        finally:
+            
+            # 等待所有工作进程结束
             for w in self.workers:
-                if w.is_alive():  # manually terminate worker if all else fails
+                w.join()
+            
+            # 关闭所有队列
+            for q in self.index_queues:
+                q.close()
+                q.cancel_join_thread()
+            self.output_queue.close()
+            self.output_queue.cancel_join_thread()
+        except Exception as e:
+            # 在异常情况下，尝试终止所有工作进程
+            for w in self.workers:
+                if w.is_alive():
                     w.terminate()
+            # 重新抛出异常以便上层处理
+            raise e
     
 def segment_iterator(full_len, seg_len, device, *args):
     """

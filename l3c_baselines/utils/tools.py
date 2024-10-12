@@ -167,9 +167,13 @@ class DistStatistics(object):
 
     def add_with_safty(self, device, **kwargs):
         zeroflag = False
+        if("count" in kwargs):
+            cnt = kwargs["count"]
+        else:
+            cnt = 1
         for key, value in kwargs.items():
             if torch.isinf(value).any() or torch.isnan(value).any():
-                print(f"[WARNING] '{device}' stating '{value}' suffering prediction loss = NAN/INF, fill with 0")
+                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
                 zeroflag = True
         if zeroflag:
             for key, value in kwargs.items():
@@ -177,6 +181,8 @@ class DistStatistics(object):
         for key, value in kwargs.items():
             if(key not in self._data):
                 raise KeyError(f"Key {key} not registered in Statistics class")
+            if(key != "count"):
+                value *= cnt
             dist.all_reduce(value.data)
             self._data[key].append(value.cpu().detach())
 

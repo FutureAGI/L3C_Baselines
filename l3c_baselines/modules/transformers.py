@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from .rope_mha import RoPEMultiheadAttention, precompute_freqs_cis
 from torch.utils.checkpoint import checkpoint
+from restools.logging import log_warn, log_fatal
 
 class ARTransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
@@ -54,7 +55,7 @@ class ARTransformerEncoder(nn.Module):
             num_layers : int, 
             d_model : int, 
             nhead : int, 
-            max_steps : int,
+            max_position_encoding : int,
             dim_feedforward : int=2048, 
             dropout : float=0.10,
             context_window: int=-1):
@@ -63,18 +64,18 @@ class ARTransformerEncoder(nn.Module):
         self.layers = nn.ModuleList([copy.deepcopy(ar_layer) for i in range(num_layers)])
         self.num_layers = num_layers
         self.d_head = d_model // nhead
-        self.max_steps = max_steps
+        self.max_position_encoding = max_position_encoding
 
-        attn_mask = (torch.triu(torch.ones(max_steps, max_steps)) == 1).transpose(1, 0)
+        attn_mask = (torch.triu(torch.ones(max_position_encoding, max_position_encoding)) == 1).transpose(1, 0)
         attn_mask = attn_mask.float().masked_fill(attn_mask == False, float('-inf')).masked_fill(attn_mask == True, float(0.0))
 
         # If context-free, only window of 2 is allowed
         if(context_window > -1):
-            ext_mask = (torch.triu(torch.ones(max_steps, max_steps), diagonal=-context_window) == 1)
+            ext_mask = (torch.triu(torch.ones(max_position_encoding, max_position_encoding), diagonal=-context_window) == 1)
             attn_mask = attn_mask.masked_fill(ext_mask == False, float('-inf'))
-            print(f"[Warning] Context-Window is applied, Use an attention mask of {attn_mask}")
+            log_warn(f"[Warning] Context-Window is applied, Use an attention mask of {attn_mask}")
 
-        self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_steps)
+        self.rope_embedding = precompute_freqs_cis(self.d_head, self.max_position_encoding)
         self.register_buffer('attn_mask', attn_mask)
 
     def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
@@ -90,6 +91,9 @@ class ARTransformerEncoder(nn.Module):
             qs = cache[0].shape[1]
             e = qs + l
             
+        if(e > self.max_position_encoding):
+            log_fatal(f"The sequence length input to ARTransformerEncoder {e} "
+                   + f"is larger than max_position_encoding {self.max_position_encoding}")
         new_cache = None
 
         output=src

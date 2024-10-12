@@ -116,14 +116,14 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     for epoch_id in range(1, train_config.max_epochs + 1):
         model.train()
         main_round(epoch_id, dataloader)
-        if(main and epoch_id % train_config.eval_interval == 0):
+        if(main and epoch_id % train_config.evaluation_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
             #torch.save(optimizer.state_dict(), opt_path_seq)
 
         model.eval()
         # Perform the evaluation according to interval
-        if(epoch_id % train_config.eval_interval == 0):
+        if(epoch_id % train_config.evaluation_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
 def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
@@ -135,7 +135,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     dataloader = DataLoader(dataset, batch_size=config.batch_size, sampler=sampler)
     all_length = len(dataloader)
 
-    log_debug("[EVALUATION] Epochs: %s..." % epoch_id, on=main)
+    if(main):
+        log_debug("Start Evaluation...")
+        log_progress(0)
     stat = DistStatistics("perplexity", "count")
 
     for batch_idx, (feature, label) in enumerate(dataloader):
@@ -153,8 +155,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                                 perplexity=loss, 
                                 count=cnt)
 
-            if(main):
-                log_progress((batch_idx + 1) / all_length)
+        if(main):
+            log_progress((batch_idx + 1) / all_length)
 
     if(main):
         stat_res = stat()

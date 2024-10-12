@@ -10,7 +10,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
-from l3c_baselines.modules import ImageEncoder, ImageDecoder
+from l3c_baselines.modules import ImageEncoder, ImageDecoder, VAE
 from .decision_model import SADecisionModel
 
 class E2EObjNavSA(nn.Module):
@@ -28,7 +28,7 @@ class E2EObjNavSA(nn.Module):
 
         loss_weight = torch.cat((
                     torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                    torch.full((1, config.max_time_step - config.context_warmup,), 1.0)), dim=1)
+                    torch.full((1, config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
@@ -62,11 +62,14 @@ class E2EObjNavSA(nn.Module):
 
         return z_rec, z_pred, a_pred, new_cache
 
-    def vae_loss(self, observations, _lambda=1.0e-5, _sigma=1.0):
+    def vae_loss(self, observations, _sigma=1.0):
         self.vae.requires_grad_(True)
         self.img_encoder.requires_grad_(True)
         self.img_decoder.requires_grad_(True)
-        return self.vae.loss(img_pro(observations), _lambda=_lambda, _sigma=_sigma)
+        return self.vae.loss(img_pro(observations), _sigma=_sigma)
+
+    def reset(self):
+        self.decision_model.reset()
 
     def sequential_loss(self, observations, behavior_actions, label_actions, 
                         additional_info=None, # Kept for passing additional information

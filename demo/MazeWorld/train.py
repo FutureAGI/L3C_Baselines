@@ -13,11 +13,12 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
+from restools.logging import Logger, log_progress, log_debug, log_warn
 
 from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import show_bar, count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path
+from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics
 from l3c_baselines.models import E2EObjNavSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -120,7 +121,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
                     vae_loss = loss["Reconstruction-Error"] + lambda_scheduler() * loss["KL-Divergence"]
 
-                if(use_scaler):
+                if(train_config.use_scaler):
                     scaler.scale(vae_loss).backward()
                     gradient_failsafe(model.module, vae_optimizer, scaler)
                     clip_grad_norm_(model.module.parameters(), 1.0)
@@ -138,14 +139,14 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     lr = vae_scheduler.get_last_lr()[0]
                     lrec = float(loss["Reconstruction-Error"].detach().cpu().numpy())
                     lkl = float(loss["KL-Divergence"].detach().cpu().numpy())
-                    logger_vae.log(batch_idx, sub_idx, sigma_scheduler(), lambda_scheduler(), 
+                    logger_vae(batch_idx, sub_idx, sigma_scheduler(), lambda_scheduler(), 
                             lr, lrec, lkl, epoch=rid, iteration=batch_idx, prefix="VAE")
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
                             and train_config.max_save_iterations > 0):
                 acc_iter = 0
-                print("Check current validity and save model for safe...")
+                log_debug("Check current validity and save model for safe...")
                 check_model_validity(model.module)
                 mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
                 torch.save(model.state_dict(), mod_path)
@@ -163,7 +164,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
-                with autocast(dtype=torch.bfloat16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
                         obs, bacti, lacti, bevs, state_dropout=0.20, 
@@ -189,15 +190,16 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(main):
                     lr = causal_scheduler.get_last_lr()[0]
-                    fobs = float(lobs.detach().cpu().numpy())
-                    fz = float(lz.detach().cpu().numpy())
-                    fact = float(lact.detach().cpu().numpy())
-                    logger_causal.log(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+                    fobs = float(loss["wm-raw"].detach().cpu().numpy())
+                    fz = float(loss["wm-latent"].detach().cpu().numpy())
+                    fact = float(loss["pm"].detach().cpu().numpy())
+                    logger_causal(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
-                            and train_config.max_save_iterations > 0):                acc_iter = 0
-                print("Check current validity and save model for safe...")
+                            and train_config.max_save_iterations > 0):
+                acc_iter = 0
+                log_debug("Check current validity and save model for safe...")
                 sys.stdout.flush()
                 check_model_validity(model.module)
                 mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
@@ -217,22 +219,21 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             causal_round(epoch_id, causal_dataloader, max_save_iterations=max_save_iterations)
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
-        if(main and epoch_id % train_config.eval_interval == 0):
-            print(f"Save Model for Epoch-{epoch_id}")
-                sys.stdout.flush()
+        if(main and epoch_id % train_config.evaluation_interval == 0):
+            log_debug(f"Save Model for Epoch-{epoch_id}")
             mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
 
         model.eval()
         # Perform the evaluation according to interval
-        if(epoch_id % train_config.eval_interval == 0):
+        if(epoch_id % train_config.evaluation_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
 def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
 
     dataset = MazeDataSet(config.data_path, config.seq_len, verbose=main)
-    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size, rank=rank, world_size=world_size)
+    dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
 
     results = []
     all_length = len(dataloader)
@@ -240,10 +241,11 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     stat = DistStatistics("loss_reconstruction", "loss_wm_raw", "loss_wm_latent", "loss_pm", "count")
 
     if(main):
-        print("[EVALUATION] Epochs: %s..." % epoch_id)
+        log_debug("Start evaluation ...")
+        log_progress(0)
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
-        start_step = 0
+        start_position = 0
         model.module.reset()
         for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                     config.seq_len, config.seg_len, device, *batch):
@@ -252,31 +254,24 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
             with torch.no_grad():
                 loss_vae = model.module.vae_loss(obs)
                 loss = model.module.sequential_loss(
-                            obs, bacti, lacti, bevs, start_step=start_step)
-
-                lrec = loss_vae["Reconstruction-Error"] * loss["count"]
-                lraw = loss["wm-raw"] * loss["count"]
-                llat = loss["wm-latent"] * loss["count"]
-                lpm = loss["pm"] * loss["count"]
-                cnt = loss["count"]
+                            obs, bacti, lacti, bevs, start_position=start_position)
 
             stat.add_with_safty(rank, 
-                                loss_reconstruction=lrec, 
-                                loss_wm_raw=lraw, 
-                                loss_wm_latent=llat, 
-                                loss_pm=lpm,
-                                count=cnt)
+                                loss_reconstruction=loss_vae["Reconstruction-Error"], 
+                                loss_wm_raw=loss["wm-raw"], 
+                                loss_wm_latent=loss["wm-latent"], 
+                                loss_pm=loss["pm"],
+                                count=loss["count"])
 
-            start_step += bacti.shape[1]
+            start_position += bacti.shape[1]
 
-            if(main):
-                show_bar((batch_idx + 1) / all_length)
-                sys.stdout.flush()
+        if(main):
+            log_progress((batch_idx + 1) / all_length)
 
     if(main):
         stat_res = stat()
         logger = Logger(*stat_res.keys())
-        logger.log(*stat_res.values(), epoch=epoch_id)
+        logger(*stat_res.values(), epoch=epoch_id, prefix="EvaluationResults")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

@@ -1,7 +1,7 @@
 ---
 model_config:
   vocab_size: 128
-  max_time_step: 3200
+  max_position: 16000
   context_warmup: 500
   word_embeddings:
       model_type: MLP

@@ -13,12 +13,13 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
+from restools.logging import Logger, log_progress, log_debug, log_warn, log_fatal
 
 from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import show_bar, count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics, rewards2go
-from l3c_baselines.models import E2EObjNavSA
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path
+from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
+from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -42,7 +43,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = E2EObjNavSA(config.model_config, verbose=main)
+    model = AnyMDPRSA(config.model_config, verbose=main)
 
     model = model.to(device)
 
@@ -99,7 +100,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             for sub_idx, states, bactions, lactions, rewards in segment_iterator(
                         train_config.seq_len, train_config.seg_len, device, *batch[:-1], r2go):
                 optimizer.zero_grad()
-                with autocast(dtype=torch.bfloat16, enabled=use_amp):
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
                         states, bactions, lactions, rewards, state_dropout=0.20, reward_dropout=0.20,
@@ -131,8 +132,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
-                            and train_config.max_save_iterations > 0):                acc_iter = 0
-                print("Check current validity and save model for safe...")
+                            and train_config.max_save_iterations > 0):
+                acc_iter = 0
+                log_debug("Check current validity and save model for safe...")
                 sys.stdout.flush()
                 check_model_validity(model.module)
                 mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
@@ -146,7 +148,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
         if(main and epoch_id % train_config.eval_interval == 0):
-            print(f"Save Model for Epoch-{epoch_id}")
+            log_debug(f"Save Model for Epoch-{epoch_id}")
                 sys.stdout.flush()
             mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
@@ -168,7 +170,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     stat = DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count")
 
     if(main):
-        print("[EVALUATION] Epochs: %s..." % epoch_id)
+        log_debug("Start evaluation ...")
+        log_progress(0)
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
         start_step = 0
@@ -193,9 +196,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
 
             start_step += bactions.shape[1]
 
-            if(main):
-                show_bar((batch_idx + 1) / all_length)
-                sys.stdout.flush()
+        if(main):
+            log_progress((batch_idx + 1) / all_length)
 
     if(main):
         stat_res = stat()
