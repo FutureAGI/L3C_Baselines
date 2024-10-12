@@ -116,19 +116,17 @@ class PrefetchDataLoader(NaiveDataLoader):
         self.prefetch()
         sys.stdout.flush()
         if self.index in self.cache:
-            item = self.cache[self.index]
-            del self.cache[self.index]
+            item = self.cache.pop(self.index)
         else:
-            while True:
-                try:
-                    (index, data) = self.output_queue.get(timeout=0)
-                except queue.Empty:  # output queue empty, keep trying
-                    continue
-                if index == self.index:  # found our item, ready to return
+            try:
+                (index, data) = self.output_queue.get(timeout=60)
+                if index == self.index:
                     item = data
-                    break
-                else:  # item isn't the one we want, cache for later
+                else:
                     self.cache[index] = data
+                    return self.get()
+            except queue.Empty:
+                raise StopIteration("Data fetch timeout from the output queue.")
         sys.stdout.flush()
 
         self.index += self.world_size
@@ -144,26 +142,19 @@ class PrefetchDataLoader(NaiveDataLoader):
 
     def __del__(self):
         try:
-            # 通知每个工作进程停止工作
             for i in range(len(self.workers)):
                 self.index_queues[i].put(None)
-            
-            # 等待所有工作进程结束
             for w in self.workers:
                 w.join()
-            
-            # 关闭所有队列
             for q in self.index_queues:
                 q.close()
                 q.cancel_join_thread()
             self.output_queue.close()
             self.output_queue.cancel_join_thread()
         except Exception as e:
-            # 在异常情况下，尝试终止所有工作进程
             for w in self.workers:
                 if w.is_alive():
                     w.terminate()
-            # 重新抛出异常以便上层处理
             raise e
     
 def segment_iterator(full_len, seg_len, device, *args):
