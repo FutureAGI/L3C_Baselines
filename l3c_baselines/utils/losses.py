@@ -54,3 +54,14 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
             ce_loss = torch.mean(ce_loss, dim=0)
 
     return ce_loss
+
+def ent_loss(act_out, reduce="mean"):
+    """
+    input shape: (B, T, H)
+    mask shape: (B, T)
+    reudce for dim=1
+    """
+    if reduce == "mean":
+        return torch.mean(torch.log(act_out) * act_out)
+    else:
+        return torch.mean(torch.log(act_out) * act_out, dim=0)

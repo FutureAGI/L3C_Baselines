@@ -102,6 +102,7 @@ train_config:
     lossweight_policymodel: 0.20
     lossweight_worldmodel_states: 0.60
     lossweight_worldmodel_rewards: 0.20
+    lossweight_entropy: 1.0e-3
     lossweight_l2: 0.0
 
     use_amp: False

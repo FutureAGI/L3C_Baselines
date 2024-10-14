@@ -62,7 +62,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     # Initialize the Logger
     if(main):
-        logger = Logger("iteration", "segment", "learning_rate", "loss_worldmodel_reward", "loss_worldmodel_state", "loss_policymodel", sum_iter=len(dataloader), use_tensorboard=True)
+        logger = Logger("iteration", "segment", "learning_rate", 
+                "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
+                sum_iter=len(dataloader), use_tensorboard=True)
 
 
     # Initialize the optimizers
@@ -96,18 +98,20 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             # Important: Must reset the model before each segment
             model.module.reset()
             start_position = 0
-            r2go = rewards2go(batch[-1])
-            for sub_idx, states, bactions, lactions, rewards in segment_iterator(
+            sarr, baarr, laarr, rarr = batch
+            r2goarr = rewards2go(rarr)
+            for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                         train_config.seq_len, train_config.seg_len, device, 
-                        (batch[0], 1), batch[1], batch[2], (r2go, 1)):
+                        (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
                 optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
-                        states, bactions, lactions, rewards, state_dropout=0.20, reward_dropout=0.20,
+                        states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], state_dropout=0.20, reward_dropout=0.20,
                         start_position=start_position)
                     causal_loss = (train_config.lossweight_worldmodel_states * loss["wm-s"]
                             + train_config.lossweight_worldmodel_rewards * loss["wm-r"]
+                            + train_config.lossweight_entropy * loss["ent"]
                             + train_config.lossweight_policymodel * loss["pm"])
                 start_position += bactions.shape[1]
 
@@ -129,7 +133,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     fwms = float(loss["wm-s"].detach().cpu().numpy())
                     fwmr = float(loss["wm-r"].detach().cpu().numpy())
                     fpm = float(loss["pm"].detach().cpu().numpy())
-                    logger(batch_idx, sub_idx, lr, fwms, fwmr, fpm, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+                    fent = float(-loss["ent"].detach().cpu().numpy())
+                    logger(batch_idx, sub_idx, lr, fwms, fwmr, fpm, fent, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
@@ -176,13 +181,14 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
         model.module.reset()
-        r2go = rewards2go(batch[-1])
-        for sub_idx, states, bactions, lactions, rewards in segment_iterator(
+        sarr, baarr, laarr, rarr = batch
+        r2goarr = rewards2go(rarr)
+        for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                     config.seq_len, config.seg_len, device, 
-                    (batch[0], 1), batch[1], batch[2], (r2go, 1)):
+                    (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
             with torch.no_grad():
                 loss = model.module.sequential_loss(
-                            states, bactions, lactions, rewards, start_position=start_position)
+                            states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position)
 
             stat.add_with_safty(rank, 
                                 loss_wm_s=loss["wm-s"], 
@@ -198,7 +204,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     if(main):
         stat_res = stat()
         logger = Logger(*stat_res.keys())
-        logger(*stat_res.values(), epoch=epoch_id)
+        logger(*stat_res.values(), epoch=epoch_id, prefix="EvaluationResults")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

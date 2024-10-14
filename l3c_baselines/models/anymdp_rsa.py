@@ -8,7 +8,7 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, ent_loss, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.utils import log_debug, log_warn, log_fatal
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
@@ -26,7 +26,7 @@ class AnyMDPRSA(RSADecisionModel):
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, rewards,
+    def sequential_loss(self, observations, behavior_actions, label_actions, rewards_input, rewards_output,
                         additional_info=None, # Kept for passing additional information
                         start_position=0, 
                         state_dropout=0.0,
@@ -36,7 +36,7 @@ class AnyMDPRSA(RSADecisionModel):
                         reduce='mean'):
     
         # Predict the latent representation of action and next frame (World Model)
-        s_pred, a_pred, r_pred, _ = self.forward(observations[:, :-1], behavior_actions, rewards[:, :-1],
+        s_pred, a_pred, r_pred, _ = self.forward(observations[:, :-1], behavior_actions, rewards_input,
                 cache=None, need_cache=False, state_dropout=state_dropout,
                 update_memory=update_memory)
 
@@ -49,8 +49,10 @@ class AnyMDPRSA(RSADecisionModel):
 
         # World Model Loss - Latent Space
         loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
-        loss["wm-r"] = mse_loss_mask(r_pred, rewards[:, 1:].view(*rewards[: ,1:].shape,1), mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-r"] = mse_loss_mask(r_pred, rewards_output[:, 1:].view(*rewards_output[: ,1:].shape,1), 
+                                    mask=self.loss_weight[:, ps:pe], reduce=reduce)
         loss["pm"] = ce_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["ent"] = ent_loss(a_pred, reduce=reduce)
         loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=a_pred.device)
 
         return loss
