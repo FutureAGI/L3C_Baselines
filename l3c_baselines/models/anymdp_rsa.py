@@ -47,13 +47,16 @@ class AnyMDPRSA(RSADecisionModel):
         seq_len = a_pred.shape[1]
         ps, pe = start_position, start_position + seq_len
 
-        # World Model Loss - Latent Space
+        # World Model Loss - States and Rewards
         loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
-        loss["wm-r"] = mse_loss_mask(r_pred, rewards_output[:, 1:].view(*rewards_output[: ,1:].shape,1), 
+        loss["wm-r"] = mse_loss_mask(r_pred, rewards_output.view(*rewards_output.shape,1), 
                                     mask=self.loss_weight[:, ps:pe], reduce=reduce)
+
+        # Policy Model and Entropy Loss
         loss["pm"] = ce_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce=reduce)
         loss["ent"] = ent_loss(a_pred, reduce=reduce)
         loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=a_pred.device)
+        loss["causal-l2"] = parameters_regularization(self)
 
         return loss
         
