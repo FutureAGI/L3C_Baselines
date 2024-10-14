@@ -13,9 +13,9 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
-from restools.logging import Logger, log_progress, log_debug, log_warn
 
 from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
 from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics
@@ -113,7 +113,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
-                            train_config.seq_len_vae, train_config.seg_len_vae, device, *batch):
+                            train_config.seq_len_vae, train_config.seg_len_vae, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
@@ -248,7 +248,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         start_position = 0
         model.module.reset()
         for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
-                    config.seq_len, config.seg_len, device, *batch):
+                    config.seq_len, config.seg_len, device, (batch[0], 1), *batch[1:]):
             obs = obs.permute(0, 1, 4, 2, 3)
 
             with torch.no_grad():
@@ -256,7 +256,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.sequential_loss(
                             obs, bacti, lacti, bevs, start_position=start_position)
 
-            stat.add_with_safty(rank, 
+            stat.add_with_safety(rank, 
                                 loss_reconstruction=loss_vae["Reconstruction-Error"], 
                                 loss_wm_raw=loss["wm-raw"], 
                                 loss_wm_latent=loss["wm-latent"], 

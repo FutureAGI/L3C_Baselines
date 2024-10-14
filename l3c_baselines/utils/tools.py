@@ -167,7 +167,7 @@ class DistStatistics(object):
         for key in self.keys:
             self._data[key] = []
 
-    def add_with_safty(self, device, **kwargs):
+    def add_with_safety(self, device, **kwargs):
         zeroflag = False
         if("count" in kwargs):
             cnt = kwargs["count"]
@@ -177,10 +177,14 @@ class DistStatistics(object):
             if torch.isinf(value).any() or torch.isnan(value).any():
                 print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
                 zeroflag = True
+        safe_stats = dict()
         if zeroflag:
             for key, value in kwargs.items():
-                value.fill_(0.0)
-        for key, value in kwargs.items():
+                safe_stats[key] = torch.zeros_like(value)
+        else:
+            for key, value in kwargs.items():
+                safe_stats[key] = value.clone().detach()
+        for key, value in safe_stats.items():
             if(key not in self._data):
                 raise KeyError(f"Key {key} not registered in Statistics class")
             if(key != "count"):
@@ -196,6 +200,7 @@ class DistStatistics(object):
             for key in self.keys:
                 if(key != "count"):
                     stat_res[key] /= stat_res["count"]
+
         return stat_res
 
 def rewards2go(rewards, gamma=0.98):

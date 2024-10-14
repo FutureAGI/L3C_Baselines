@@ -66,6 +66,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
                 sum_iter=len(dataloader), use_tensorboard=True)
 
+    train_stat = DistStatistics("loss_worldmodel_state", "loss_worldmodel_reward", 
+                            "loss_policymodel", "entropy", "count")
+
 
     # Initialize the optimizers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
@@ -115,26 +118,38 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                             + train_config.lossweight_policymodel * loss["pm"])
                 start_position += bactions.shape[1]
 
+                train_stat.add_with_safety(
+                            rank,
+                            loss_worldmodel_state = loss["wm-s"],
+                            loss_worldmodel_reward = loss["wm-r"],
+                            loss_policymodel = loss["pm"],
+                            entropy = -loss["ent"],
+                            count = loss["count"])
+
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
                     clip_grad_norm_(model.module.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
                 else:
                     causal_loss.backward()
-                    optimizer.step()
 
+            if(train_config.use_scaler):
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 optimizer.step()
-                scheduler.step()
 
-                if(main):
-                    lr = scheduler.get_last_lr()[0]
-                    fwms = float(loss["wm-s"].detach().cpu().numpy())
-                    fwmr = float(loss["wm-r"].detach().cpu().numpy())
-                    fpm = float(loss["pm"].detach().cpu().numpy())
-                    fent = float(-loss["ent"].detach().cpu().numpy())
-                    logger(batch_idx, sub_idx, lr, fwms, fwmr, fpm, fent, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+            scheduler.step()
+
+            if(main):
+                stat_res = train_stat()
+                lr = scheduler.get_last_lr()[0]
+                logger(batch_idx, sub_idx, lr, 
+                        stat_res["loss_worldmodel_state"], 
+                        stat_res["loss_worldmodel_reward"], 
+                        stat_res["loss_policymodel"], 
+                        stat_res["entropy"],
+                        epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
@@ -175,6 +190,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     stat = DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count")
 
     if(main):
+        logger = Logger("loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel")
         log_debug("Start evaluation ...")
         log_progress(0)
     dataset.reset(0)
@@ -190,7 +206,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.sequential_loss(
                             states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position)
 
-            stat.add_with_safty(rank, 
+            stat.add_with_safety(rank, 
                                 loss_wm_s=loss["wm-s"], 
                                 loss_wm_r=loss["wm-r"], 
                                 loss_pm=loss["pm"],
@@ -203,8 +219,10 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
 
     if(main):
         stat_res = stat()
-        logger = Logger(*stat_res.keys())
-        logger(*stat_res.values(), epoch=epoch_id, prefix="EvaluationResults")
+        logger(stat_res["loss_wm_s"],
+               stat_res["loss_wm_r"],
+               stat_res["loss_pm"],
+                epoch=epoch_id, prefix="EvaluationResults")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

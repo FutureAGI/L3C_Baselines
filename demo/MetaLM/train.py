@@ -16,7 +16,7 @@ from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearSchedul
 from l3c_baselines.utils import show_bar, model_path
 from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
 from l3c_baselines.models import LanguageModel
-from restools.logging import Logger, log_progress, log_debug, log_warn
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -151,7 +151,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.perplexity(fea, lab)
                 cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
 
-            stat.add_with_safty(rank, 
+            stat.add_with_safety(rank, 
                                 perplexity=loss, 
                                 count=cnt)
 
