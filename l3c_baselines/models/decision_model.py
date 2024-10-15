@@ -7,7 +7,7 @@ from l3c_baselines.utils import format_cache
 
 class SADecisionModel(nn.Module):
     """
-    Take Observations and actions, output d_models
+    Take Observations and actions; output next state and action.
     """
     def __init__(self, config):
         super().__init__()
@@ -84,7 +84,7 @@ class SADecisionModel(nn.Module):
 
 class RSADecisionModel(nn.Module):
     """
-    Take Observations and actions, output d_models
+    Take Observations, actions and reward; output next state, action and reward.
     """
     def __init__(self, config):
         super().__init__()
@@ -112,6 +112,7 @@ class RSADecisionModel(nn.Module):
         Input Size:
             observations:[B, NT, H], float
             actions:[B, NT, H], float
+            rewards:[B, NT, H], float
             cache: [B, NC, H]
         """
         B = s_arr.shape[0]
@@ -151,19 +152,19 @@ class RSADecisionModel(nn.Module):
         # Input actions: [B, NT, 1, H]
         action_in = self.a_encoder(a_arr).view(B, NT, 1, -1)
 
-        # [B, NT, 2, H]
+        # [B, NT, 3, H]
         outputs = torch.cat([reward_in, observation_in, action_in], dim=2)
 
         # Add Type Embedding
         outputs = outputs + self.type_query
 
-        # Concatenate [s_0, a_0, s_1, a_1, s_2, ...] to acquire the size of [B, NT * 2, H]
+        # Concatenate [r_0, s_0, a_0, r_1, s_1, a_1, r_2, ...] to acquire the size of [B, NT * 3, H]
         outputs = outputs.view(B, NT * 3, -1)
 
         # Temporal Encoders
         outputs, new_cache = self.causal_model(outputs, cache=cache, need_cache=need_cache, update_memory=update_memory)
 
-        # Acqure Outputs: [a_0, s_1, a_1, ...]
+        # Acqure Outputs: [r0_, a_0, s_1, r_1, ...]
         outputs = outputs.reshape(B, NT, 3, -1)
 
         # Predict s_1, s_2, ..., s_{t+1}
@@ -172,8 +173,8 @@ class RSADecisionModel(nn.Module):
         # Predict a_0, a_1, ..., a_t
         act_output = self.a_decoder(outputs[:, :, 1], T=T)
 
-        # Predict a_0, a_1, ..., a_t
-        rew_output = self.r_decoder(outputs[:, :, 2])
+        # Predict r_0, r_1, ..., r_t
+        rew_output = self.r_decoder(outputs[:, :, 0])
 
         return obs_output, act_output, rew_output, new_cache
 
@@ -192,7 +193,7 @@ if __name__=='__main__':
         i_s = torch.rand((4, 64, 128))
         i_a = torch.randint(0, 4, (4, 64))
         i_r = torch.rand((4, 64, 1))
-        o_r, o_s, o_a, cache = SADM.forward(i_r, i_s, i_a, cache=cache, update_memory=False)
+        o_r, o_s, o_a, cache = RSADM.forward(i_r, i_s, i_a, cache=cache, update_memory=False)
         print(seg, o_s.shape, o_a.shape, o_r.shape)
         print(format_cache(cache, "Cache"))
-        print(format_cache(SADM.causal_model.layers.memory, "Memory"))
+        print(format_cache(RSADM.causal_model.layers.memory, "Memory"))
