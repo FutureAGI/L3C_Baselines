@@ -2,9 +2,9 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .mamba_minimal import Mamba
 from .recursion import PRNN, SimpleLSTM, MemoryLayers
 from .transformers import ARTransformerEncoder
+from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 
 class CausalBlock(nn.Module):
@@ -13,8 +13,9 @@ class CausalBlock(nn.Module):
     """
     def __init__(self, config):
         super().__init__()
+        self.model_type = config.model_type.lower()
 
-        if(config.model_type == "TRANSFORMER"):
+        if(self.model_type == "transformer"):
             main_encoder = ARTransformerEncoder(
                 config.num_layers, 
                 config.hidden_size, 
@@ -24,7 +25,7 @@ class CausalBlock(nn.Module):
                 dropout=config.dropout, 
                 context_window=config.context_window
             )
-        elif(config.model_type == "LSTM"):
+        elif(self.model_type == "lstm"):
             main_encoder = MemoryLayers(
                 config.hidden_size,
                 config.hidden_size,
@@ -33,7 +34,7 @@ class CausalBlock(nn.Module):
                 config.num_layers,
                 dropout=config.dropout
             )
-        elif(config.model_type == "PRNN"):
+        elif(self.model_type == "prnn"):
             main_encoder = MemoryLayers(
                 config.hidden_size,
                 config.hidden_size,
@@ -42,17 +43,19 @@ class CausalBlock(nn.Module):
                 config.num_layers,
                 dropout=config.dropout
             )
-        elif(config.model_type == "MAMBA"):
-            main_encoder = Mamba(
+        elif(self.model_type == "mamba"):
+            main_encoder = MambaBlock(
                 # This module uses roughly 3 * expand * d_model^2 parameters
-                config.hidden_size, # Model dimension d_model
                 config.num_layers,
+                config.hidden_size, # Model dimension d_model
                 d_state=config.d_state,  # SSM state expansion factor
                 d_conv=config.d_conv,    # Local convolution width
+                layer_idx=0,
+                max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
             )
         else:
-            raise Exception("No such causal model: %s" % model_type)
+            raise Exception("No such causal model: %s" % config.model_type)
         
         self.need_reset = False
         if(config.use_blockrecurrence):

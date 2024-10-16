@@ -1,9 +1,10 @@
 import torch
+from torch import nn
 from mamba_ssm import Mamba
 from mamba_ssm.utils.generation import InferenceParams
 
 
-class MambaBlocks(nn.Module):
+class MambaBlock(nn.Module):
     def __init__(self, num_layers: int, 
                 hidden_size: int,
                 d_state: int,
@@ -15,13 +16,13 @@ class MambaBlocks(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.layer_idx = layer_idx
-        self.encoder = Mamba(d_state=d_state,
+        self.encoder = nn.ModuleList([Mamba(d_state=d_state,
                   d_conv=d_conv,
                   expand=expand,
-                  layer_idx=i) for i in range(num_layers)
+                  layer_idx=i) for i in range(num_layers)])
         
     def forward(self, x, cache=None, need_cache=False):
-        if need_cache:
+        if(need_cache):
             if cache is None:
                 kv_cache = dict()
             elif cache is not None:
@@ -30,8 +31,8 @@ class MambaBlocks(nn.Module):
         else:
             inference_params = None
         out = self.encoder(x, inference_params=inference_params)
+
         if(need_cache):
             return out, inference_params.key_value_memory_dict[self.layer_idx]
-        else：
+        else:
             return out, None
-
