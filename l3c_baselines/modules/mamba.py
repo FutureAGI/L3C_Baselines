@@ -5,21 +5,20 @@ from mamba_ssm.utils.generation import InferenceParams
 
 
 class MambaBlock(nn.Module):
-    def __init__(self, num_layers: int, 
-                hidden_size: int,
-                d_state: int,
-                d_conv: int,
-                max_position_encoding: int,
-                layer_idx: int,
-                expand: int):
+    def __init__(self,
+                io_size: int=512,
+                d_state: int=16,
+                d_conv: int=4,
+                max_position_encoding: int=1024,
+                layer_idx: int=0,
+                expand: int=2):
         super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+        self.hidden_size = io_size
         self.layer_idx = layer_idx
-        self.encoder = nn.ModuleList([Mamba(d_state=d_state,
+        self.encoder = Mamba(d_state=d_state,
                   d_conv=d_conv,
                   expand=expand,
-                  layer_idx=i) for i in range(num_layers)])
+                  layer_idx=self.layer_idx)
         
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache):

@@ -2,7 +2,8 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .recursion import PRNN, SimpleLSTM, MemoryLayers
+from .recursion import PRNN, SimpleLSTM
+from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
 from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
@@ -26,30 +27,36 @@ class CausalBlock(nn.Module):
                 context_window=config.context_window
             )
         elif(self.model_type == "lstm"):
-            main_encoder = MemoryLayers(
-                config.hidden_size,
-                config.hidden_size,
-                config.inner_hidden_size,
+            main_encoder = MultiBlocks(
                 SimpleLSTM,
                 config.num_layers,
-                dropout=config.dropout
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout
+                io_size=config.hidden_size,
+                hidden_size=config.memory_hidden_size,
             )
         elif(self.model_type == "prnn"):
-            main_encoder = MemoryLayers(
-                config.hidden_size,
-                config.hidden_size,
-                config.inner_hidden_size,
+            main_encoder = MultiBlocks(
                 PRNN,
                 config.num_layers,
-                dropout=config.dropout
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout
+                io_size=config.hidden_size,
+                hidden_size=config.memory_hidden_size,
             )
         elif(self.model_type == "mamba"):
-            main_encoder = MambaBlock(
+            main_encoder = MultiBlocks(
                 # This module uses roughly 3 * expand * d_model^2 parameters
+                MambaBlock,
                 config.num_layers,
-                config.hidden_size, # Model dimension d_model
-                d_state=config.d_state,  # SSM state expansion factor
-                d_conv=config.d_conv,    # Local convolution width
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                d_state=config.d_state,
+                d_conv=config.d_conv,
                 layer_idx=0,
                 max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
