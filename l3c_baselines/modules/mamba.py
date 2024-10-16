@@ -15,7 +15,10 @@ class MambaBlock(nn.Module):
         super().__init__()
         self.hidden_size = io_size
         self.layer_idx = layer_idx
-        self.encoder = Mamba(d_state=d_state,
+        self.max_position_encoding = max_position_encoding
+        self.encoder = Mamba(
+                  io_size,
+                  d_state=d_state,
                   d_conv=d_conv,
                   expand=expand,
                   layer_idx=self.layer_idx)
@@ -26,7 +29,9 @@ class MambaBlock(nn.Module):
                 kv_cache = dict()
             elif cache is not None:
                 kv_cache = {self.layer_idx: (cache[0], cache[1])}
-            inference_params=InferenceParams(key_value_memory_dict=dict())
+            inference_params=InferenceParams(max_seqlen=self.max_position_encoding, 
+                                max_batch_size=x.shape[0],
+                                key_value_memory_dict=dict())
         else:
             inference_params = None
         out = self.encoder(x, inference_params=inference_params)

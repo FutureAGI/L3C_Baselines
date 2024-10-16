@@ -32,7 +32,7 @@ class CausalBlock(nn.Module):
                 config.num_layers,
                 hidden=config.hidden_size,
                 fc_hidden=config.inner_hidden_size,
-                fc_dropout=config.dropout
+                fc_dropout=config.dropout,
                 io_size=config.hidden_size,
                 hidden_size=config.memory_hidden_size,
             )
@@ -42,7 +42,7 @@ class CausalBlock(nn.Module):
                 config.num_layers,
                 hidden=config.hidden_size,
                 fc_hidden=config.inner_hidden_size,
-                fc_dropout=config.dropout
+                fc_dropout=config.dropout,
                 io_size=config.hidden_size,
                 hidden_size=config.memory_hidden_size,
             )

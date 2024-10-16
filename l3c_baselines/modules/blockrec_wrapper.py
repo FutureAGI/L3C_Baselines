@@ -102,5 +102,6 @@ class BlockRecurrentWrapper(nn.Module):
             new_cache = self.update_cache_only(new_cache)
         else:
             new_cache = None
+        #print(new_cache[0][0].shape, torch.sum(new_cache[0][0]), new_cache[0][1].shape, torch.sum(new_cache[0][1]))
 
         return output, new_cache
