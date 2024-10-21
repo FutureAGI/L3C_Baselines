@@ -58,7 +58,7 @@ class BlockRecurrentWrapper(nn.Module):
         # Else, we keep the cache and the memory
         if(self.memory_type == "kv"):
             if(cache is not None):
-                self.memory = [c[:, -self.mem_len:] for c in cache]
+                self.memory = [c[:, -self.mem_len:].clone().detach() for c in cache]
             else:
                 self.memory = None
             return None
@@ -68,7 +68,7 @@ class BlockRecurrentWrapper(nn.Module):
             for l_cache in cache:
                 mem = ()
                 for lt_cache in l_cache:
-                    mem += (lt_cache.detach(),)
+                    mem += (lt_cache.clone().detach(),)
                 self.memory.append(mem)
             return cache
         else:

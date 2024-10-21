@@ -196,10 +196,12 @@ class DistStatistics(object):
         stat_res = dict()
         for key in self.keys:
             stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
+            if(state_res[key].shape() in [(), (1)]):
+                state_res[key] = float(state_res[key])
         if(self.is_average):
             for key in self.keys:
                 if(key != "count"):
-                    stat_res[key] /= stat_res["count"]
+                    stat_res[key] /= float(stat_res["count"])
 
         return stat_res
 

@@ -1,7 +1,7 @@
 ---
 model_config:
   context_warmup: 1536
-  max_position_loss_weighting: 32000
+  max_position_loss_weighting: 192000
   action_dim: 5
   policy_loss_type: CrossEntropy
 
@@ -62,19 +62,19 @@ model_config:
       d_conv: 4
       d_state: 16
       dropout: 0.10
-      position_encoding_size: 6000
+      position_encoding_size: 12000
       use_layer_norm: True
       use_blockrecurrence: True
       checkpoints_density: -1
-      memory_length: 3000
+      memory_length: 6000
       memory_type: MEM
 
   causal_block_2:
       model_type: TRANSFORMER
-      num_layers: 12
+      num_layers: 6
       hidden_size: 512
-      nhead: 16
-      inner_hidden_size: 1024
+      nhead: 8
+      inner_hidden_size: 512
       dropout: 0.10
       context_window: -1
       checkpoints_density: -1
@@ -84,28 +84,41 @@ model_config:
       memory_length: 3000
       memory_type: KV
           
+  causal_block_3:
+      model_type: LSTM
+      num_layers: 4
+      hidden_size: 256
+      inner_hidden_size: 64
+      dropout: 0.10
+      checkpoints_density: -1
+      use_layer_norm: True
+      use_blockrecurrence: True
+      memory_length: -1
+      memory_type: MEMORY
+
+
 train_config:
     max_epochs: 50
-    batch_size: 2
+    batch_size: 8
 
-    seq_len: 16000
-    seg_len: 1000
+    seq_len: 64000
+    seg_len: 2000
 
     lr: 5.0e-4
     lr_decay_interval: 4000
-    lr_start_step: 4000
+    lr_start_step: 6250
 
-    data_path: [PATH]
-    save_model_path: "./checkpoints"
-    load_model_path: [PATH]
+    data_path: "[PATH]"
+    save_model_path: "./checkpoints/"
+    load_model_path: None
     master_port: "12400"
     max_save_iterations: 5000
     evaluation_interval: 1
 
     lossweight_policymodel: 0.0
-    lossweight_worldmodel_states: 0.50
-    lossweight_worldmodel_rewards: 0.50
-    lossweight_entropy: 0.0
+    lossweight_worldmodel_states: 1.0
+    lossweight_worldmodel_rewards: 0.0
+    lossweight_entropy: 0.0 #1.0e-6
     lossweight_l2: 1.0e-10
 
     use_amp: False
@@ -113,11 +126,10 @@ train_config:
 
     load_model_parameter_blacklist:
         - None
-        #- "decision_model"
 
 test_config:
-    batch_size: 8
-    data_path: [PATH]
+    batch_size: 16
+    data_path: "[PATH]"
     master_port: "12201"
     load_model_path: None
     seq_len: 16000

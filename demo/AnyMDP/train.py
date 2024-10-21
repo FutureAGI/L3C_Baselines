@@ -98,7 +98,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            # Important: Must reset the model before each segment
+            # Important: Must reset the model before segment iteration
             model.module.reset()
             start_position = 0
             sarr, baarr, laarr, rarr = batch
@@ -187,7 +187,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     results = []
     all_length = len(dataloader)
 
-    stat = DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count")
+    seg_num = (config.seq_len - 1) // config.seg_len + 1
+
+    stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
 
     if(main):
         logger = Logger("loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel")
@@ -206,7 +208,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.sequential_loss(
                             states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position)
 
-            stat.add_with_safety(rank, 
+            stat[sub_idx].add_with_safety(rank, 
                                 loss_wm_s=loss["wm-s"], 
                                 loss_wm_r=loss["wm-r"], 
                                 loss_pm=loss["pm"],
@@ -218,10 +220,10 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
             log_progress((batch_idx + 1) / all_length)
 
     if(main):
-        stat_res = stat()
-        logger(stat_res["loss_wm_s"],
-               stat_res["loss_wm_r"],
-               stat_res["loss_pm"],
+        stat_res = [stat[i]() for i in range(seg_num)]
+        logger([stat_res[i]["loss_wm_s"] for i in range(seg_num)],
+               [stat_res[i]["loss_wm_r"] for i in range(seg_num)],
+               [stat_res[i]["loss_pm"] for i in range(seg_num)],
                 epoch=epoch_id, prefix="EvaluationResults")
 
 if __name__=='__main__':
