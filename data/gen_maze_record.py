@@ -103,15 +103,11 @@ def dump_maze(work_id, path_name, epoch_ids, n_range,
             task = MazeTaskSampler(n_range=n_range, allow_loops=True, 
                     landmarks_number_range=(6, 10),
                     commands_sequence = 10000,
-<<<<<<< HEAD
                     verbose=False)
+        task = Resampler(task)
 
         print("\n\n--------\n\nRunning agents on maze_type=%s, task_type=%s, steps=%s, scale=%s...\n\n"%
             (maze_type, task_type, max_steps, task.cell_walls.shape))
-        task = Resampler(task)
-=======
-                    verbose=True)
->>>>>>> d5bb8f5ee0b347544b5983038327eb16ae49ffe6
 
         maze_env.set_task(task)
         results = run_maze_epoch(
