@@ -1,14 +1,15 @@
 import os
+import re
 import sys
-import torch
-from torch import nn
 import yaml
+import torch
+import numpy
+from torch import nn
+import torch.distributed as dist
 from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
 from collections import defaultdict
-import re
-
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -22,6 +23,22 @@ def parameters_regularization(*layers):
                 norm += (p ** 2).sum()
                 cnt += p.numel()
     return norm / cnt
+
+def format_cache(cache, prefix=''):
+    if(cache is None):
+        return prefix + ' None'
+    elif(isinstance(cache, numpy.ndarray) or isinstance(cache, torch.Tensor)):
+        return prefix + ' ' + str(cache.shape)
+    elif(isinstance(cache, list) or isinstance(cache, tuple)):
+        ret_str = prefix + f'List of length {len(cache)}:\n['
+        for subc in cache[:-1]:
+            ret_str += format_cache(subc, prefix + ' -')
+            ret_str += '\n'
+        ret_str += format_cache(cache[-1], prefix + ' -')
+        ret_str += ']'
+        return ret_str
+    else:
+        return prefix + ' ' + str(type(cache))
 
 def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)
@@ -129,104 +146,73 @@ def gradient_failsafe(model, optimizer, scaler):
         scaler.unscale_(optimizer)
         optimizer.__setstate__({'state': defaultdict(dict)})
 
-def infer_type(s):
-    s = s.strip().lower()
-
-    # If starts with specific tokens return string
-    if(s.startswith("\"") or s.startswith("\'")):
-        return s.strip("\"").strip("\'")
-
-    # Check for boolean
-    if s in ['true', 'false']:
-        return s == 'true'
-    elif s in ['yes', 'no']:
-        return s == 'yes'
-    elif s in ['None', 'null', '~']:
-        return None
-    
-    # Check for integer
-    try:
-        return int(s)
-    except ValueError:
-        pass
-
-    # Check for float
-    try:
-        return float(s)
-    except ValueError:
-        pass
-
-    # Check for date/time
-    try:
-        return parse(s)
-    except ValueError:
-        pass
-
-    # Check for list (e.g., "[1, 2, 3]" or "[1,2,3]")
-    if re.match(r'^\[.*\]$', s):
-        try:
-            return eval(s)
-        except:
-            pass
-
-    # Default to string
-    return s
-
-class Configure(object):
-    def __init__(self, data=None):
-        super().__setattr__("__config", dict())
-        if(data is not None):
-            super().__getattribute__("__config").update(data)
-
-    def from_yaml(self, file_path):
-        with open(file_path, 'r') as file:
-            data = yaml.safe_load(file)
-        super().__getattribute__("__config").update(data)
-
-    def from_dict(self, data):
-        super().__getattribute__("__config").update(data)
-
-    def clear(self):
-        config = super().__getattribute__("__config")
-        for key in config:
-            del config[key]
-
-    def __getattr__(self, attr):
-        config = super().__getattribute__("__config")
-        if attr in config:
-            value = config[attr]
-            if isinstance(value, dict):
-                return Configure(value)
-            return value
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}'")
-
-    def __setattr__(self, attr, value):
-        d = super().__getattribute__("__config")
-        if('.' in attr):
-            keys = attr.split('.')
-            for key in keys[:-1]:
-                if(key not in d):
-                    d[key] = dict()
-                d = d[key]
-            d[keys[-1]] = infer_type(value)
+class DistStatistics(object):
+    """
+    Provide distributed statistics
+    """
+    def __init__(self, *keys, verbose=False):
+        self.keys = keys
+        if("count" in keys):
+            self.is_average = True
+            if(verbose):
+                log_debug("Found 'count' keyword in keys, statistics will be averaged by count")
         else:
-            d[attr] = infer_type(value)
+            self.is_average = False
+            if(verbose):
+                log_debug("No 'count' keyword detected, statistics will be summed but not averaged")
+        self.reset()
 
-    def set_value(self, attr, value):
-        self.__setattr__(attr, value)
+    def reset(self):
+        self._data = dict()
+        for key in self.keys:
+            self._data[key] = []
 
-    def __repr__(self):
-        config = super().__getattribute__("__config")
-        def rec_prt(d, n_tab):
-            _repr=""
-            for k in d:
-                v = d[k]
-                if(isinstance(v, dict)):
-                    _repr += "\t"*n_tab
-                    _repr += f"{k}:\n"
-                    _repr += rec_prt(v, n_tab + 1)
-                else:
-                    _repr += "\t"*n_tab
-                    _repr += f"{k} = {v}\n"
-            return _repr
-        return f"\n\n{self.__class__.__name__}\n\n" + rec_prt(config, 0) + "\n\n"
+    def add_with_safety(self, device, **kwargs):
+        zeroflag = False
+        if("count" in kwargs):
+            cnt = kwargs["count"]
+        else:
+            cnt = 1
+        for key, value in kwargs.items():
+            if torch.isinf(value).any() or torch.isnan(value).any():
+                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
+                zeroflag = True
+        safe_stats = dict()
+        if zeroflag:
+            for key, value in kwargs.items():
+                safe_stats[key] = torch.zeros_like(value)
+        else:
+            for key, value in kwargs.items():
+                safe_stats[key] = value.clone().detach()
+        for key, value in safe_stats.items():
+            if(key not in self._data):
+                raise KeyError(f"Key {key} not registered in Statistics class")
+            if(key != "count"):
+                value *= cnt
+            dist.all_reduce(value.data)
+            self._data[key].append(value.cpu().detach())
+
+    def __call__(self):
+        stat_res = dict()
+        for key in self.keys:
+            stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
+            if(state_res[key].shape() in [(), (1)]):
+                state_res[key] = float(state_res[key])
+        if(self.is_average):
+            for key in self.keys:
+                if(key != "count"):
+                    stat_res[key] /= float(stat_res["count"])
+
+        return stat_res
+
+def rewards2go(rewards, gamma=0.98):
+    """
+    returns a future moving average of rewards
+    """
+    rolled_rewards = rewards.clone()
+    r2go = rewards
+    n = max(min(50, -1/numpy.log10(gamma)), 0)
+    for _ in range(n):
+        rolled_rewards = gamma * torch.roll(rolled_rewards, shifts=-1, dims=1)
+        r2go += rolled_rewards
+    return r2go

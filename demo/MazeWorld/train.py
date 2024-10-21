@@ -12,16 +12,16 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
-from dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
-from utils import custom_load_model, noam_scheduler, LinearScheduler
-from utils import count_parameters, check_model_validity, model_path
-from utils import Configure, gradient_failsafe
-from models import MazeModelBase
 from collections import defaultdict
-from restools.logging import Logger, log_progress, log_debug, log_warn
+
+from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn
+from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path
+from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics
+from l3c_baselines.models import E2EObjNavSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
-
 
 def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
@@ -39,12 +39,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     else:
         main = False
 
-    log_debug("Main gpu", use_gpu, "rank:", rank, device, on=main)
+    if(main):
+        print("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
-    model = MazeModelBase(config.model_config)
-    log_debug("Number of parameters: ", count_parameters(model), on=main)
-    log_debug("Number of parameters decision transformer: ", count_parameters(model.decformer), on=main)
+    model = E2EObjNavSA(config.model_config, verbose=main)
 
     model = model.to(device)
 
@@ -53,31 +52,24 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     else:
         model = DDP(model)
 
-
     # Example dataset and dataloader
     train_config = config.train_config
-    load_model_path = train_config.load_model_path
-    load_model_parameter_blacklist = train_config.load_model_parameter_blacklist
-    learning_rate_vae = train_config.learning_rate_vae
-    learning_rate_vae_decay_interval = train_config.learning_rate_vae_decay_interval
-    learning_rate_causal = train_config.learning_rate_causal
-    learning_rate_causal_decay_interval = train_config.learning_rate_causal_decay_interval
-    batch_size_vae = train_config.batch_size_vae
-    batch_size_causal = train_config.batch_size_causal
-    time_step_vae = train_config.time_step_vae
-    time_step_causal = train_config.time_step_causal
-    data_path = train_config.data_path
+    test_config = config.test_config
 
-    vae_dataset = MazeDataSet(data_path, time_step_vae, verbose=main)
-    causal_dataset = MazeDataSet(data_path, time_step_causal, verbose=main)
+    # Initialize the Dataset and DataLoader
+    vae_dataset = MazeDataSet(train_config.data_path, train_config.seq_len_vae, verbose=main)
+    causal_dataset = MazeDataSet(train_config.data_path, train_config.seq_len_causal, verbose=main)
 
-    vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=batch_size_vae, rank=rank, world_size=world_size)
-    causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=batch_size_causal, rank=rank, world_size=world_size)
+    vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=train_config.batch_size_vae, rank=rank, world_size=world_size)
+    causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=train_config.batch_size_causal, rank=rank, world_size=world_size)
 
+    # Initialize the Logger
     if(main):
-        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_wm", "loss_z", "loss_pm", sum_iter=len(causal_dataloader), use_tensorboard=True)
-        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "loss", sum_iter=len(vae_dataloader))
+        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_worldmodel_raw", "loss_worldmodel_latent", "loss_policymodel", sum_iter=len(causal_dataloader), use_tensorboard=True)
+        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "reconstruction", "kl-divergence", sum_iter=len(vae_dataloader), 
+                use_tensorboard=True)
 
+    # Initialize the loss weight schedulers (for vae)
     sigma_scheduler = train_config.sigma_scheduler
     sigma_value = train_config.sigma_value
 
@@ -87,51 +79,57 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     sigma_scheduler = LinearScheduler(sigma_scheduler, sigma_value)
     lambda_scheduler = LinearScheduler(lambda_scheduler, lambda_value)
 
-    vae_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate_vae)
-    causal_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate_causal)
+    # Initialize the optimizers
+    vae_optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr_vae)
+    causal_optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr_causal)
 
-    lr_scheduler_vae = lambda x:noam_scheduler(x, learning_rate_vae_decay_interval)
-    lr_scheduler_causal = lambda x:noam_scheduler(x, learning_rate_causal_decay_interval)
+    # Initialize the learning rate schedulers
+    lr_scheduler_vae = lambda x:noam_scheduler(x, train_config.lr_vae_decay_interval)
+    lr_scheduler_causal = lambda x:noam_scheduler(x, train_config.lr_causal_decay_interval)
 
     vae_scheduler = LambdaLR(vae_optimizer, lr_lambda=lr_scheduler_vae)
     causal_scheduler = LambdaLR(causal_optimizer, lr_lambda=lr_scheduler_causal)
 
-    load_model_path = train_config.load_model_path
-    save_model_path = train_config.save_model_path
-    eval_interval = train_config.evaluate_epochs
+    vae_scheduler.step(train_config.lr_vae_start_step)
+    causal_scheduler.step(train_config.lr_causal_start_step)
 
-    segment_length = train_config.segment_length
-
-    vae_scheduler.step(train_config.vae_start_step)
-    causal_scheduler.step(train_config.causal_start_step)
-
-    if(load_model_path is not None):
-        model = custom_load_model(model, f'{load_model_path}/model.pth', black_list=load_model_parameter_blacklist, strict_check=False)
+    # Load the model if specified in the configuration
+    if(train_config.has_attr("load_model_path") and 
+            train_config.load_model_path is not None and 
+            train_config.load_model_path.lower() != 'none'):
+        model = custom_load_model(model, f'{train_config.load_model_path}/model.pth', 
+                                  black_list=train_config.load_model_parameter_blacklist, 
+                                  strict_check=False)
 
     # Perform the first evaluation
-    test_config = config.test_config
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
-    lossweight_worldmodel_latent = train_config.lossweight_worldmodel_latent
-    lossweight_worldmodel_raw = train_config.lossweight_worldmodel_raw
-    lossweight_policymodel = train_config.lossweight_policymodel
-    use_amp = train_config.use_amp
     scaler = GradScaler()
+
+    # VAE training loop
 
     def vae_round(rid, dataloader, max_save_iteartions=-1):
         acc_iter = 0
+        dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_vae, segment_length, device, *batch):
+            for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
+                            train_config.seq_len_vae, train_config.seg_len_vae, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
-                with autocast(dtype=torch.bfloat16, enabled=use_amp):
-                    vae_loss = model.module.vae_loss(obs, _sigma=sigma_scheduler(), _lambda=lambda_scheduler())
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
+                    loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
+                    vae_loss = loss["Reconstruction-Error"] + lambda_scheduler() * loss["KL-Divergence"]
 
-                scaler.scale(vae_loss).backward()
-                clip_grad_norm_(model.module.parameters(), 1.0)
-                scaler.step(vae_optimizer)
-                scaler.update()
+                if(train_config.use_scaler):
+                    scaler.scale(vae_loss).backward()
+                    gradient_failsafe(model.module, vae_optimizer, scaler)
+                    clip_grad_norm_(model.module.parameters(), 1.0)
+                    scaler.step(vae_optimizer)
+                    scaler.update()
+                else:
+                    vae_loss.backward()
+                    vae_optimizer.step()
 
                 vae_scheduler.step()
                 sigma_scheduler.step()
@@ -139,52 +137,72 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(main):
                     lr = vae_scheduler.get_last_lr()[0]
-                    lrec = float(vae_loss.detach().cpu().numpy())
-                    logger_vae.log(batch_idx, sub_idx, sigma_schedular(), lambda_scheduler(), lr, lrec, epoch=rid, iteration=batch_idx, prefix="VAE")
+                    lrec = float(loss["Reconstruction-Error"].detach().cpu().numpy())
+                    lkl = float(loss["KL-Divergence"].detach().cpu().numpy())
+                    logger_vae(batch_idx, sub_idx, sigma_scheduler(), lambda_scheduler(), 
+                            lr, lrec, lkl, epoch=rid, iteration=batch_idx, prefix="VAE")
 
-            if(main and acc_iter > max_save_iterations and max_save_iterations > 0):
+            if(main and train_config.has_attr("max_save_iterations") 
+                            and acc_iter > train_config.max_save_iterations 
+                            and train_config.max_save_iterations > 0):
                 acc_iter = 0
-                print("Check current validity and save model for safe...")
+                log_debug("Check current validity and save model for safe...")
                 check_model_validity(model.module)
-                mod_path, _, _ = model_path(save_model_path, epoch_id)
+                mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
                 torch.save(model.state_dict(), mod_path)
 
     def causal_round(rid, dataloader, max_save_iterations=-1):
         acc_iter = 0
+        dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step_causal, segment_length, device, *batch):
+            # Important: Must reset the model before each segment
+            model.module.reset()
+            start_position = 0
+            for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
+                        train_config.seq_len_causal, train_config.seg_len_causal, device, *batch):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
-                with autocast(dtype=torch.float16, enabled=use_amp):
-                    lobs, lz, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets, state_dropout=0.20)
-                    causal_loss = lossweight_worldmodel_latent * lz + lossweight_worldmodel_raw * lobs + lossweight_policymodel * lact
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
+                    # Calculate THE LOSS
+                    loss = model.module.sequential_loss(
+                        obs, bacti, lacti, bevs, state_dropout=0.20, 
+                        start_position=start_position)
+                    causal_loss = (train_config.lossweight_worldmodel_latent * loss["wm-latent"]
+                            + train_config.lossweight_worldmodel_raw * loss["wm-raw"]
+                            + train_config.lossweight_policymodel * loss["pm"]
+                            + train_config.lossweight_l2 * loss["causal-l2"])
+                start_position += bacti.shape[1]
 
-                scaler.scale(causal_loss).backward()
-
-                gradient_failsafe(model.module, causal_optimizer, scaler)
-
-                clip_grad_norm_(model.module.parameters(), 1.0)
-                scaler.step(causal_optimizer)
-                scaler.update()
+                if(train_config.use_scaler):
+                    scaler.scale(causal_loss).backward()
+                    gradient_failsafe(model.module, causal_optimizer, scaler)
+                    clip_grad_norm_(model.module.parameters(), 1.0)
+                    scaler.step(causal_optimizer)
+                    scaler.update()
+                else:
+                    causal_loss.backward()
+                    causal_optimizer.step()
 
                 causal_optimizer.step()
                 causal_scheduler.step()
 
                 if(main):
                     lr = causal_scheduler.get_last_lr()[0]
-                    fobs = float(lobs.detach().cpu().numpy())
-                    fz = float(lz.detach().cpu().numpy())
-                    fact = float(lact.detach().cpu().numpy())
-                    logger_causal.log(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+                    fobs = float(loss["wm-raw"].detach().cpu().numpy())
+                    fz = float(loss["wm-latent"].detach().cpu().numpy())
+                    fact = float(loss["pm"].detach().cpu().numpy())
+                    logger_causal(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
-            if(acc_iter > max_save_iterations and max_save_iterations > 0 and main):
+            if(main and train_config.has_attr("max_save_iterations") 
+                            and acc_iter > train_config.max_save_iterations 
+                            and train_config.max_save_iterations > 0):
                 acc_iter = 0
-                print("Check current validity and save model for safe...")
+                log_debug("Check current validity and save model for safe...")
                 sys.stdout.flush()
                 check_model_validity(model.module)
-                mod_path, _, _ = model_path(save_model_path, epoch_id)
+                mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
                 torch.save(model.state_dict(), mod_path)
 
     # Example training loop
@@ -201,81 +219,59 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             causal_round(epoch_id, causal_dataloader, max_save_iterations=max_save_iterations)
         if(main):  # Check whether model is still valid
             check_model_validity(model.module)
-        if(main and epoch_id % eval_interval == 0):
-            mod_path, opt_path_vae, opt_path_seq = model_path(save_model_path, epoch_id)
+        if(main and epoch_id % train_config.evaluation_interval == 0):
+            log_debug(f"Save Model for Epoch-{epoch_id}")
+            mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
 
         model.eval()
         # Perform the evaluation according to interval
-        if(epoch_id % eval_interval == 0):
+        if(epoch_id % train_config.evaluation_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
 
 def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
     # Example training loop
-    load_model_path = config.load_model_path
-    batch_size = config.batch_size
-    data_path = config.data_path
-    time_step = config.time_step
-    segment_length = config.segment_length
 
-    dataset = MazeDataSet(data_path, time_step, verbose=main)
-    dataloader = PrefetchDataLoader(dataset, batch_size=batch_size, rank=rank, world_size=world_size)
+    dataset = MazeDataSet(config.data_path, config.seq_len, verbose=main)
+    dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
 
     results = []
     all_length = len(dataloader)
 
-    log_debug("[EVALUATION] Epochs: %s..." % epoch_id, on=main)
-    for batch_idx, batch in enumerate(dataloader):
-        for sub_idx, obs, bacts, lacts, rews, targets in segment_iterator(time_step, segment_length, device, *batch):
-            obs = obs.permute(0, 1, 4, 2, 3)
-            length = lacts.shape[0] * lacts.shape[1]
-
-            with torch.no_grad():
-                lobs, lat, lact, cnt = model.module.sequential_loss(obs, bacts, lacts, targets)
-
-                lobs = cnt * lobs
-                lact = cnt * lact
-                lat = cnt * lat
-
-            if torch.isinf(lobs).any() or torch.isnan(lobs).any():
-                log_warn(f"Device-{rank} lobs loss = NAN/INF, skip")
-                lobs.fill_(0.0)
-            if torch.isinf(lact).any() or torch.isnan(lact).any():
-                log_warn(f"Device-{rank} lact loss = NAN/INF, skip")
-                lact.fill_(0.0)
-            if torch.isinf(lat).any() or torch.isnan(lat).any():
-                log_warn(f"Device-{rank} lat loss = NAN/INF, skip")
-                lat.fill_(0.0)
-
-            dist.all_reduce(lobs.data)
-            dist.all_reduce(lact.data)
-            dist.all_reduce(lat.data)
-            dist.all_reduce(cnt.data)
-
-            results.append((lobs.cpu(), lact.cpu(), lat.cpu(), cnt.cpu()))
-
-            if(main):
-                log_progress((batch_idx + 1) / all_length)
-
-    #sum_lrec = 0
-    sum_lobs = 0
-    sum_lact = 0
-    sum_lat = 0
-    sum_cnt = 0
-    for lobs, lact, lat, cnt in results:
-        #sum_lrec += lrec
-        sum_lobs += lobs
-        sum_lact += lact
-        sum_lat += lat
-        sum_cnt += cnt
-    sum_cnt = max(1, sum_cnt)
-    sum_lobs /= sum_cnt
-    sum_lact /= sum_cnt
-    sum_lat /= sum_cnt
+    stat = DistStatistics("loss_reconstruction", "loss_wm_raw", "loss_wm_latent", "loss_pm", "count")
 
     if(main):
-        logger = Logger("loss_wm", "loss_z", "loss_pm")
-        logger.log(sum_lobs, sum_lat, sum_lact, epoch=epoch_id)
+        log_debug("Start evaluation ...")
+        log_progress(0)
+    dataset.reset(0)
+    for batch_idx, batch in enumerate(dataloader):
+        start_position = 0
+        model.module.reset()
+        for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
+                    config.seq_len, config.seg_len, device, (batch[0], 1), *batch[1:]):
+            obs = obs.permute(0, 1, 4, 2, 3)
+
+            with torch.no_grad():
+                loss_vae = model.module.vae_loss(obs)
+                loss = model.module.sequential_loss(
+                            obs, bacti, lacti, bevs, start_position=start_position)
+
+            stat.add_with_safety(rank, 
+                                loss_reconstruction=loss_vae["Reconstruction-Error"], 
+                                loss_wm_raw=loss["wm-raw"], 
+                                loss_wm_latent=loss["wm-latent"], 
+                                loss_pm=loss["pm"],
+                                count=loss["count"])
+
+            start_position += bacti.shape[1]
+
+        if(main):
+            log_progress((batch_idx + 1) / all_length)
+
+    if(main):
+        stat_res = stat()
+        logger = Logger(*stat_res.keys())
+        logger(*stat_res.values(), epoch=epoch_id, prefix="EvaluationResults")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

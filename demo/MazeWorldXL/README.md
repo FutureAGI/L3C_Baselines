@@ -1,6 +1,0 @@
-This is a demo of L3C extra long causal modeling
-
-```bash
-export CUDA_VISIBLE_DEVICES=...
-python train.py configuration.yaml --configs key1=value1 key2=value2 ...
-```
