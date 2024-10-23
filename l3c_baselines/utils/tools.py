@@ -193,17 +193,17 @@ class DistStatistics(object):
             self._data[key].append(value.cpu().detach())
 
     def __call__(self):
-        state_res = dict()
+        stat_res = dict()
         for key in self.keys:
-            state_res[key] = torch.stack(self._data[key]).sum(dim=0)
-            if(state_res[key].shape in [(), (1)]):
-                state_res[key] = float(state_res[key])
+            stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
+            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
+                stat_res[key] = float(stat_res[key])
         if(self.is_average):
             for key in self.keys:
                 if(key != "count"):
-                    state_res[key] /= float(state_res["count"])
+                    stat_res[key] /= float(stat_res["count"])
 
-        return state_res
+        return stat_res
 
 def rewards2go(rewards, gamma=0.98):
     """
