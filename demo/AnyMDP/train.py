@@ -23,7 +23,7 @@ from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
-def main_epoch(rank, use_gpu, world_size, config, main_rank):
+def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -64,7 +64,14 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if(main):
         logger = Logger("iteration", "segment", "learning_rate", 
                 "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
-                sum_iter=len(dataloader), use_tensorboard=True)
+                sum_iter=len(dataloader), use_tensorboard=True, field=f"runs/train-{run_name}")
+        eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
+        logger_eval = []
+        for i in range(eval_seg_num):
+            logger_eval.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
+                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
+    else:
+        logger_eval = None
 
     train_stat = DistStatistics("loss_worldmodel_state", "loss_worldmodel_reward", 
                             "loss_policymodel", "entropy", "count")
@@ -88,7 +95,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                                   strict_check=False)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
 
     # main training loop
@@ -176,9 +183,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % train_config.evaluation_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
+            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
 
-def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id, logger):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -192,7 +199,6 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
 
     if(main):
-        logger = Logger("loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel")
         log_debug("Start evaluation ...")
         log_progress(0)
     dataset.reset(0)
@@ -220,11 +226,10 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
             log_progress((batch_idx + 1) / all_length)
 
     if(main):
-        stat_res = [stat[i]() for i in range(seg_num)]
-        logger([stat_res[i]["loss_wm_s"] for i in range(seg_num)],
-               [stat_res[i]["loss_wm_r"] for i in range(seg_num)],
-               [stat_res[i]["loss_pm"] for i in range(seg_num)],
-                epoch=epoch_id, prefix="EvaluationResults")
+        for i in range(seg_num):
+            stat_res = stat[i]()
+            logger[i](stat_res["loss_wm_s"], stat_res["loss_wm_r"], stat_res["loss_pm"],
+                    epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -252,6 +257,6 @@ if __name__=='__main__':
     os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
 
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, config, 0),
+             args=(use_gpu, world_size, config, 0, config.run_name),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
