@@ -24,15 +24,15 @@ class MambaBlock(nn.Module):
                   layer_idx=self.layer_idx)
         
     def forward(self, x, cache=None, need_cache=False):
-        if(need_cache):
+        if(need_cache or cache is not None): # either cache != None or need_cache == True we must use inference_params
             if cache is None:
                 kv_cache = dict()
             elif cache is not None:
-                kv_cache = {self.layer_idx: (cache[0], cache[1])}
+                kv_cache = {self.layer_idx: cache}
             inference_params=InferenceParams(max_seqlen=self.max_position_encoding, 
                                 max_batch_size=x.shape[0],
-                                key_value_memory_dict=dict())
-        else:
+                                key_value_memory_dict=kv_cache)
+        else:  # only when cache == None and need_cache==False can we neglect inference_params
             inference_params = None
         out = self.encoder(x, inference_params=inference_params)
 

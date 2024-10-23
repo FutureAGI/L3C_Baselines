@@ -10,6 +10,7 @@ import argparse
 import multiprocessing
 import pickle
 import l3c.mazeworld
+import random as rnd
 from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler, Resampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverMBRL, AnyMDPSolverQ
@@ -18,9 +19,9 @@ def run_epoch(
         env,
         max_steps,
         avg_steps_reset = 200,
-        behavior_noise=[0.0, 0.0],
-        behavior_policy_type="Opt",
-        label_policy_type="Opt"
+        behavior_noise=(0.0, 0.0),
+        behavior_policy=(1.0, 0.0),
+        label_policy=(1.0, 0.0)
         ):
     # Must intialize agent after reset
     steps = 0
@@ -33,32 +34,21 @@ def run_epoch(
     # Steps to reset the 
     cur_reset_steps=resample_reset_steps(avg_steps_reset)
     naction = env.action_space.n
+
     bnoise = numpy.linspace(behavior_noise[0], behavior_noise[1], max_steps + 1)
 
     state_list = list()
     lact_list = list()
     bact_list = list()
     reward_list = list()
-
-    if(behavior_policy_type.lower() == "opt"):
-        bsolver = AnyMDPSolverOpt(env)
-    elif(behavior_policy_type.lower() == "mbrl"):
-        bsolver = AnyMDPSolverMBRL(env)
-    elif(behavior_policy_type.lower() == "q"):
-        bsolver = AnyMDPSolverQ(env)
-    else:
-        raise ValueError("Unknown policy type: {}".format(behavior_policy_type))
     
-    if(label_policy_type.lower() == "opt"):
-        lsolver = AnyMDPSolverOpt(env)
-    elif(label_policy_type.lower() == "mbrl"):
-        lsolver = AnyMDPSolverMBRL(env)
-    elif(label_policy_type.lower() == "q"):
-        lsolver = AnyMDPSolverQ(env)
-    else:
-        raise ValueError("Unknown policy type: {}".format(label_policy_type))
+    solver1 = AnyMDPSolverOpt(env)
+    solver2 = AnyMDPSolverQ(env)
 
     state, info = env.reset()
+
+    ppl_sum = []
+    mse_sum = []
 
     while steps < max_steps:
         steps += 1
@@ -73,13 +63,32 @@ def run_epoch(
             if(random.random() < bnoise[steps]):
                 bact = random.choice(range(naction))
             else:
-                bact = bsolver.policy(state)
+                eps = random.random()
+                if(eps < behavior_policy[0]):
+                    bact = solver1.policy(state)
+                elif(eps < behavior_policy[0] + behavior_policy[1]):
+                    bact = solver2.policy(state)
+                else:
+                    bact = random.choice(range(naction))
 
-            lact = lsolver.policy(state)
+            eps = random.random()
+            if(eps < label_policy[0]):
+                lact = solver1.policy(state)
+            elif(eps < label_policy[0] + label_policy[1]):
+                lact = solver2.policy(state)
+            else:
+                lact = random.choice(range(naction))
+
             next_state, reward, done, info = env.step(bact)
+
+            ppl = -numpy.log(env.transition_matrix[state, bact, next_state])
+            mse = (reward - env.reward_matrix[state, bact]) ** 2
+            ppl_sum.append(ppl)
+            mse_sum.append(mse)
+
             try:
-                bsolver.learner(state, bact, next_state, reward, done)
-                lsolver.learner(state, bact, next_state, reward, done)
+                solver1.learner(state, bact, next_state, reward, done)
+                solver2.learner(state, bact, next_state, reward, done)
             except Exception as e:
                 pass
 
@@ -93,7 +102,8 @@ def run_epoch(
     behavior_noise_decay = random.random() / max_steps
     step = 0
 
-    print("Finish running, sum reward = %f, steps = %d\n"%(numpy.sum(reward_list), len(state_list)-1))
+    print("Finish running, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f\n"%(
+             numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
 
     return {
             "states": numpy.array(state_list, dtype=numpy.uint32),
@@ -106,35 +116,32 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def dump_anymdp(work_id, path_name, epoch_ids, nstates, nactions,
+def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
         behavior_noise,
-        behavior_policy_type,
-        label_policy_type,
+        behavior_policy,
+        label_policy,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
+    tasks_num = len(tasks_from_file)
     for idx in epoch_ids:
-        seed = int(idx + time.time() + work_id * 65536)
-        numpy.random.seed(seed)
-        random.seed(seed)
-
         env = gym.make("anymdp-v0", max_steps=max_steps)
 
         if(tasks_from_file is not None):
             # Resample the start position and commands sequence from certain tasks
-            task = Resampler(random.choice(tasks_from_file))
+            task_id = (work_id + idx * world_work) % tasks_num
+            task = tasks_from_file[task_id]
         else:
-            task = AnyMDPTaskSampler()
+            task = AnyMDPTaskSampler(128, 5)
 
         env.set_task(task)
         results = run_epoch(env, max_steps, 
-                            behavior_noise=behavior_noise,
-                            behavior_policy_type=behavior_policy_type,
-                            label_policy_type=label_policy_type)
-        print(results)
+                            behavior_noise=rnd.choice(behavior_noise),
+                            behavior_policy=rnd.choice(behavior_policy),
+                            label_policy=rnd.choice(label_policy))
 
         file_path = f'{path_name}/record-{idx:06d}'
-
         create_directory(file_path)
+
         numpy.save("%s/observations.npy" % file_path, results["states"])
         numpy.save("%s/actions_behavior.npy" % file_path, results["actions_behavior"])
         numpy.save("%s/actions_label.npy" % file_path, results["actions_label"])
@@ -147,9 +154,10 @@ if __name__=="__main__":
     parser.add_argument("--task_source", type=str, choices=['FILE', 'NEW'], help="choose task source to generate the trajectory. FILE: tasks sample from existing file; NEW: create new tasks")
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
-    parser.add_argument('--reference_policy', choices=['OPT', 'MBRL', 'Q'], default='OPT', help="Reference Policy Type")
-    parser.add_argument('--behavior_policy', choices=['OPT', 'MBRL', 'Q'], default='OPT', help="Behavior Policy Type")
-    parser.add_argument('--behavior_policy_noise', type=str, default="0.0,0.0", help="behavior policy noise, format: min,max")
+    parser.add_argument('--reference_config', nargs='*', help="List of reference policy: e.g., 0.1,0.3 represent OPT=0.1,Q=0.3")
+    parser.add_argument('--behavior_config', nargs='*', help="List of behavior policy: e.g., 0.1,0.3 represent OPT=0.1,Q=0.3")
+    parser.add_argument('--behavior_noise_config', nargs='*', 
+                help="List of behavior policy noise distilling: e.g., 1.0,-1.0, 1.0, 0.1")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
     parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
@@ -165,9 +173,21 @@ if __name__=="__main__":
     else:
         raise Exception("Must specify --task_file if task_source == FILE")
 
-    bn_min, bn_max = args.behavior_policy_noise.split(",")
-    behavior_noise = (float(bn_min), float(bn_max))
+    # preprocessing
+    behavior_noise = []
+    for bnc in args.behavior_noise_config:
+        bn_min, bn_max = bnc.split(",")
+        behavior_noise.append((float(bn_min), float(bn_max)))
 
+    p_ref = []
+    for rc in args.reference_config:
+        p_ref.append(list(map(float, rc.split(","))))
+
+    b_ref = []
+    for bc in args.behavior_config:
+        b_ref.append(list(map(float, bc.split(","))))
+
+    # Data Generation
     worker_splits = args.epochs / args.workers + 1.0e-6
     processes = []
     n_b_t = args.start_index
@@ -178,8 +198,8 @@ if __name__=="__main__":
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_anymdp, 
-                args=(worker_id, args.output_path, range(n_b, n_e), 128, 5, behavior_noise, 
-                      args.behavior_policy, args.reference_policy, args.max_steps, tasks_from_file))
+                args=(worker_id, args.workers, args.output_path, range(n_b, n_e), 128, 5, behavior_noise, 
+                      p_ref, b_ref, args.max_steps, tasks_from_file))
         processes.append(process)
         process.start()
 
