@@ -148,8 +148,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
 
             scheduler.step()
 
+            # Statistics
+            stat_res = train_stat()
             if(main):
-                stat_res = train_stat()
                 lr = scheduler.get_last_lr()[0]
                 logger(batch_idx, sub_idx, lr, 
                         stat_res["loss_worldmodel_state"], 
@@ -157,14 +158,15 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                         stat_res["loss_policymodel"], 
                         stat_res["entropy"],
                         epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+            train_stat.reset()
 
+            # Safety Check and Save
             if(train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
                             and train_config.max_save_iterations > 0):
+                acc_iter = 0
                 if(main):
-                    acc_iter = 0
                     log_debug("Check current validity and save model for safe...")
-                    sys.stdout.flush()
                     check_model_validity(model.module)
                     mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
                     torch.save(model.state_dict(), mod_path)
@@ -182,7 +184,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
             mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
 
-        model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % train_config.evaluation_interval == 0):
             test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
@@ -232,6 +233,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
             stat_res = stat[i]()
             logger[i](stat_res["loss_wm_s"], stat_res["loss_wm_r"], stat_res["loss_pm"],
                     epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
+    for i in range(seg_num):
+        stat[i].reset()
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
