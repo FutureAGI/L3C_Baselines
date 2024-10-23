@@ -110,10 +110,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
             start_position = 0
             sarr, baarr, laarr, rarr = batch
             r2goarr = rewards2go(rarr)
+            optimizer.zero_grad()
             for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                         train_config.seq_len, train_config.seg_len, device, 
                         (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
-                optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
