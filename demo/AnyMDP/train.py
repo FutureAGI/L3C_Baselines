@@ -158,15 +158,17 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                         stat_res["entropy"],
                         epoch=rid, iteration=batch_idx, prefix="CAUSAL")
 
-            if(main and train_config.has_attr("max_save_iterations") 
+            if(train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
                             and train_config.max_save_iterations > 0):
-                acc_iter = 0
-                log_debug("Check current validity and save model for safe...")
-                sys.stdout.flush()
-                check_model_validity(model.module)
-                mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
-                torch.save(model.state_dict(), mod_path)
+                if(main):
+                    acc_iter = 0
+                    log_debug("Check current validity and save model for safe...")
+                    sys.stdout.flush()
+                    check_model_validity(model.module)
+                    mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
+                    torch.save(model.state_dict(), mod_path)
+                test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
 
     # Example training loop
     for epoch_id in range(1, train_config.max_epochs + 1):
