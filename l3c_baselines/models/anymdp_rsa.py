@@ -22,9 +22,47 @@ class AnyMDPRSA(RSADecisionModel):
                     torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
                     torch.full((1, config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_weight', loss_weight)
+        self.set_train_config(config)
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
+
+    def set_train_config(self, config):
+        if(config.has_attr("frozen_modules")):
+            if("causal_model" in config.frozen_modules):
+               self.causal_model.requires_grad_(False)
+            else:
+               self.causal_model.requires_grad_(True)
+
+            if("s_encoder" in config.frozen_modules):
+                self.s_encoder.requires_grad_(False)
+            else:
+                self.s_encoder.requires_grad_(True)
+
+            if("a_encoder" in config.frozen_modules):
+                self.a_encoder.requires_grad_(False)
+            else:
+                self.a_encoder.requires_grad_(True)
+
+            if("r_encoder" in config.frozen_modules):
+                self.r_encoder.requires_grad_(False)
+            else:
+                self.r_encoder.requires_grad_(True)
+
+            if("s_decoder" in config.frozen_modules):
+                self.s_decoder.requires_grad_(False)
+            else:
+                self.s_decoder.requires_grad_(True)
+
+            if("a_decoder" in config.frozen_modules):
+                self.a_decoder.requires_grad_(False)
+            else:
+                self.a_decoder.requires_grad_(True)
+
+            if("r_decoder" in config.frozen_modules):
+                self.r_decoder.requires_grad_(False)
+            else:
+                self.r_decoder.requires_grad_(True)
 
     def sequential_loss(self, observations, behavior_actions, label_actions, rewards_input, rewards_output,
                         additional_info=None, # Kept for passing additional information

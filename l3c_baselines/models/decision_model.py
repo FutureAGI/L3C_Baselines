@@ -174,7 +174,7 @@ class RSADecisionModel(nn.Module):
         act_output = self.a_decoder(outputs[:, :, 1], T=T)
 
         # Predict r_0, r_1, ..., r_t
-        rew_output = self.r_decoder(outputs[:, :, 0])
+        rew_output = self.r_decoder(outputs[:, :, 2])
 
         return obs_output, act_output, rew_output, new_cache
 
