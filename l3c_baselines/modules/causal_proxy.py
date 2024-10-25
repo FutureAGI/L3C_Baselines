@@ -7,6 +7,7 @@ from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
 from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
+from .gsa import GLABlock, GSABlock
 
 class CausalBlock(nn.Module):
     """
@@ -45,6 +46,27 @@ class CausalBlock(nn.Module):
                 fc_dropout=config.dropout,
                 io_size=config.hidden_size,
                 hidden_size=config.memory_hidden_size,
+            )
+        elif(self.model_type == "gsa"):
+            main_encoder = MultiBlocks(
+                GSABlock,
+                config.num_layers,
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
+                num_slots=config.memory_length,
+            )
+        elif(self.model_type == "gla"):
+            main_encoder = MultiBlocks(
+                GSABlock,
+                config.num_layers,
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
             )
         elif(self.model_type == "mamba"):
             main_encoder = MultiBlocks(

@@ -56,6 +56,16 @@ class BlockRecurrentWrapper(nn.Module):
         # Updates the Memory and Cache
         # For KV cache, in case the memory + cache > 2 * memory_length, we update the memory
         # Else, we keep the cache and the memory
+        def copy_cache(cache):
+            if(isinstance(cache, torch.abstract.Tensor)):
+                return cache.clone().detach()
+            if(isinstance(cache, list)):
+                return [copy_cache(c) for c in cache]
+            elif(isinstance(cache, tuple)):
+                return tuple([copy_cache(c) for c in cache])
+            else:
+                raise Exception("Unknown type of cache")
+
         if(self.memory_type == "kv"):
             if(cache is not None):
                 self.memory = [c[:, -self.mem_len:].clone().detach() for c in cache]
@@ -64,13 +74,7 @@ class BlockRecurrentWrapper(nn.Module):
             return None
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
-            self.memory = []
-            for l_cache in cache:
-                mem = ()
-                for lt_cache in l_cache:
-                    mem += (lt_cache.clone().detach(),)
-                self.memory.append(mem)
-            return cache
+            self.memory = copy_cache(cache)
         else:
             raise Exception(f"No such memory type: {self.memory_type}")
 
