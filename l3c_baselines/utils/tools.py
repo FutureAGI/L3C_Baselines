@@ -205,6 +205,90 @@ class DistStatistics(object):
 
         return stat_res
 
+class DistStatistics2(object):
+    """
+    Provide distributed statistics, position wise analysis, calculate mean and std.
+    """
+    def __init__(self, *keys, verbose=False):
+        self.keys = keys
+        if("count" in keys):
+            self.is_average = True
+            if(verbose):
+                log_debug("Found 'count' keyword in keys, statistics will be averaged by count")
+        else:
+            self.is_average = False
+            if(verbose):
+                log_debug("No 'count' keyword detected, statistics will be summed but not averaged")
+        self.reset()
+
+    def reset(self):
+        self._data = dict()
+        for key in self.keys:
+            self._data[key] = []
+
+    def append_with_safety(self, device, **kwargs):
+        zeroflag = False
+        if("count" in kwargs):
+            cnt = kwargs["count"]
+        else:
+            cnt = 1
+        for key, value in kwargs.items():
+            if torch.isinf(value).any() or torch.isnan(value).any():
+                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
+                zeroflag = True
+        safe_stats = dict()
+        if zeroflag:
+            for key, value in kwargs.items():
+                safe_stats[key] = torch.zeros_like(value)
+        else:
+            for key, value in kwargs.items():
+                safe_stats[key] = value.clone().detach()
+        for key, value in safe_stats.items():
+            if(key not in self._data):
+                raise KeyError(f"Key {key} not registered in Statistics class")
+            #if(key != "count"):
+                #value *= cnt
+            #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
+            dist.broadcast(value.data)
+            #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
+            self._data[key].append(value.cpu().detach())
+
+    def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+        delta = batch_mean - mean
+        tot_count = count + batch_count
+
+        new_mean = mean + delta * batch_count / tot_count
+        m_a = var * count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + torch.square(delta) * count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
+        return new_mean, new_var, new_count
+
+    def cal_res_for_each_key(self, key):
+        res_mean = None
+        res_var = None
+        res_count = None
+        for index, element in enumerate(self._data[key]):
+            if index == 0:
+                res_mean = element[0]
+                res_var = element[1]
+                res_count = self._data["count"][index]
+            else:
+                res_mean, res_var, res_count = self.update_mean_var_count_from_moments(res_mean, res_var, res_count, element[0], element[1], self._data["count"][index])
+        return torch.cat((res_mean, res_var),dim=0) 
+    
+    def __call__(self):
+        stat_res = dict()
+        for key in self.keys:
+            if(key != "count"):
+                stat_res[key] = self.cal_res_for_each_key(self, key)
+            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
+                stat_res[key] = float(stat_res[key])
+        stat_res["count"] = self._data["count"].sum(dim=0)
+
+        return stat_res
+
 def rewards2go(rewards, gamma=0.98):
     """
     returns a future moving average of rewards
