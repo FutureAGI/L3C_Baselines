@@ -39,17 +39,17 @@ class DiffusionLayers(nn.Module):
 
         return outputs
     
-    def loss_DDPM(self, x0, cond, mask=None, reduce='mean', t=None):
+    def loss_DDPM(self, x0, cond, mask=None, reduce_dim=1, t=None):
         if(t is None):
             _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
         else:
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
         x_t, eps, _ = self.diffusion_forward(x0, _t)
         eps_t = self.step_forward(x_t, _t, cond)
-        loss = mse_loss_mask(eps_t, eps, mask=mask, reduce=reduce)
+        loss = mse_loss_mask(eps_t, eps, mask=mask, reduce_dim=reduce_dim)
         return loss
 
-    def forward(self, x0, cond, mask=None, reduce='mean', t=None):
+    def forward(self, x0, cond, mask=None, reduce_dim=1, t=None):
         """
         Allows to back propagate through the whole process
         """

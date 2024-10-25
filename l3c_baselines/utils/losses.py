@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-def mse_loss_mask(img_out, img_gt, mask=None, reduce="mean"):
+def mse_loss_mask(img_out, img_gt, mask=None, reduce_dim=[0,1]):
     """
     input shape: (B, T, *)
     mask shape: (B, T)
@@ -13,22 +13,22 @@ def mse_loss_mask(img_out, img_gt, mask=None, reduce="mean"):
     mse_loss = torch.mean(((img_out - img_gt)) ** 2, dim=[i for i in range(2, dim)])
     if mask is not None:
         mse_loss = mse_loss * mask
-        if reduce == "mean":
+        if reduce_dim == 1:
             sum_mask = torch.mean(mask)
             sum_loss = torch.mean(mse_loss)
-        else:
+        elif reduce_dim == 0:
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(mse_loss, dim=0)
         mse_loss = sum_loss / sum_mask
     else:
-        if reduce == "mean":
+        if reduce_dim == 1:
             mse_loss = torch.mean(mse_loss)
-        else:
+        elif reduce_dim == 0:
             mse_loss = torch.mean(mse_loss, dim=0)
 
     return mse_loss
 
-def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
+def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce_dim=[0,1]):
     """
     input shape: (B, T, H)
     mask shape: (B, T)
@@ -40,28 +40,30 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
 
     if mask is not None:
         ce_loss = ce_loss * mask
-        if reduce == "mean":
+        if reduce_dim == 1:
             sum_mask = torch.mean(mask)
             sum_loss = torch.mean(ce_loss)
-        else:
+        elif reduce_dim == 0:
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(ce_loss, dim=0)
         ce_loss = sum_loss / sum_mask
     else:
-        if reduce == "mean":
+        if reduce_dim == 1:
             ce_loss = torch.mean(ce_loss)
-        else:
+        elif reduce_dim == 0:
             ce_loss = torch.mean(ce_loss, dim=0)
 
     return ce_loss
 
-def ent_loss(act_out, reduce="mean"):
+def ent_loss(act_out, reduce_dim=[0,1]):
     """
     input shape: (B, T, H)
     mask shape: (B, T)
     reudce for dim=1
     """
-    if reduce == "mean":
+    if reduce_dim == 1:
         return torch.mean(torch.log(act_out + 1.0e-10) * act_out)
-    else:
+    elif reduce_dim == 0:
         return torch.mean(torch.log(act_out + 1.0e-10) * act_out, dim=0)
+    else:
+        return torch.log(act_out + 1.0e-10) * act_out
