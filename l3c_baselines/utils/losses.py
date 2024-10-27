@@ -43,10 +43,11 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce_dim=[0,1]):
         if reduce_dim == 1:
             sum_mask = torch.mean(mask)
             sum_loss = torch.mean(ce_loss)
+            ce_loss = sum_loss / sum_mask
         elif reduce_dim == 0:
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(ce_loss, dim=0)
-        ce_loss = sum_loss / sum_mask
+            ce_loss = sum_loss / sum_mask
     else:
         if reduce_dim == 1:
             ce_loss = torch.mean(ce_loss)

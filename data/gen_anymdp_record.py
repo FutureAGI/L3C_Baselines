@@ -122,7 +122,9 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
         label_policy,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
-    tasks_num = len(tasks_from_file)
+    tasks_num = None
+    if(tasks_from_file is not None):
+        tasks_num = len(tasks_from_file)
     for idx in epoch_ids:
         env = gym.make("anymdp-v0", max_steps=max_steps)
 

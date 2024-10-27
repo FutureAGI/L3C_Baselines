@@ -23,6 +23,7 @@ from l3c_baselines.utils import count_parameters, check_model_validity, model_pa
 from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, DistStatistics2, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
+os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 def calculate_result_matrix(loss_matrix):
     """
     Calculate and return a new matrix, where the first row is the result of averaging the input matrix along dim 0,
@@ -35,8 +36,14 @@ def calculate_result_matrix(loss_matrix):
     result_matrix (torch.Tensor): The output tensor, its shape is [2, seq_length].
     """
     # Calculate the mean and variance along dim 0
-    mean_loss = torch.mean(loss_matrix, dim=0)
-    var_loss = torch.var(loss_matrix, dim=0)
+    mean_loss = []
+    var_loss = []
+    if loss_matrix.shape[0] > 1:
+        mean_loss = torch.mean(loss_matrix, dim=0)
+        var_loss = torch.var(loss_matrix, dim=0)
+    else:
+        mean_loss = loss_matrix
+        var_loss = torch.zeros_like(mean_loss)
 
     # Create a new matrix
     result_matrix = torch.cat((mean_loss, var_loss), dim=0)
@@ -50,13 +57,12 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=1, rank=rank, world_size=world_size)
 
-    results = []
     all_length = len(dataloader)
 
     seg_num = (config.seq_len - 1) // config.seg_len + 1
 
     stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
-    stat2 = [DistStatistics2("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count")]
+    stat2 = DistStatistics2("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count")
     if(main):
         log_debug("Start evaluation ...")
         log_progress(0)
@@ -99,10 +105,15 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
         # Append over all segment, loss_wm_s_arr, loss_wm_r_arr and loss_pm_arr dim become BxT
         # Downsample over T, dim become [B,T//downsample_length]
         batch_size, seq_length = loss_wm_s_T.shape
-        loss_wm_s_ds = torch.mean(loss_wm_s_T.view(batch_size, seq_length//downsample_length, -1), dim=2)
-        loss_wm_r_ds = torch.mean(loss_wm_r_T.view(batch_size, seq_length//downsample_length, -1), dim=2)
-        loss_pm_ds = torch.mean(loss_pm_T.view(batch_size, seq_length//downsample_length, -1), dim=2)
+        num_elements_to_keep = seq_length // downsample_length * downsample_length
+        loss_wm_s_ds = torch.mean(loss_wm_s_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
+        loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
+        loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
         # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
+        print("loss_wm_s_ds的维度是:", loss_wm_s_ds.shape)
+        print("loss_wm_r_ds的维度是:", loss_wm_r_ds.shape)
+        print("loss_pm_ds的维度是:", loss_pm_ds.shape)
+
         stat_loss_wm_s = calculate_result_matrix(loss_wm_s_ds)
         stat_loss_wm_r = calculate_result_matrix(loss_wm_r_ds)
         stat_loss_pm = calculate_result_matrix(loss_pm_ds)
@@ -110,10 +121,10 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
         loss_count = batch_size
 
         stat2.append_with_safety(rank, 
-                            loss_wm_s=stat_loss_wm_s, 
-                            loss_wm_r=stat_loss_wm_r, 
-                            loss_pm=stat_loss_pm,
-                            count=loss_count)
+                            loss_wm_s_ds=stat_loss_wm_s, 
+                            loss_wm_r_ds=stat_loss_wm_r, 
+                            loss_pm_ds=stat_loss_pm,
+                            count=torch.tensor(loss_count))
         
 
         if(main):
@@ -185,6 +196,8 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     # Initiate logger
     train_config = config.train_config
     test_config = config.test_config
+    logger_eval_segment = None
+    logger_eval_position_wise = None
     if(main):
         eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
         logger_eval_segment = []
@@ -193,13 +206,10 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                     sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
         logger_eval_position_wise = []
         logger_eval_position_wise.append(Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", point_wise=True))
-    else:
-        logger_eval = None
-        logger_eval_position_wise = None
+                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", position_wise=True))
 
     # Perform the first evaluation
-    anymdp_model_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval, logger_eval_position_wise)
+    anymdp_model_epoch(rank, world_size, test_config, model, main, device, 0, logger_eval_segment, logger_eval_position_wise)
 
     return
 
@@ -229,3 +239,8 @@ if __name__=='__main__':
     print("Final configuration:\n", config)
     demo_config = config.demo_config
     os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
+
+    mp.spawn(anymdp_main_epoch,
+             args=(use_gpu, world_size, config, 0, config.run_name),
+             nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
+             join=True)

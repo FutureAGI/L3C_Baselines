@@ -249,9 +249,11 @@ class DistStatistics2(object):
             #if(key != "count"):
                 #value *= cnt
             #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
-            dist.broadcast(value.data)
+            value_gpu = value.to('cuda')
+            gathered_tensors = [torch.zeros_like(value_gpu.data) for _ in range(dist.get_world_size())]
+            dist.all_gather(gathered_tensors, value_gpu.data)
             #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
-            self._data[key].append(value.cpu().detach())
+            self._data[key].append(gathered_tensors)
 
     def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
         delta = batch_mean - mean
