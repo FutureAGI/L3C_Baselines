@@ -193,7 +193,7 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                     sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
         logger_eval_position_wise = []
         logger_eval_position_wise.append(Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise"))
+                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", point_wise=True))
     else:
         logger_eval = None
         logger_eval_position_wise = None

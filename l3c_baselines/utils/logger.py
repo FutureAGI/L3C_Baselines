@@ -9,9 +9,10 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 class Logger(object):
-    def __init__(self, *args, sum_iter=-1, use_tensorboard=False):
+    def __init__(self, *args, sum_iter=-1, use_tensorboard=False, point_wise=False):
         self.keys = []
         self.sum_iter = sum_iter
+        self.point_wise = point_wise
         if(use_tensorboard):
             self.writer = SummaryWriter()
         else:
@@ -45,11 +46,24 @@ class Logger(object):
             else:
                 return str(x)
             
-
-        for i, arg in enumerate(args):
-            log += ' ' + self.keys[i] + ":" + format_value(arg)
-            if(self.writer is not None and iteration > -1):
-                self.writer.add_scalar(self.keys[i], float(arg), iteration)
+        if self.point_wise:
+            for i, arg in enumerate(args):
+                # log += ' ' + self.keys[i] + ":" + format_value(arg)
+                for j, data in enumerate(arg.shape[0]):
+                    if j == 0:
+                        tag = f'{self.keys[i]}/mean/iteration_{iteration}'
+                    elif j == 1:
+                        tag = f'{self.keys[i]}/0.9_confidence_lower_bound/iteration_{iteration}'
+                    else:
+                        tag = f'{self.keys[i]}/0.9_confidence_upper_bound/iteration_{iteration}'
+                    for k , value in enumerate(data):
+                        self.writer.add_scalar(tag, float(value), k)
+                        
+        else:
+            for i, arg in enumerate(args):
+                log += ' ' + self.keys[i] + ":" + format_value(arg)
+                if(self.writer is not None and iteration > -1):
+                    self.writer.add_scalar(self.keys[i], float(arg), iteration)
         if(rewrite):
             log += '\r'
         else:
