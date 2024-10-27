@@ -140,17 +140,17 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
                     epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
         #log for position-wise loss anylsis
         # dim = [3, T//downsample_length]. Row 1 is mean, row 2 is 90% lower confidence bound, row 3 is 90% upper confidence bound.
-        stat_res_wm_s = torch.cat((stat2["loss_wm_s"][0],
-                                   (stat2["loss_wm_s"][0] - 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"]))), 
-                                   (stat2["loss_wm_s"][0] + 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"])))),
+        stat_res_wm_s = torch.cat((stat2()["loss_wm_s"][0],
+                                   (stat2()["loss_wm_s"][0] - 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"]))), 
+                                   (stat2()["loss_wm_s"][0] + 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"])))),
                                    dim = 0)
-        stat_res_wm_r = torch.cat((stat2["loss_wm_r"][0],
-                                   (stat2["loss_wm_r"][0] - 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"]))),
-                                   (stat2["loss_wm_r"][0] + 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"])))),
+        stat_res_wm_r = torch.cat((stat2()["loss_wm_r"][0],
+                                   (stat2()["loss_wm_r"][0] - 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"]))),
+                                   (stat2()["loss_wm_r"][0] + 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"])))),
                                    dim = 0)
-        stat_res_pm = torch.cat((stat2["loss_pm"][0],
-                                   (stat2["loss_pm"][0] - 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"]))),
-                                   (stat2["loss_pm"][0] + 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"])))),
+        stat_res_pm = torch.cat((stat2()["loss_pm"][0],
+                                   (stat2()["loss_pm"][0] - 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"]))),
+                                   (stat2()["loss_pm"][0] + 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"])))),
                                    dim = 0)
         logger_position_wise(stat_res_wm_s, stat_res_wm_r, stat_res_pm, 
                              epoch=epoch_id, iteration=epoch_id, prefix="EvaluationResults-Positionwise")
