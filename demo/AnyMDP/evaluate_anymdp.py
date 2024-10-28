@@ -51,7 +51,7 @@ def calculate_result_matrix(loss_matrix):
     return result_matrix
 
 
-def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, logger, logger_position_wise):
+def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, logger, logger_position_wise, downsample_length = 100):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -61,14 +61,15 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
 
     seg_num = (config.seq_len - 1) // config.seg_len + 1
 
+    if config.downsample_size is not None:
+        downsample_length = config.downsample_size
+
     stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
     stat2 = DistStatistics2("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count")
     if(main):
         log_debug("Start evaluation ...")
         log_progress(0)
     dataset.reset(0)
-
-    downsample_length =  100
 
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
@@ -110,10 +111,6 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
         loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
         loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
         # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
-        print("loss_wm_s_ds的维度是:", loss_wm_s_ds.shape)
-        print("loss_wm_r_ds的维度是:", loss_wm_r_ds.shape)
-        print("loss_pm_ds的维度是:", loss_pm_ds.shape)
-
         stat_loss_wm_s = calculate_result_matrix(loss_wm_s_ds)
         stat_loss_wm_r = calculate_result_matrix(loss_wm_r_ds)
         stat_loss_pm = calculate_result_matrix(loss_pm_ds)
@@ -140,17 +137,17 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
                     epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
         #log for position-wise loss anylsis
         # dim = [3, T//downsample_length]. Row 1 is mean, row 2 is 90% lower confidence bound, row 3 is 90% upper confidence bound.
-        stat_res_wm_s = torch.cat((stat2()["loss_wm_s"][0],
-                                   (stat2()["loss_wm_s"][0] - 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"]))), 
-                                   (stat2()["loss_wm_s"][0] + 1.645*(torch.sqrt(stat2["loss_wm_s"][1]) / torch.sqrt(stat2["count"])))),
-                                   dim = 0)
-        stat_res_wm_r = torch.cat((stat2()["loss_wm_r"][0],
-                                   (stat2()["loss_wm_r"][0] - 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"]))),
-                                   (stat2()["loss_wm_r"][0] + 1.645*(torch.sqrt(stat2["loss_wm_r"][1]) / torch.sqrt(stat2["count"])))),
-                                   dim = 0)
-        stat_res_pm = torch.cat((stat2()["loss_pm"][0],
-                                   (stat2()["loss_pm"][0] - 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"]))),
-                                   (stat2()["loss_pm"][0] + 1.645*(torch.sqrt(stat2["loss_pm"][1]) / torch.sqrt(stat2["count"])))),
+        stat_res_wm_s = torch.stack((stat2()["loss_wm_s_ds"][0],
+                                     (stat2()["loss_wm_s_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_wm_s_ds"][1]) / torch.sqrt(stat2()["count"]))), 
+                                     (stat2()["loss_wm_s_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_wm_s_ds"][1]) / torch.sqrt(stat2()["count"])))), 
+                                     dim = 0)
+        stat_res_wm_r = torch.stack((stat2()["loss_wm_r_ds"][0],
+                                     (stat2()["loss_wm_r_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_wm_r_ds"][1]) / torch.sqrt(stat2()["count"]))),
+                                     (stat2()["loss_wm_r_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_wm_r_ds"][1]) / torch.sqrt(stat2()["count"])))),
+                                     dim = 0)
+        stat_res_pm = torch.stack((stat2()["loss_pm_ds"][0],
+                                   (stat2()["loss_pm_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_pm_ds"][1]) / torch.sqrt(stat2()["count"]))),
+                                   (stat2()["loss_pm_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_pm_ds"][1]) / torch.sqrt(stat2()["count"])))),
                                    dim = 0)
         logger_position_wise(stat_res_wm_s, stat_res_wm_r, stat_res_pm, 
                              epoch=epoch_id, iteration=epoch_id, prefix="EvaluationResults-Positionwise")
@@ -204,9 +201,8 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         for i in range(eval_seg_num):
             logger_eval_segment.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
                     sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
-        logger_eval_position_wise = []
-        logger_eval_position_wise.append(Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", position_wise=True))
+        logger_eval_position_wise = Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
+                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", position_wise=True)
 
     # Perform the first evaluation
     anymdp_model_epoch(rank, world_size, test_config, model, main, device, 0, logger_eval_segment, logger_eval_position_wise)

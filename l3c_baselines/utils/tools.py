@@ -255,7 +255,7 @@ class DistStatistics2(object):
             #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
             self._data[key].append(gathered_tensors)
 
-    def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+    def update_mean_var_count_from_moments(self, mean, var, count, batch_mean, batch_var, batch_count):
         delta = batch_mean - mean
         tot_count = count + batch_count
 
@@ -271,24 +271,25 @@ class DistStatistics2(object):
         res_mean = None
         res_var = None
         res_count = None
-        for index, element in enumerate(self._data[key]):
+        combined_list = [item for sublist in self._data[key] for item in sublist]
+        count_list = [item for sublist in self._data["count"] for item in sublist]
+        for index, element in enumerate(combined_list):
             if index == 0:
                 res_mean = element[0]
                 res_var = element[1]
-                res_count = self._data["count"][index]
+                res_count = count_list[index]
             else:
                 # todo: print self._data["count"][index] to check
-                res_mean, res_var, res_count = self.update_mean_var_count_from_moments(res_mean, res_var, res_count, element[0], element[1], self._data["count"][index])
-        return torch.cat((res_mean, res_var),dim=0) 
+                res_mean, res_var, res_count = self.update_mean_var_count_from_moments(res_mean, res_var, res_count, element[0], element[1], count_list[index])
+        return [res_mean, res_var], res_count 
     
     def __call__(self):
         stat_res = dict()
         for key in self.keys:
             if(key != "count"):
-                stat_res[key] = self.cal_res_for_each_key(key)
-            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
-                stat_res[key] = float(stat_res[key])
-        stat_res["count"] = self._data["count"].sum(dim=0)
+                stat_res[key], stat_res["count"] = self.cal_res_for_each_key(key)
+                # if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
+                #     stat_res[key] = float(stat_res[key])
 
         return stat_res
 

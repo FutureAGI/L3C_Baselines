@@ -63,15 +63,16 @@ class Logger(object):
         if self.position_wise:
             for i, arg in enumerate(args):
                 # log += ' ' + self.keys[i] + ":" + format_value(arg)
-                for j, data in enumerate(arg.shape[0]):
-                    if j == 0:
-                        tag = f'{self.keys[i]}/mean/iteration_{iteration}'
-                    elif j == 1:
-                        tag = f'{self.keys[i]}/0.9_confidence_lower_bound/iteration_{iteration}'
-                    else:
-                        tag = f'{self.keys[i]}/0.9_confidence_upper_bound/iteration_{iteration}'
-                    for k , value in enumerate(data):
-                        self.writer.add_scalar(tag, float(value), k)           
+                tag = f'{self.keys[i]}/iteration_{iteration}'
+                for j in range(arg[0].shape[0]):
+                    mean_value = arg[0][j]
+                    lower_bound_value = arg[1][j]
+                    upper_bound_value = arg[2][j]
+                    self.writer.add_scalars(tag, {
+                        'Mean': mean_value,
+                        '0.9_Confidence_Lower_Bound': lower_bound_value,
+                        '0.9_Confidence_Upper_Bound': upper_bound_value
+                    }, j)          
         else:
             for i, arg in enumerate(args):
                 log += ' ' + self.keys[i] + ":" + format_value(arg)

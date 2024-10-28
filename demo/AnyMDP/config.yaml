@@ -135,6 +135,7 @@ test_config:
     load_model_path: None
     seq_len: 16000
     seg_len: 1000
+    downsample_size: 100
 
 demo_config:
     master_port: "12211"

@@ -16,10 +16,11 @@ def mse_loss_mask(img_out, img_gt, mask=None, reduce_dim=[0,1]):
         if reduce_dim == 1:
             sum_mask = torch.mean(mask)
             sum_loss = torch.mean(mse_loss)
+            mse_loss = sum_loss / sum_mask
         elif reduce_dim == 0:
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(mse_loss, dim=0)
-        mse_loss = sum_loss / sum_mask
+            mse_loss = sum_loss / sum_mask
     else:
         if reduce_dim == 1:
             mse_loss = torch.mean(mse_loss)
