@@ -3,6 +3,7 @@ from torch import nn
 from fla.models.rwkv6.modeling_rwkv6 import RWKV6Block
 from fla.models.rwkv6.configuration_rwkv6 import RWKV6Config
 from fla.models.utils import Cache
+from l3c_baselines.utils import format_cache, memory_cpy
 
 
 class RWKV6Layer(nn.Module):
@@ -35,9 +36,6 @@ class RWKV6Layer(nn.Module):
         use_cache = (cache is not None)
         out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
 
-        if(new_cache is not None and need_cache):
-            for state in new_cache.states:
-                for sta in state:
-                    sta.detach_()
+        new_cache.states = memory_cpy(new_cache.states)
 
         return out, new_cache

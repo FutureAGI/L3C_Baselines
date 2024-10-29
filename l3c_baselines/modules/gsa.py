@@ -9,7 +9,7 @@ class GSABlock(nn.Module):
     def __init__(self,
                 io_size: int=512,
                 num_heads: int=4,
-                num_slots: int=None
+                num_slots: int=4,
                 layer_idx: int=0):
         super().__init__()
         self.hidden_size = io_size

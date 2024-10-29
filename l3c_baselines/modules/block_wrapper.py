@@ -1,6 +1,5 @@
 import torch.nn as nn
 from torch.nn import functional as F
-from fla.models.utils import Cache
 
 """
 Wraps Self-Attention, Mamba etc with a Residual Connection and FeedForward to form a Transformer-like structure
@@ -26,10 +25,10 @@ class BlockWrapper(nn.Module):
 
         self.activation = nn.GELU()
 
-    def forward(self, src, cache:Optional[Cache]=None):
+    def forward(self, src, cache=None, need_cache=False):
         # Residual Connection
         norm_src = self.norm1(src)
-        outputs, cache = self.temporal_encoder(norm_src, cache=cache)
+        outputs, cache = self.temporal_encoder(norm_src, cache=cache, need_cache=need_cache)
 
         outputs = outputs + src
 

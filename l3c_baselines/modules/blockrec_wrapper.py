@@ -11,21 +11,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
-from l3c_baselines.utils import format_cache, log_warn, log_fatal
+from l3c_baselines.utils import memory_cpy, format_cache, log_warn, log_fatal
 
-def memory_cpy(cache):
-    if(cache is None):
-        return None
-    elif(isinstance(cache, torch.Tensor)):
-        return cache.detach().clone()
-    elif(isinstance(cache, list)):
-        return [memory_cpy(c) for c in cache]
-    elif(isinstance(cache, tuple)):
-        return tuple([memory_cpy for c in cache])
-    elif(hasattr(cache, 'clone')):
-        return cache.clone()
-    else:
-        return cache
 
 class BlockRecurrentWrapper(nn.Module):
     """

@@ -5,6 +5,7 @@ model_config:
   max_position_loss_weighting: 48000
   action_dim: 5
   policy_loss_type: CrossEntropy
+  rsa_type: sar
 
   state_encode:
       input_type: Discrete
@@ -15,6 +16,12 @@ model_config:
   action_encode:
       input_type: Discrete
       input_size: 6
+      hidden_size: 512
+      dropout: 0.0
+
+  prompt_encode:
+      input_type: Continuous
+      input_size: 1
       hidden_size: 512
       dropout: 0.0
 
@@ -63,7 +70,7 @@ model_config:
       dropout: 0.10
       context_window: -1
       checkpoints_density: -1
-      position_encoding_size: 6000
+      position_encoding_size: 12000
       use_layer_norm: True
       use_blockrecurrence: True
       memory_length: 3000
@@ -74,9 +81,9 @@ model_config:
       num_layers: 12
       hidden_size: 512
       inner_hidden_size: 1024
-      dropout: 0.10,
-      nhead: 16,
-      memory_length: 128,
+      dropout: 0.10
+      nhead: 16
+      memory_length: 128
       position_encoding_size: 12000
       use_layer_norm: True
       use_blockrecurrence: True
@@ -88,18 +95,19 @@ model_config:
       num_layers: 12
       hidden_size: 512
       inner_hidden_size: 1024
-      dropout: 0.10,
-      nhead: 16,
-      expand_k: 0.5,
-      expand_v: 1,
-      hidden_ratio: 3.5,
+      dropout: 0.10
+      nhead: 16
+      expand_k: 0.5
+      expand_v: 1
+      hidden_ratio: 3.5
       position_encoding_size: 12000
       use_layer_norm: True
       use_blockrecurrence: True
       checkpoints_density: -1
+      memory_length: 0
       memory_type: MEM
 
-  causal_block_bak_4:
+  causal_block_bak_4:  # Mamba has unsolved issues in cache, temporarily avoid using it
       model_type: Mamba
       num_layers: 12
       hidden_size: 512
@@ -112,32 +120,30 @@ model_config:
       use_layer_norm: True
       use_blockrecurrence: True
       checkpoints_density: -1
-      memory_length: 6000
-      memory_type: MEM
-
+      memory_length: 0
 
 train_config:
-    max_epochs: 50
+    max_epochs: 15
     batch_size: 8
 
-    seq_len: 64000
+    seq_len: 16000
     seg_len: 2000
 
     lr: 5.0e-4
-    lr_decay_interval: 4000
-    lr_start_step: 6250
+    lr_decay_interval: 2000
+    lr_start_step: 0
 
     data_path: "[PATH]"
     save_model_path: "./checkpoints/"
     load_model_path: None
     master_port: "12400"
-    max_save_iterations: 5000
+    max_save_iterations: 500
     evaluation_interval: 1
 
     lossweight_policymodel: 0.0
     lossweight_worldmodel_states: 1.0
     lossweight_worldmodel_rewards: 0.0
-    lossweight_entropy: 0.0 #1.0e-6
+    lossweight_entropy: 0.0 
     lossweight_l2: 1.0e-10
 
     use_amp: False
@@ -152,7 +158,7 @@ test_config:
     master_port: "12201"
     load_model_path: None
     seq_len: 16000
-    seg_len: 1000
+    seg_len: 4000
 
 demo_config:
     master_port: "12211"

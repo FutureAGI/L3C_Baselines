@@ -45,10 +45,17 @@ class AnyMDPRSA(RSADecisionModel):
             else:
                 self.a_encoder.requires_grad_(True)
 
-            if("r_encoder" in config.frozen_modules):
-                self.r_encoder.requires_grad_(False)
-            else:
-                self.r_encoder.requires_grad_(True)
+            if(self.r_included):
+                if("r_encoder" in config.frozen_modules):
+                    self.r_encoder.requires_grad_(False)
+                else:
+                    self.r_encoder.requires_grad_(True)
+
+            if(self.p_included):
+                if("p_encoder" in config.frozen_modules):
+                    self.p_encoder.requires_grad_(False)
+                else:
+                    self.p_encoder.requires_grad_(True)
 
             if("s_decoder" in config.frozen_modules):
                 self.s_decoder.requires_grad_(False)
@@ -65,17 +72,21 @@ class AnyMDPRSA(RSADecisionModel):
             else:
                 self.r_decoder.requires_grad_(True)
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, rewards_input, rewards_output,
-                        additional_info=None, # Kept for passing additional information
-                        start_position=0, 
-                        state_dropout=0.0,
-                        reward_dropout=0.0,
-                        update_memory=True,
-                        gamma = 0.98,
-                        reduce='mean'):
+    def sequential_loss(self, prompts, 
+                            observations, 
+                            rewards, 
+                            behavior_actions, 
+                            label_actions, 
+                            additional_info=None, # Kept for passing additional information
+                            start_position=0, 
+                            state_dropout=0.0,
+                            reward_dropout=0.0,
+                            update_memory=True,
+                            gamma = 0.98,
+                            reduce='mean'):
     
         # Predict the latent representation of action and next frame (World Model)
-        s_pred, a_pred, r_pred, _ = self.forward(observations[:, :-1], behavior_actions, rewards_input,
+        s_pred, a_pred, r_pred, _ = self.forward(prompts, observations[:, :-1], behavior_actions, rewards,
                 cache=None, need_cache=False, state_dropout=state_dropout,
                 update_memory=update_memory)
 
@@ -88,7 +99,7 @@ class AnyMDPRSA(RSADecisionModel):
 
         # World Model Loss - States and Rewards
         loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
-        loss["wm-r"] = mse_loss_mask(r_pred, rewards_output.view(*rewards_output.shape,1), 
+        loss["wm-r"] = mse_loss_mask(r_pred, rewards.view(*rewards.shape,1), 
                                     mask=self.loss_weight[:, ps:pe], reduce=reduce)
 
         # Policy Model and Entropy Loss
@@ -113,7 +124,7 @@ if __name__=="__main__":
     local_map = torch.randn(8, 32, 3, 7, 7)
 
     vae_loss = model.vae_loss(observation)
-    losses = model.sequential_loss(observation, action, action, reward)
+    losses = model.sequential_loss(None, observation, reward, action, action)
     rec_img, img_out, act_out, cache = model.inference_step_by_step(
             observation[:, :5], action[:, :4], 1.0, 0, observation.device)
     print("vae:", vae_loss, "sequential:", losses)
