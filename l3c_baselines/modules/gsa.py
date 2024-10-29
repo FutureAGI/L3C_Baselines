@@ -9,9 +9,11 @@ class GSABlock(nn.Module):
     def __init__(self,
                 io_size: int=512,
                 num_heads: int=4,
-                num_slots: int=None):
+                num_slots: int=None
+                layer_idx: int=0):
         super().__init__()
         self.hidden_size = io_size
+        self.layer_idx = layer_idx
         self.encoder = GatedSlotAttention(
                   hidden_size=io_size,
                   num_heads=num_heads,
@@ -19,42 +21,45 @@ class GSABlock(nn.Module):
                   layer_idx=0)
         
     def forward(self, x, cache=None, need_cache=False):
-        if(need_cache and cache is None): # either cache != None or need_cache == True we must use inference_params
-            state = self.encoder.init_state(x.shape[0])
-            cache = Cache.from_legacy_cache([state])
+        if(need_cache and cache is None):
+            cache = self.encoder.init_state(x.shape[0])
+            cache = Cache.from_legacy_cache([cache])
     
         use_cache = (cache is not None)
-        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=state, use_cache=use_cache)
+        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
 
-        for state in new_cache.states:
-            for sta in state:
-                sta.detach_()
+        if(new_cache is not None and need_cache):
+            for state in new_cache.states:
+                for sta in state:
+                    sta.detach_()
 
-        if(need_cache):
-            return out, new_cache
-        else:
-            return out, None
+        return out, new_cache
         
 
 class GLABlock(nn.Module):
     def __init__(self,
                 io_size: int=512,
-                num_heads: int=4):
+                num_heads: int=4,
+                layer_idx: int=0):
         super().__init__()
         self.hidden_size = io_size
+        self.layer_idx = layer_idx
         self.encoder = GatedLinearAttention(
                   hidden_size=io_size,
                   num_heads=num_heads,
                   layer_idx=0)
         
     def forward(self, x, cache=None, need_cache=False):
-        if(need_cache and cache is None): # either cache != None or need_cache == True we must use inference_params
+        if(need_cache and cache is None):
             cache = self.encoder.init_state(x.shape[0])
+            cache = Cache.from_legacy_cache([cache])
+    
+        use_cache = (cache is not None)
+        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
 
-        kvs = Cache.from_legacy_cache([cache]) 
-        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=kvs, use_cache=(cache is not None))
+        if(new_cache is not None and need_cache):
+            for state in new_cache.states:
+                for sta in state:
+                    sta.detach_()
 
-        if(need_cache):
-            return out, new_cache[0]
-        else:
-            return out, None
+        return out, new_cache

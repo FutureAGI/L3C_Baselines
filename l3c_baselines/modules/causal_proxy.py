@@ -8,6 +8,7 @@ from .transformers import ARTransformerEncoder
 from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
+from .rwkv6 import RWKV6Layer
 
 class CausalBlock(nn.Module):
     """
@@ -27,26 +28,6 @@ class CausalBlock(nn.Module):
                 dropout=config.dropout, 
                 context_window=config.context_window
             )
-        elif(self.model_type == "lstm"):
-            main_encoder = MultiBlocks(
-                SimpleLSTM,
-                config.num_layers,
-                hidden=config.hidden_size,
-                fc_hidden=config.inner_hidden_size,
-                fc_dropout=config.dropout,
-                io_size=config.hidden_size,
-                hidden_size=config.memory_hidden_size,
-            )
-        elif(self.model_type == "prnn"):
-            main_encoder = MultiBlocks(
-                PRNN,
-                config.num_layers,
-                hidden=config.hidden_size,
-                fc_hidden=config.inner_hidden_size,
-                fc_dropout=config.dropout,
-                io_size=config.hidden_size,
-                hidden_size=config.memory_hidden_size,
-            )
         elif(self.model_type == "gsa"):
             main_encoder = MultiBlocks(
                 GSABlock,
@@ -60,7 +41,7 @@ class CausalBlock(nn.Module):
             )
         elif(self.model_type == "gla"):
             main_encoder = MultiBlocks(
-                GSABlock,
+                GLABlock,
                 config.num_layers,
                 hidden=config.hidden_size,
                 fc_hidden=config.inner_hidden_size,
@@ -79,9 +60,20 @@ class CausalBlock(nn.Module):
                 io_size=config.hidden_size,
                 d_state=config.d_state,
                 d_conv=config.d_conv,
-                layer_idx=0,
                 max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
+            )
+        elif(self.model_type == "rwkv6"):
+            main_encoder = MultiBlocks(
+                RWKV6Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                expand_k=config.expand_k,
+                expand_v=config.expand_v,
+                hidden_ratio=config.hidden_ratio,
+                intermediate_size=config.inner_hidden_size,
+                num_heads=config.nhead,
             )
         else:
             raise Exception("No such causal model: %s" % config.model_type)
