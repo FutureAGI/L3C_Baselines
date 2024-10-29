@@ -46,12 +46,12 @@ def calculate_result_matrix(loss_matrix):
         var_loss = torch.zeros_like(mean_loss)
 
     # Create a new matrix
-    result_matrix = torch.cat((mean_loss, var_loss), dim=0)
+    result_matrix = torch.stack((mean_loss, var_loss), dim=0)
 
     return result_matrix
 
 
-def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, logger, logger_position_wise, downsample_length = 100):
+def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, logger_position_wise, downsample_length = 10):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -64,13 +64,16 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
     if config.downsample_size is not None:
         downsample_length = config.downsample_size
 
-    stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
     stat2 = DistStatistics2("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count")
     if(main):
         log_debug("Start evaluation ...")
         log_progress(0)
     dataset.reset(0)
 
+    loss_wm_s_T_batch = None
+    loss_wm_r_T_batch = None
+    loss_pm_T_batch = None
+    loss_count_batch = 0
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
         model.module.reset()
@@ -78,8 +81,7 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
         r2goarr = rewards2go(rarr)
         loss_wm_s_T = None
         loss_wm_r_T = None
-        loss_pm_T = None
-        loss_count = None
+        loss_pm_T = None      
         for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                     config.seq_len, config.seg_len, device, 
                     (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
@@ -87,54 +89,55 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
                 # loss dim is Bxt, t = T // seg_len 
                 loss = model.module.sequential_loss(
                             states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position, reduce_dim=None)
-
-            stat[sub_idx].add_with_safety(rank, 
-                                loss_wm_s=loss["wm-s"], 
-                                loss_wm_r=loss["wm-r"], 
-                                loss_pm=loss["pm"],
-                                count=loss["count"])
             if (sub_idx == 0):
-                loss_wm_s_T=loss["wm-s"]
-                loss_wm_r_T=loss["wm-r"]
-                loss_pm_T=loss["pm"]
+                loss_wm_s_T=torch.nan_to_num(loss["wm-s"], nan=0.0)
+                loss_wm_r_T=torch.nan_to_num(loss["wm-r"], nan=0.0)
+                loss_pm_T=torch.nan_to_num(loss["pm"], nan=0.0)
             else:
-                loss_wm_s_T = torch.cat((loss_wm_s_T, loss["wm-s"]), dim=1)
-                loss_wm_r_T = torch.cat((loss_wm_r_T, loss["wm-r"]), dim=1)
-                loss_pm_T = torch.cat((loss_pm_T, loss["pm"]), dim=1)
+                loss_wm_s_T = torch.cat((loss_wm_s_T, torch.nan_to_num(loss["wm-s"], nan=0.0)), dim=1)
+                loss_wm_r_T = torch.cat((loss_wm_r_T, torch.nan_to_num(loss["wm-r"], nan=0.0)), dim=1)
+                loss_pm_T = torch.cat((loss_pm_T, torch.nan_to_num(loss["pm"], nan=0.0)), dim=1)
             start_position += bactions.shape[1]
         
         # Append over all segment, loss_wm_s_arr, loss_wm_r_arr and loss_pm_arr dim become BxT
         # Downsample over T, dim become [B,T//downsample_length]
-        batch_size, seq_length = loss_wm_s_T.shape
+        dim_1, seq_length = loss_wm_s_T.shape
         num_elements_to_keep = seq_length // downsample_length * downsample_length
-        loss_wm_s_ds = torch.mean(loss_wm_s_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
-        loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
-        loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(batch_size, seq_length//downsample_length, -1), dim=2)
-        # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
-        stat_loss_wm_s = calculate_result_matrix(loss_wm_s_ds)
-        stat_loss_wm_r = calculate_result_matrix(loss_wm_r_ds)
-        stat_loss_pm = calculate_result_matrix(loss_pm_ds)
-        #Sample length is equal, i.e. 32k, then the count can be batch_size.
-        loss_count = batch_size
+        loss_wm_s_ds = torch.mean(loss_wm_s_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
+        loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
+        loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
+        
+        loss_wm_s_T_batch = torch.cat((loss_wm_s_T_batch, loss_wm_s_ds), dim=0) if loss_wm_s_T_batch is not None else loss_wm_s_ds
+        loss_wm_r_T_batch = torch.cat((loss_wm_r_T_batch, loss_wm_r_ds), dim=0) if loss_wm_r_T_batch is not None else loss_wm_r_ds
+        loss_pm_T_batch = torch.cat((loss_pm_T_batch, loss_pm_ds), dim=0) if loss_pm_T_batch is not None else loss_pm_ds
+        loss_count_batch += dim_1
 
-        stat2.append_with_safety(rank, 
-                            loss_wm_s_ds=stat_loss_wm_s, 
-                            loss_wm_r_ds=stat_loss_wm_r, 
-                            loss_pm_ds=stat_loss_pm,
-                            count=torch.tensor(loss_count))
+        
         
 
         if(main):
             log_progress((batch_idx + 1) / all_length)
 
+    # finish batch loop
+    # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
+    # Get the result in each device
+    stat_loss_wm_s = calculate_result_matrix(loss_wm_s_T_batch)
+    stat_loss_wm_r = calculate_result_matrix(loss_wm_r_T_batch)
+    stat_loss_pm = calculate_result_matrix(loss_pm_T_batch)
+    # Merge the result accross all device
+    stat2.append_with_safety(rank, 
+                            loss_wm_s_ds=stat_loss_wm_s, 
+                            loss_wm_r_ds=stat_loss_wm_r, 
+                            loss_pm_ds=stat_loss_pm,
+                            count=torch.tensor(loss_count_batch))
+    if(main):
+        print("------------Debug: stat_loss_wm_s =",stat_loss_wm_s)
+        print("------------Debug: stat_loss_wm_r =",stat_loss_wm_r)
+        print("------------Debug: stat_loss_pm =",stat_loss_pm)
+        print("------------Debug: loss_count_batch =",loss_count_batch)
     
 
     if(main):
-        #log
-        for i in range(seg_num):
-            stat_res = stat[i]()
-            logger[i](stat_res["loss_wm_s"], stat_res["loss_wm_r"], stat_res["loss_pm"],
-                    epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
         #log for position-wise loss anylsis
         # dim = [3, T//downsample_length]. Row 1 is mean, row 2 is 90% lower confidence bound, row 3 is 90% upper confidence bound.
         stat_res_wm_s = torch.stack((stat2()["loss_wm_s_ds"][0],
@@ -152,8 +155,7 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
         logger_position_wise(stat_res_wm_s, stat_res_wm_r, stat_res_pm, 
                              epoch=epoch_id, iteration=epoch_id, prefix="EvaluationResults-Positionwise")
         
-    for i in range(seg_num):
-        stat[i].reset()
+    stat2.reset()
 
 def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     
@@ -174,7 +176,8 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if(main):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
-    demo_config = config.demo_config
+    test_config = config.test_config
+    train_config = config.train_config
     
     # Load Model
     model = AnyMDPRSA(config.model_config, verbose=main)
@@ -183,29 +186,22 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         model = DDP(model, device_ids=[rank])
     else:
         model = DDP(model)
-    if(demo_config.has_attr("load_model_path") and 
-            demo_config.load_model_path is not None and 
-            demo_config.load_model_path.lower() != 'none'):
-        model = custom_load_model(model, f'{demo_config.load_model_path}/model.pth', 
-                                  black_list=demo_config.load_model_parameter_blacklist, 
+    if(test_config.has_attr("load_model_path") and 
+            test_config.load_model_path is not None and 
+            test_config.load_model_path.lower() != 'none'):
+        model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', 
+                                  black_list=train_config.load_model_parameter_blacklist, 
                                   strict_check=False)
+        print("------------Load model success!------------")
     
     # Initiate logger
-    train_config = config.train_config
-    test_config = config.test_config
-    logger_eval_segment = None
     logger_eval_position_wise = None
     if(main):
-        eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
-        logger_eval_segment = []
-        for i in range(eval_seg_num):
-            logger_eval_segment.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
         logger_eval_position_wise = Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
                     sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", position_wise=True)
 
     # Perform the first evaluation
-    anymdp_model_epoch(rank, world_size, test_config, model, main, device, 0, logger_eval_segment, logger_eval_position_wise)
+    anymdp_model_epoch(rank, world_size, test_config, model, main, device, 0, logger_eval_position_wise)
 
     return
 

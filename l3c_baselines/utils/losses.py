@@ -21,6 +21,8 @@ def mse_loss_mask(img_out, img_gt, mask=None, reduce_dim=[0,1]):
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(mse_loss, dim=0)
             mse_loss = sum_loss / sum_mask
+        else:
+            mse_loss = mse_loss / mask
     else:
         if reduce_dim == 1:
             mse_loss = torch.mean(mse_loss)
@@ -49,6 +51,8 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce_dim=[0,1]):
             sum_mask = torch.mean(mask, dim=0)
             sum_loss = torch.mean(ce_loss, dim=0)
             ce_loss = sum_loss / sum_mask
+        else:
+            ce_loss = ce_loss / mask
     else:
         if reduce_dim == 1:
             ce_loss = torch.mean(ce_loss)
