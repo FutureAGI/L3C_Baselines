@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from fla.layers.gsa import GatedSlotAttention
 from fla.layers.gla import GatedLinearAttention
+from fla.models.utils import Cache
 
 
 class GSABlock(nn.Module):
@@ -19,9 +20,15 @@ class GSABlock(nn.Module):
         
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache and cache is None): # either cache != None or need_cache == True we must use inference_params
-            cache = self.encoder.init_state(x.shape[0])
+            state = self.encoder.init_state(x.shape[0])
+            cache = Cache.from_legacy_cache([state])
     
-        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=(cache is not None))
+        use_cache = (cache is not None)
+        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=state, use_cache=use_cache)
+
+        for state in new_cache.states:
+            for sta in state:
+                sta.detach_()
 
         if(need_cache):
             return out, new_cache
@@ -43,10 +50,11 @@ class GLABlock(nn.Module):
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache and cache is None): # either cache != None or need_cache == True we must use inference_params
             cache = self.encoder.init_state(x.shape[0])
-    
-        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=(cache is not None))
+
+        kvs = Cache.from_legacy_cache([cache]) 
+        out, _, new_cache = self.encoder(hidden_states=x, past_key_values=kvs, use_cache=(cache is not None))
 
         if(need_cache):
-            return out, new_cache
+            return out, new_cache[0]
         else:
             return out, None
