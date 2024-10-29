@@ -117,7 +117,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
-                        states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], state_dropout=0.20, reward_dropout=0.20,
+                        states, bactions, lactions, 
+                        r2go[:, :-1], # Rewards Input
+                        rewards[:, :-1], # Rewards Output
+                        state_dropout=0.20, reward_dropout=0.20,
                         start_position=start_position)
                     causal_loss = (train_config.lossweight_worldmodel_states * loss["wm-s"]
                             + train_config.lossweight_worldmodel_rewards * loss["wm-r"]

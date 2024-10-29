@@ -26,7 +26,7 @@ class AnyMDPRSA(RSADecisionModel):
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
-            log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model))
+            log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model)))
 
     def set_train_config(self, config):
         if(config.has_attr("frozen_modules")):
