@@ -4,6 +4,8 @@ run_name: Test
 log_config:
   use_tensorboard: True
   tensorboard_log: ./runs/
+  training_log: ./runs/train.log
+  evaluation_log: ./runs/eval.log
 
 model_config:
   context_warmup: 1536
