@@ -11,4 +11,7 @@ setup(
         'restools>=0.0.0.8',
         'mamba-ssm==2.2.2'
     ],
+    setup_requires=[
+        'git+https://github.com/sustcsonglin/flash-linear-attention'
+    ],
 )

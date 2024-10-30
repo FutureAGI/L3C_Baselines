@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from collections import defaultdict
 
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
@@ -27,9 +27,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
+        device_type = 'cuda'
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
     else:
         device = torch.device('cpu')
+        device_type = 'cpu'
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
     if(main_rank is None):
@@ -64,12 +66,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if(main):
         logger = Logger("iteration", "segment", "learning_rate", 
                 "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
-                sum_iter=len(dataloader), use_tensorboard=True, field=f"runs/train-{run_name}")
+                sum_iter=len(dataloader), use_tensorboard=True, field=f"runs2/train-{run_name}")
         eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
         logger_eval = []
         for i in range(eval_seg_num):
             logger_eval.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-Seg{i}"))
+                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs2/validate-{run_name}-Seg{i}"))
     else:
         logger_eval = None
 
@@ -95,7 +97,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                                   strict_check=False)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
+    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
 
     # main training loop
@@ -113,11 +115,17 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
             optimizer.zero_grad()
             for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                         train_config.seq_len, train_config.seg_len, device, 
-                        (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
-                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
+                        (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
+                with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp, device_type=device_type):
                     # Calculate THE LOSS
                     loss = model.module.sequential_loss(
-                        states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], state_dropout=0.20, reward_dropout=0.20,
+                        r2go[:, :-1], # Prompts
+                        states, 
+                        rewards, # Rewards 
+                        bactions, 
+                        lactions, 
+                        state_dropout=0.20, 
+                        reward_dropout=0.20,
                         start_position=start_position)
                     causal_loss = (train_config.lossweight_worldmodel_states * loss["wm-s"]
                             + train_config.lossweight_worldmodel_rewards * loss["wm-r"]
@@ -212,10 +220,15 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
         r2goarr = rewards2go(rarr)
         for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                     config.seq_len, config.seg_len, device, 
-                    (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
+                    (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
             with torch.no_grad():
                 loss = model.module.sequential_loss(
-                            states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position)
+                            r2go[:, :-1],
+                            states, 
+                            rewards, 
+                            bactions, 
+                            lactions, 
+                            r2go[:, 1:], start_position=start_position)
 
             stat[sub_idx].add_with_safety(rank, 
                                 loss_wm_s=loss["wm-s"], 

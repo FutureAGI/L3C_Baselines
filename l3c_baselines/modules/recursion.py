@@ -5,7 +5,8 @@ from torch.nn import functional as F
 
 class SimpleLSTM(nn.Module):
     def __init__(self, io_size:int=512, 
-                 hidden_size:int=512):
+                 hidden_size:int=512,
+                 layer_idx:int=0):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.lstm = nn.LSTM(io_size, hidden_size, batch_first=True)
@@ -84,7 +85,8 @@ class PRNNCell(nn.Module):
 
 class PRNN(nn.Module):
     def __init__(self, io_size:int=256, 
-                 hidden_size:int=128):
+                 hidden_size:int=128,
+                 layer_idx:int=0):
         super(PRNN, self).__init__()
         self.hidden_size = hidden_size
         self.prnn_cell = PRNNCell(io_size, hidden_size) 

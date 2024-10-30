@@ -40,6 +40,20 @@ def format_cache(cache, prefix=''):
     else:
         return prefix + ' ' + str(type(cache))
 
+def memory_cpy(cache):
+    if(cache is None):
+        return None
+    elif(isinstance(cache, torch.Tensor)):
+        return cache.detach().clone()
+    elif(isinstance(cache, list)):
+        return [memory_cpy(c) for c in cache]
+    elif(isinstance(cache, tuple)):
+        return tuple([memory_cpy for c in cache])
+    elif(hasattr(cache, 'clone')):
+        return cache.clone()
+    else:
+        return cache
+
 def model_path(save_model_path, epoch_id):
     directory_path = '%s/%02d/' % (save_model_path, epoch_id)
     if not os.path.exists(directory_path):

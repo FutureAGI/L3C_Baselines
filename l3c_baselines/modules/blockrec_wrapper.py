@@ -11,7 +11,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
-from l3c_baselines.utils import format_cache
+from l3c_baselines.utils import memory_cpy, format_cache, log_warn, log_fatal
+
 
 class BlockRecurrentWrapper(nn.Module):
     """
@@ -40,14 +41,12 @@ class BlockRecurrentWrapper(nn.Module):
                     new_cache.append(torch.cat((mem, ca), dim=1))
             elif(self.memory is not None):
                 new_cache = self.memory
-            elif(cache is not None):
-                new_cache = cache
             else:
-                new_cache = None
+                new_cache = memory_cpy(cache)
             return new_cache
         elif(self.memory_type == "mem"):
             if(cache is not None):
-                new_cache = cache
+                new_cache = memory_cpy(cache)
             else:
                 new_cache = self.memory
             return new_cache
@@ -56,38 +55,33 @@ class BlockRecurrentWrapper(nn.Module):
         # Updates the Memory and Cache
         # For KV cache, in case the memory + cache > 2 * memory_length, we update the memory
         # Else, we keep the cache and the memory
+        # We always keep memory detached and independent from the computation graph
         if(self.memory_type == "kv"):
             if(cache is not None):
-                self.memory = [c[:, -self.mem_len:].clone().detach() for c in cache]
+                self.memory = [c[:, -self.mem_len:].detach().clone() for c in cache]
             else:
                 self.memory = None
             return None
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
-            self.memory = []
-            for l_cache in cache:
-                mem = ()
-                for lt_cache in l_cache:
-                    mem += (lt_cache.clone().detach(),)
-                self.memory.append(mem)
-            return cache
+            self.memory = memory_cpy(cache)
         else:
-            raise Exception(f"No such memory type: {self.memory_type}")
+            log_fatal(f"No such memory type: {self.memory_type}")
 
     def update_cache_only(self, cache):
         if(self.memory_type == 'kv'):
             if(self.memory is None):
-                return cache
+                return memory_cpy(cache)
             else:
                 new_cache = []
                 for m,c in zip(self.memory, cache):
                     m_len = m.shape[1]
-                    new_cache.append(c[m_len:])
+                    new_cache.append(c[m_len:].detach().clone())
                 return new_cache
         elif(self.memory_type == "mem"):
-            return cache
+            return memory_cpy(cache)
         else:
-            raise Exception(f"No such memory type: {self.memory_type}")
+            log_fatal(f"No such memory type: {self.memory_type}")
             
     def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1, update_memory=True):
         # when update memory = False, inference won't update the memory, but will update the cache
@@ -102,6 +96,5 @@ class BlockRecurrentWrapper(nn.Module):
             new_cache = self.update_cache_only(new_cache)
         else:
             new_cache = None
-        #print(new_cache[0][0].shape, torch.sum(new_cache[0][0]), new_cache[0][1].shape, torch.sum(new_cache[0][1]))
 
         return output, new_cache
