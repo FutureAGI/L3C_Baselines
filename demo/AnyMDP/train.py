@@ -23,7 +23,7 @@ from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
-def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
+def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -62,6 +62,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     # Initialize the Dataset and DataLoader
     dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
+    run_name = config.run_name
 
     # Initialize the Logger
     logger = Logger("learning_rate", 
@@ -113,7 +114,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                                   strict_check=False)
 
     # Perform the first evaluation
-    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
 
     # main training loop
@@ -290,6 +291,6 @@ if __name__=='__main__':
     os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
 
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, config, 0, config.run_name),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
