@@ -64,23 +64,36 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
     # Initialize the Logger
-    if(main):
-        logger = Logger("iteration", "segment", "learning_rate", 
-                "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
-                sum_iter=len(dataloader), use_tensorboard=log_config.use_tensorboard, 
-                field=f"{log_config.tensorboard_log}/train-{run_name}")
-        eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
-        logger_eval = []
-        for i in range(eval_seg_num):
-            logger_eval.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
-                    sum_iter=train_config.max_epochs, use_tensorboard=log_config.use_tensorboard, 
-                    field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
-    else:
-        logger_eval = None
+    logger = Logger("learning_rate", 
+                    "loss_worldmodel_state", 
+                    "loss_worldmodel_reward", 
+                    "loss_policymodel",
+                    "entropy",
+                    max_iter=len(dataloader), 
+                    use_tensorboard=log_config.use_tensorboard, 
+                    log_file=log_config.training_log,
+                    prefix=f"{run_name}-Training",
+                    on=main,
+                    field=f"{log_config.tensorboard_log}/train-{run_name}")
 
-    train_stat = DistStatistics("loss_worldmodel_state", "loss_worldmodel_reward", 
-                            "loss_policymodel", "entropy", "count")
+    # Evaluation Logger
+    logger_eval = []
+    for i in range((test_config.seq_len - 1) // test_config.seg_len + 1):
+        logger_eval.append(
+                Logger("validation_state_pred", 
+                       "validation_reward_pred", 
+                       "validation_policy",
+                       use_tensorboard=log_config.use_tensorboard,
+                       log_file=log_config.evaluation_log,
+                       prefix=f"{run_name}-Evaluation-{i}",
+                       on=main,
+                       field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
 
+    train_stat = DistStatistics("loss_worldmodel_state", 
+                                "loss_worldmodel_reward", 
+                                "loss_policymodel", 
+                                "entropy",
+                                "count")
 
     # Initialize the optimizers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
@@ -161,14 +174,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
 
             # Statistics
             stat_res = train_stat()
-            if(main):
-                lr = scheduler.get_last_lr()[0]
-                logger(batch_idx, sub_idx, lr, 
-                        stat_res["loss_worldmodel_state"], 
-                        stat_res["loss_worldmodel_reward"], 
-                        stat_res["loss_policymodel"], 
-                        stat_res["entropy"],
-                        epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+            logger(scheduler.get_last_lr()[0], 
+                    stat_res["loss_worldmodel_state"], 
+                    stat_res["loss_worldmodel_reward"], 
+                    stat_res["loss_policymodel"], 
+                    stat_res["entropy"],
+                    epoch=rid,
+                    iteration=batch_idx)
             train_stat.reset()
 
             # Safety Check and Save
@@ -244,12 +256,12 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
         if(main):
             log_progress((batch_idx + 1) / all_length)
 
-    if(main):
-        for i in range(seg_num):
-            stat_res = stat[i]()
-            logger[i](stat_res["loss_wm_s"], stat_res["loss_wm_r"], stat_res["loss_pm"],
-                    epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
     for i in range(seg_num):
+        stat_res = stat[i]()
+        logger[i](stat_res["loss_wm_s"], 
+                  stat_res["loss_wm_r"], 
+                  stat_res["loss_pm"],
+                  epoch=epoch_id)
         stat[i].reset()
 
 if __name__=='__main__':

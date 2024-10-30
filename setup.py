@@ -8,7 +8,7 @@ setup(
     install_requires=[
         'numpy>=1.18.0',
         'torch>=1.13.0', 
-        'restools>=0.0.0.8',
+        'restools>=0.0.0.10',
         'mamba-ssm==2.2.2',
         'fla@git+https://github.com/sustcsonglin/flash-linear-attention@main'
     ],
