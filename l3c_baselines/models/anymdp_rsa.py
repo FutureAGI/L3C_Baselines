@@ -19,7 +19,7 @@ class AnyMDPRSA(RSADecisionModel):
         super().__init__(config)
 
         loss_weight = torch.cat((
-                    torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
+                    torch.linspace(1.0e-3, 1.0, config.context_warmup).unsqueeze(0),
                     torch.full((1, config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=1)
         self.register_buffer('loss_weight', loss_weight)
         self.set_train_config(config)

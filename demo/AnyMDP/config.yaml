@@ -1,5 +1,10 @@
 ---
 run_name: Test
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: ./runs/
+
 model_config:
   context_warmup: 1536
   max_position_loss_weighting: 48000

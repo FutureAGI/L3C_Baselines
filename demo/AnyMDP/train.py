@@ -57,6 +57,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     # Example dataset and dataloader
     train_config = config.train_config
     test_config = config.test_config
+    log_config = config.log_config
 
     # Initialize the Dataset and DataLoader
     dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
@@ -66,12 +67,14 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if(main):
         logger = Logger("iteration", "segment", "learning_rate", 
                 "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
-                sum_iter=len(dataloader), use_tensorboard=True, field=f"runs2/train-{run_name}")
+                sum_iter=len(dataloader), use_tensorboard=log_config.use_tensorboard, 
+                field=f"{log_config.tensorboard_log}/train-{run_name}")
         eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
         logger_eval = []
         for i in range(eval_seg_num):
             logger_eval.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs2/validate-{run_name}-Seg{i}"))
+                    sum_iter=train_config.max_epochs, use_tensorboard=log_config.use_tensorboard, 
+                    field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
     else:
         logger_eval = None
 
@@ -144,9 +147,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
                 else:
                     causal_loss.backward()
+                clip_grad_norm_(model.module.parameters(), 1.0)
 
             if(train_config.use_scaler):
                 scaler.step(optimizer)
