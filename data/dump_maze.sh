@@ -7,9 +7,9 @@ fi
 echo "Output to $1"
 python3 gen_maze_record.py \
   --output_path $1 \
-  --task_source FILE \
+  --task_source NEW \
   --task_file $2 \
-  --max_steps 160 \
+  --max_steps 16000 \
   --reference_policy_config 1.0 \
   --behavior_policy_config \
   		0.02,0.10 \
@@ -59,6 +59,6 @@ python3 gen_maze_record.py \
 		0.25,0.90 \
 		0.25,0.95 \
   --start_index 0 \
-  --n_range 15,15 \
+  --n_range 15,16 \
   --epochs 64 \
-  --workers 8
+  --workers 32

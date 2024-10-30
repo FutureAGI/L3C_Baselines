@@ -84,9 +84,6 @@ def dump_maze(work_id, path_name, epoch_ids, n_range,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
     for idx in epoch_ids:
-        seed = int(idx + time.time() + work_id * 65536)
-        numpy.random.seed(seed)
-        random.seed(seed)
         behavior_mem_kr, behavior_noise = random.choice(behavior_configs)
         label_mem_kr = random.choice(label_configs)
 
@@ -97,17 +94,12 @@ def dump_maze(work_id, path_name, epoch_ids, n_range,
             # Resample the start position and commands sequence from certain tasks
             task = Resampler(random.choice(tasks_from_file))
         else:
-            n = random.choice(n_list)
-            n_landmarks = random.choice(n_landmarks_list)
-            density = random.choice(density_list)
+            print(n_range)
             task = MazeTaskSampler(n_range=n_range, allow_loops=True, 
                     landmarks_number_range=(6, 10),
                     commands_sequence = 10000,
                     verbose=False)
         task = Resampler(task)
-
-        print("\n\n--------\n\nRunning agents on maze_type=%s, task_type=%s, steps=%s, scale=%s...\n\n"%
-            (maze_type, task_type, max_steps, task.cell_walls.shape))
 
         maze_env.set_task(task)
         results = run_maze_epoch(
