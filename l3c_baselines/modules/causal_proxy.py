@@ -2,10 +2,13 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .mamba_minimal import Mamba
-from .recursion import PRNN, SimpleLSTM, MemoryLayers
+from .recursion import PRNN, SimpleLSTM
+from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
+from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
+from .gsa import GLABlock, GSABlock
+from .rwkv6 import RWKV6Layer
 
 class CausalBlock(nn.Module):
     """
@@ -13,8 +16,9 @@ class CausalBlock(nn.Module):
     """
     def __init__(self, config):
         super().__init__()
+        self.model_type = config.model_type.lower()
 
-        if(config.model_type == "TRANSFORMER"):
+        if(self.model_type == "transformer"):
             main_encoder = ARTransformerEncoder(
                 config.num_layers, 
                 config.hidden_size, 
@@ -24,35 +28,55 @@ class CausalBlock(nn.Module):
                 dropout=config.dropout, 
                 context_window=config.context_window
             )
-        elif(config.model_type == "LSTM"):
-            main_encoder = MemoryLayers(
-                config.hidden_size,
-                config.hidden_size,
-                config.inner_hidden_size,
-                SimpleLSTM,
+        elif(self.model_type == "gsa"):
+            main_encoder = MultiBlocks(
+                GSABlock,
                 config.num_layers,
-                dropout=config.dropout
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
+                num_slots=config.memory_length,
             )
-        elif(config.model_type == "PRNN"):
-            main_encoder = MemoryLayers(
-                config.hidden_size,
-                config.hidden_size,
-                config.inner_hidden_size,
-                PRNN,
+        elif(self.model_type == "gla"):
+            main_encoder = MultiBlocks(
+                GLABlock,
                 config.num_layers,
-                dropout=config.dropout
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
             )
-        elif(config.model_type == "MAMBA"):
-            main_encoder = Mamba(
+        elif(self.model_type == "mamba"):
+            main_encoder = MultiBlocks(
                 # This module uses roughly 3 * expand * d_model^2 parameters
-                config.hidden_size, # Model dimension d_model
+                MambaBlock,
                 config.num_layers,
-                d_state=config.d_state,  # SSM state expansion factor
-                d_conv=config.d_conv,    # Local convolution width
+                hidden=config.hidden_size,
+                fc_hidden=config.inner_hidden_size,
+                fc_dropout=config.dropout,
+                io_size=config.hidden_size,
+                d_state=config.d_state,
+                d_conv=config.d_conv,
+                max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
             )
+        elif(self.model_type == "rwkv6"):
+            main_encoder = MultiBlocks(
+                RWKV6Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                expand_k=config.expand_k,
+                expand_v=config.expand_v,
+                hidden_ratio=config.hidden_ratio,
+                intermediate_size=config.inner_hidden_size,
+                num_heads=config.nhead,
+            )
         else:
-            raise Exception("No such causal model: %s" % model_type)
+            raise Exception("No such causal model: %s" % config.model_type)
         
         self.need_reset = False
         if(config.use_blockrecurrence):

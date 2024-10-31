@@ -4,11 +4,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 class SimpleLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, io_size:int=512, 
+                 hidden_size:int=512,
+                 layer_idx:int=0):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
-        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
+        self.lstm = nn.LSTM(io_size, hidden_size, batch_first=True)
+        self.fc = nn.Linear(hidden_size, io_size)
 
     def forward(self, src, cache=None, need_cache=False):
         if(cache is None):
@@ -73,19 +75,22 @@ class PRNNCell(nn.Module):
         y = new_hidden.unsqueeze(2)
         y_ = torch.ones_like(y).to(inputs.device)
 
-        wih = wih * (1.0 - self.beta * forget_gate.unsqueeze(2)) + self.alpha * input_gate.unsqueeze(2) * (torch.bmm(y, x) * self.Wih_a +
-                torch.bmm(y_, x) * self.Wih_b +
-                torch.bmm(y, x_) * self.Wih_c +
-                torch.bmm(y_, x_) * self.Wih_d)
+        wih = wih * (1.0 - self.beta * forget_gate.unsqueeze(2)) + \
+                self.alpha * input_gate.unsqueeze(2) * (torch.bmm(y, x) * self.Wih_a +
+                        torch.bmm(y_, x) * self.Wih_b +
+                        torch.bmm(y, x_) * self.Wih_c +
+                        torch.bmm(y_, x_) * self.Wih_d)
 
         return new_hidden, wih
 
 class PRNN(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, io_size:int=256, 
+                 hidden_size:int=128,
+                 layer_idx:int=0):
         super(PRNN, self).__init__()
         self.hidden_size = hidden_size
-        self.prnn_cell = PRNNCell(input_size, hidden_size) 
-        self.fc = nn.Linear(hidden_size, output_size)
+        self.prnn_cell = PRNNCell(io_size, hidden_size) 
+        self.fc = nn.Linear(hidden_size, io_size)
 
     def forward(self, src, cache=None, need_cache=False):
         if(cache is None):
@@ -99,61 +104,3 @@ class PRNN(nn.Module):
         outputs = self.fc(torch.cat(hiddens, dim=1))
         new_cache = (h, W)
         return outputs, new_cache
-
-class WrapperMer(nn.Module):
-    def __init__(self, hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, dropout=0.1):
-        super(WrapperMer, self).__init__()
-        self.temporal_encoder = temporal_module(hidden_size, inner_hidden_size, hidden_size)
-
-        self.linear1 = nn.Linear(hidden_size, fc_hidden_size)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(fc_hidden_size, hidden_size)
-
-        self.norm1 = nn.LayerNorm(hidden_size, eps=1.0e-5)
-        self.norm2 = nn.LayerNorm(hidden_size, eps=1.0e-5)
-
-        self.activation = nn.GELU()
-
-    def forward(self, src, cache=None, need_cache=False):
-        # Residual Connection
-        norm_src = self.norm1(src)
-        outputs, cache = self.temporal_encoder(norm_src, cache=cache, need_cache=need_cache)
-
-        outputs = outputs + src
-
-        # FeedForward + Residual
-        outputs = outputs + self.dropout(self.linear2(self.dropout(self.activation(self.linear1(self.norm2(outputs))))))
-
-        return outputs, cache
-
-class MemoryLayers(nn.Module):
-    def __init__(self, hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, num_layers, dropout=0.1):
-        super(MemoryLayers, self).__init__()
-        self.num_layers = num_layers
-        self.layers = nn.ModuleList([WrapperMer(hidden_size, inner_hidden_size, fc_hidden_size, temporal_module, dropout=dropout) for _ in range(self.num_layers)])
-
-    def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
-        # Residual Connection
-        if(need_cache):
-            new_cache = []
-        else:
-            new_cache = None
-
-        output = src
-
-        for i, layer in enumerate(self.layers):
-            if(cache is None):
-                l_cache = None
-            else:
-                l_cache = cache[i]
-            output, n_cache = layer(output, cache=l_cache, need_cache=True)
-            if(need_cache):
-                new_cache.append(n_cache)
-
-        return output, new_cache
-
-if __name__=='__main__':
-    inputs = torch.randn(4, 8, 64)
-    model = MemoryLayers(64, 64, 256, SimpleLSTM, 3)
-    outputs, mems = model(inputs, need_cache=True)
-    print(outputs.shape, mems[0][0].shape, mems[0][1].shape, mems[1][0].shape, mems[1][1].shape)

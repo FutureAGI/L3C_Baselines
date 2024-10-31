@@ -13,9 +13,9 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
-from restools.logging import Logger, log_progress, log_debug, log_warn
 
 from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
 from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics
@@ -55,6 +55,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Example dataset and dataloader
     train_config = config.train_config
     test_config = config.test_config
+    log_config = config.log_config
 
     # Initialize the Dataset and DataLoader
     vae_dataset = MazeDataSet(train_config.data_path, train_config.seq_len_vae, verbose=main)
@@ -62,12 +63,49 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     vae_dataloader = PrefetchDataLoader(vae_dataset, batch_size=train_config.batch_size_vae, rank=rank, world_size=world_size)
     causal_dataloader = PrefetchDataLoader(causal_dataset, batch_size=train_config.batch_size_causal, rank=rank, world_size=world_size)
+    run_name = config.run_name
 
     # Initialize the Logger
-    if(main):
-        logger_causal = Logger("iteration", "segment", "learning_rate", "loss_worldmodel_raw", "loss_worldmodel_latent", "loss_policymodel", sum_iter=len(causal_dataloader), use_tensorboard=True)
-        logger_vae = Logger("iteration", "segment", "sigma", "lambda", "learning_rate", "reconstruction", "kl-divergence", sum_iter=len(vae_dataloader), 
-                use_tensorboard=True)
+    logger_causal = Logger("learning_rate", 
+                        "loss_worldmodel_raw", 
+                        "loss_worldmodel_latent", 
+                        "loss_policymodel", 
+                        on=main,
+                        max_iter=len(causal_dataloader), 
+                        use_tensorboard=log_config.use_tensorboard, 
+                        log_file=log_config.training_log_causal,
+                        prefix=f"{run_name}-Training-Causal",
+                        field=f"{log_config.tensorboard_log}/train-{run_name}")
+
+
+    logger_vae = Logger("sigma", 
+                        "lambda",
+                        "learning_rate",
+                        "reconstruction",
+                        "kl-divergence",
+                        on=main,
+                        max_iter=len(vae_dataloader), 
+                        use_tensorboard=log_config.use_tensorboard, 
+                        log_file=log_config.training_log_vae,
+                        prefix=f"{run_name}-Training-VAE",
+                        field=f"{log_config.tensorboard_log}/train-{run_name}")
+
+
+    logger_eval = []
+    for i in range((test_config.seq_len - 1) // test_config.seg_len + 1):
+        logger_eval.append(
+                Logger("validation_reconstruction", 
+                       "validation_worldmodel_raw", 
+                       "validation_worldmodel_latent",
+                       "validation_policymodel",
+                       use_tensorboard=log_config.use_tensorboard,
+                       log_file=log_config.evaluation_log,
+                       prefix=f"{run_name}-Evaluation-{i}",
+                       on=main,
+                       field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
+
+    train_stat_vae = DistStatistics("loss_rec", "loss_kl")
+    train_stat_causal = DistStatistics("loss_wm_raw", "loss_wm_latent", "loss_pm")
 
     # Initialize the loss weight schedulers (for vae)
     sigma_scheduler = train_config.sigma_scheduler
@@ -102,7 +140,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                                   strict_check=False)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
 
     # VAE training loop
@@ -112,8 +150,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
+            train_stat_vae.reset()
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
-                            train_config.seq_len_vae, train_config.seg_len_vae, device, *batch):
+                            train_config.seq_len_vae, train_config.seg_len_vae, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
                 vae_optimizer.zero_grad()
 
@@ -121,26 +160,36 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
                     vae_loss = loss["Reconstruction-Error"] + lambda_scheduler() * loss["KL-Divergence"]
 
+                train_stat_vae.add_with_safety(
+                    rank,
+                    loss_rec = loss["Reconstruction-Error"],
+                    loss_kl = loss["KL-Divergence"])
+
                 if(train_config.use_scaler):
                     scaler.scale(vae_loss).backward()
                     gradient_failsafe(model.module, vae_optimizer, scaler)
                     clip_grad_norm_(model.module.parameters(), 1.0)
-                    scaler.step(vae_optimizer)
-                    scaler.update()
                 else:
                     vae_loss.backward()
-                    vae_optimizer.step()
 
-                vae_scheduler.step()
-                sigma_scheduler.step()
-                lambda_scheduler.step()
+            if(train_config.use_scaler):
+                scaler.step(vae_optimizer)
+                scaler.update()
+            else:
+                vae_optimizer.step()
 
-                if(main):
-                    lr = vae_scheduler.get_last_lr()[0]
-                    lrec = float(loss["Reconstruction-Error"].detach().cpu().numpy())
-                    lkl = float(loss["KL-Divergence"].detach().cpu().numpy())
-                    logger_vae(batch_idx, sub_idx, sigma_scheduler(), lambda_scheduler(), 
-                            lr, lrec, lkl, epoch=rid, iteration=batch_idx, prefix="VAE")
+            vae_scheduler.step()
+            sigma_scheduler.step()
+            lambda_scheduler.step()
+
+            stat_res = train_stat_vae()
+            logger_vae(sigma_scheduler(), 
+                    lambda_scheduler(), 
+                    vae_scheduler.get_last_lr()[0],
+                    stat_res["loss_rec"],
+                    stat_res["loss_kl"],
+                    epoch=rid, 
+                    iteration=batch_idx)
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
@@ -158,9 +207,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             acc_iter += 1
             # Important: Must reset the model before each segment
             model.module.reset()
+            train_stat_causal.reset()
             start_position = 0
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
-                        train_config.seq_len_causal, train_config.seg_len_causal, device, *batch):
+                    train_config.seq_len_causal, train_config.seg_len_causal, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
 
                 causal_optimizer.zero_grad()
@@ -175,25 +225,34 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                             + train_config.lossweight_l2 * loss["causal-l2"])
                 start_position += bacti.shape[1]
 
+                train_stat_causal.add_with_safety(
+                    rank,
+                    loss_wm_raw = loss["wm-raw"],
+                    loss_wm_latent = loss["wm-latent"],
+                    loss_pm = loss["pm"])
+
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
                     gradient_failsafe(model.module, causal_optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
-                    scaler.step(causal_optimizer)
-                    scaler.update()
                 else:
                     causal_loss.backward()
-                    causal_optimizer.step()
+                clip_grad_norm_(model.module.parameters(), 1.0)
 
+            if(train_config.use_scaler):
+                scaler.step(causal_optimizer)
+                scaler.update()
+            else:
                 causal_optimizer.step()
-                causal_scheduler.step()
+            causal_scheduler.step()
 
-                if(main):
-                    lr = causal_scheduler.get_last_lr()[0]
-                    fobs = float(loss["wm-raw"].detach().cpu().numpy())
-                    fz = float(loss["wm-latent"].detach().cpu().numpy())
-                    fact = float(loss["pm"].detach().cpu().numpy())
-                    logger_causal(batch_idx, sub_idx, lr, fobs, fz, fact, epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+            if(main):
+                stat_res = train_stat_causal()
+                logger_causal(causal_scheduler.get_last_lr()[0],
+                              stat_res["loss_wm_raw"], 
+                              stat_res["loss_wm_latent"], 
+                              stat_res["loss_pm"], 
+                              epoch=rid, 
+                              iteration=batch_idx)
 
             if(main and train_config.has_attr("max_save_iterations") 
                             and acc_iter > train_config.max_save_iterations 
@@ -227,18 +286,23 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         model.eval()
         # Perform the evaluation according to interval
         if(epoch_id % train_config.evaluation_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
+            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
 
-def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id, logger):
     # Example training loop
 
     dataset = MazeDataSet(config.data_path, config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
 
-    results = []
     all_length = len(dataloader)
 
-    stat = DistStatistics("loss_reconstruction", "loss_wm_raw", "loss_wm_latent", "loss_pm", "count")
+    stats = []
+    for i in range(len(logger)):
+        stats.append(DistStatistics("loss_rec", 
+                            "loss_wm_raw", 
+                            "loss_wm_latent", 
+                            "loss_pm", 
+                            "count"))
 
     if(main):
         log_debug("Start evaluation ...")
@@ -248,7 +312,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
         start_position = 0
         model.module.reset()
         for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
-                    config.seq_len, config.seg_len, device, *batch):
+                    config.seq_len, config.seg_len, device, (batch[0], 1), *batch[1:]):
             obs = obs.permute(0, 1, 4, 2, 3)
 
             with torch.no_grad():
@@ -256,8 +320,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.sequential_loss(
                             obs, bacti, lacti, bevs, start_position=start_position)
 
-            stat.add_with_safty(rank, 
-                                loss_reconstruction=loss_vae["Reconstruction-Error"], 
+            stats[sub_idx].add_with_safety(rank, 
+                                loss_rec=loss_vae["Reconstruction-Error"], 
                                 loss_wm_raw=loss["wm-raw"], 
                                 loss_wm_latent=loss["wm-latent"], 
                                 loss_pm=loss["pm"],
@@ -267,11 +331,13 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
 
         if(main):
             log_progress((batch_idx + 1) / all_length)
-
-    if(main):
+    for stat, log in zip(stats, logger):
         stat_res = stat()
-        logger = Logger(*stat_res.keys())
-        logger(*stat_res.values(), epoch=epoch_id, prefix="EvaluationResults")
+        log(stat_res["loss_rec"], 
+                stat_res["loss_wm_raw"], 
+                stat_res["loss_wm_latent"], 
+                stat_res["loss_pm"], 
+                epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

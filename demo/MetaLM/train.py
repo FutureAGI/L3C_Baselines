@@ -16,7 +16,7 @@ from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearSchedul
 from l3c_baselines.utils import show_bar, model_path
 from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
 from l3c_baselines.models import LanguageModel
-from restools.logging import Logger, log_progress, log_debug, log_warn
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -56,8 +56,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
-    if(main):
-        logger = Logger("iteration", "learning_rate", "perplexity", sum_iter=len(dataloader), use_tensorboard=True)
+    logger = Logger("learning_rate", "perplexity", 
+                on=main, max_iter=len(dataloader), use_tensorboard=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, train_config.lr_decay_interval))
@@ -105,12 +105,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 scheduler.step()
 
-                if(main):
-                    logger(batch_idx, 
-                               scheduler.get_last_lr()[0], 
-                               float(loss.detach().cpu().numpy()), 
-                               iteration=batch_idx, 
-                               epoch=epoch_id)
+                logger(scheduler.get_last_lr()[0], 
+                       float(loss.detach().cpu().numpy()), 
+                       iteration=batch_idx, 
+                       epoch=epoch_id)
 
     # Example training loop
     for epoch_id in range(1, train_config.max_epochs + 1):
@@ -151,7 +149,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                 loss = model.module.perplexity(fea, lab)
                 cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
 
-            stat.add_with_safty(rank, 
+            stat.add_with_safety(rank, 
                                 perplexity=loss, 
                                 count=cnt)
 

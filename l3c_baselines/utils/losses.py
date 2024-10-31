@@ -35,7 +35,7 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
     reudce for dim=1
     """
     gt_logits = F.one_hot(act_gt, act_out.shape[-1])
-    preds = torch.log(act_out) * ((1.0 - act_out) ** gamma)
+    preds = torch.log(act_out + 1.0e-10) * ((1.0 - act_out) ** gamma)
     ce_loss = -torch.sum(preds * gt_logits, dim=-1)
 
     if mask is not None:
@@ -54,3 +54,14 @@ def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
             ce_loss = torch.mean(ce_loss, dim=0)
 
     return ce_loss
+
+def ent_loss(act_out, reduce="mean"):
+    """
+    input shape: (B, T, H)
+    mask shape: (B, T)
+    reudce for dim=1
+    """
+    if reduce == "mean":
+        return torch.mean(torch.log(act_out + 1.0e-10) * act_out)
+    else:
+        return torch.mean(torch.log(act_out + 1.0e-10) * act_out, dim=0)
