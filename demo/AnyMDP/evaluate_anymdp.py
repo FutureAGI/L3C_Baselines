@@ -50,10 +50,10 @@ def calculate_result_matrix(loss_matrix):
 
     return result_matrix
 
-def string_mean_var(downsample_length, mean, var):
+def string_mean_var(downsample_length, res):
     string=""
-    for i in range(mean.shape[0]):
-        string += f'{downsample_length * i}\t{mean[i]}\t{var[i]}\n'
+    for i in range(res["mean"].shape[0]):
+        string += f'{downsample_length * i}\t{res["mean"][i]}\t{res["var"][i]}\n'
     return string
 
 def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample_length = 10):
@@ -67,7 +67,7 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
     if config.downsample_size is not None:
         downsample_length = config.downsample_size
 
-    stat2 = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count", pointwise=True)
+    stat2 = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds")
     if(main):
         log_debug("Start evaluation ...")
         log_progress(0)
@@ -122,9 +122,6 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
         loss_pm_T_batch = torch.cat((loss_pm_T_batch, loss_pm_ds), dim=0) if loss_pm_T_batch is not None else loss_pm_ds
         loss_count_batch += dim_1
 
-        
-        
-
         if(main):
             log_progress((batch_idx + 1) / all_length)
 
@@ -150,21 +147,24 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
     if(main):
         if not os.path.exists(config.output):
             os.makedirs(config.output)
-        stat_res_wm_s = string_mean_var(downsample_length, stat2()["loss_wm_s_ds"][0], stat2()["loss_wm_s_ds"][1])
+
+        stat_res = stat2()
+
+        stat_res_wm_s = string_mean_var(downsample_length, stat_res["loss_wm_s_ds"])
         file_path = f'{config.output}/position_wise_wm_s.txt'
         if os.path.exists(file_path):
             os.remove(file_path)
         with open(file_path, 'w') as f_model:
             f_model.write(stat_res_wm_s)
         
-        stat_res_wm_r = string_mean_var(downsample_length, stat2()["loss_wm_r_ds"][0], stat2()["loss_wm_r_ds"][1])
+        stat_res_wm_r = string_mean_var(downsample_length, stat_res["loss_wm_r_ds"])
         file_path = f'{config.output}/position_wise_wm_r.txt'
         if os.path.exists(file_path):
             os.remove(file_path)
         with open(file_path, 'w') as f_model:
             f_model.write(stat_res_wm_r)
         
-        stat_res_pm = string_mean_var(downsample_length, stat2()["loss_pm_ds"][0], stat2()["loss_pm_ds"][1])
+        stat_res_pm = string_mean_var(downsample_length, stat_res["loss_pm_ds"])
         file_path = f'{config.output}/position_wise_pm.txt'
         if os.path.exists(file_path):
             os.remove(file_path)

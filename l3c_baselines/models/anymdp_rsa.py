@@ -8,7 +8,7 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, ent_loss, img_pro, img_post
+from l3c_baselines.utils import weighted_loss, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.utils import log_debug, log_warn, log_fatal
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
@@ -82,7 +82,7 @@ class AnyMDPRSA(RSADecisionModel):
                             state_dropout=0.0,
                             reward_dropout=0.0,
                             update_memory=True,
-                            gamma = 0.98,
+                            loss_is_weighted=True,
                             reduce_dim=1):
     
         # Predict the latent representation of action and next frame (World Model)
@@ -97,15 +97,34 @@ class AnyMDPRSA(RSADecisionModel):
         seq_len = a_pred.shape[1]
         ps, pe = start_position, start_position + seq_len
 
+        if(loss_is_weighted):
+            loss_weight = self.loss_weight[:, ps:pe]
+        else:
+            loss_weight = None
+
         # World Model Loss - States and Rewards
-        loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
-        loss["wm-r"] = mse_loss_mask(r_pred, rewards.view(*rewards.shape,1), 
-                                    mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
+        loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
+                                     gt=observations[:, 1:], 
+                                     loss_type="mse",
+                                     loss_wht=loss_weight, 
+                                     reduce_dim=reduce_dim,
+                                     need_cnt=True)
+        loss["wm-r"] = weighted_loss(r_pred, 
+                                     gt=rewards.view(*rewards.shape,1), 
+                                     loss_type="mse",
+                                     loss_wht=loss_weight, 
+                                     reduce_dim=reduce_dim)
 
         # Policy Model and Entropy Loss
-        loss["pm"] = ce_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
-        loss["ent"] = ent_loss(a_pred, reduce_dim=reduce_dim)
-        loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=a_pred.device)
+        loss["pm"] = weighted_loss(a_pred, 
+                                   gt=label_actions, 
+                                   loss_type="ce",
+                                   loss_wht=loss_weight, 
+                                   reduce_dim=reduce_dim)
+        loss["ent"] = weighted_loss(a_pred, 
+                                    loss_type="ent", 
+                                    reduce_dim=reduce_dim)
+
         loss["causal-l2"] = parameters_regularization(self)
 
         return loss
