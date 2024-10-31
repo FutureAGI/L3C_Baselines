@@ -23,7 +23,7 @@ from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
-def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
+def main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -57,27 +57,44 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     # Example dataset and dataloader
     train_config = config.train_config
     test_config = config.test_config
+    log_config = config.log_config
 
     # Initialize the Dataset and DataLoader
     dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
+    run_name = config.run_name
 
     # Initialize the Logger
-    if(main):
-        logger = Logger("iteration", "segment", "learning_rate", 
-                "loss_worldmodel_state", "loss_worldmodel_reward", "loss_policymodel", "entropy",
-                sum_iter=len(dataloader), use_tensorboard=True, field=f"runs2/train-{run_name}")
-        eval_seg_num = (test_config.seq_len - 1) // test_config.seg_len + 1
-        logger_eval = []
-        for i in range(eval_seg_num):
-            logger_eval.append(Logger("validation_state_pred", "validation_reward_pred", "validation_policy",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs2/validate-{run_name}-Seg{i}"))
-    else:
-        logger_eval = None
+    logger = Logger("learning_rate", 
+                    "loss_worldmodel_state", 
+                    "loss_worldmodel_reward", 
+                    "loss_policymodel",
+                    "entropy",
+                    max_iter=len(dataloader), 
+                    use_tensorboard=log_config.use_tensorboard, 
+                    log_file=log_config.training_log,
+                    prefix=f"{run_name}-Training",
+                    on=main,
+                    field=f"{log_config.tensorboard_log}/train-{run_name}")
 
-    train_stat = DistStatistics("loss_worldmodel_state", "loss_worldmodel_reward", 
-                            "loss_policymodel", "entropy", "count")
+    # Evaluation Logger
+    logger_eval = []
+    for i in range((test_config.seq_len - 1) // test_config.seg_len + 1):
+        logger_eval.append(
+                Logger("validation_state_pred", 
+                       "validation_reward_pred", 
+                       "validation_policy",
+                       use_tensorboard=log_config.use_tensorboard,
+                       log_file=log_config.evaluation_log,
+                       prefix=f"{run_name}-Evaluation-{i}",
+                       on=main,
+                       field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
 
+    train_stat = DistStatistics("loss_worldmodel_state", 
+                                "loss_worldmodel_reward", 
+                                "loss_policymodel", 
+                                "entropy",
+                                "count")
 
     # Initialize the optimizers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
@@ -97,7 +114,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                                   strict_check=False)
 
     # Perform the first evaluation
-    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
 
     # main training loop
@@ -144,9 +161,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
                 else:
                     causal_loss.backward()
+                clip_grad_norm_(model.module.parameters(), 1.0)
 
             if(train_config.use_scaler):
                 scaler.step(optimizer)
@@ -158,14 +175,13 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
 
             # Statistics
             stat_res = train_stat()
-            if(main):
-                lr = scheduler.get_last_lr()[0]
-                logger(batch_idx, sub_idx, lr, 
-                        stat_res["loss_worldmodel_state"], 
-                        stat_res["loss_worldmodel_reward"], 
-                        stat_res["loss_policymodel"], 
-                        stat_res["entropy"],
-                        epoch=rid, iteration=batch_idx, prefix="CAUSAL")
+            logger(scheduler.get_last_lr()[0], 
+                    stat_res["loss_worldmodel_state"], 
+                    stat_res["loss_worldmodel_reward"], 
+                    stat_res["loss_policymodel"], 
+                    stat_res["entropy"],
+                    epoch=rid,
+                    iteration=batch_idx)
             train_stat.reset()
 
             # Safety Check and Save
@@ -241,12 +257,12 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
         if(main):
             log_progress((batch_idx + 1) / all_length)
 
-    if(main):
-        for i in range(seg_num):
-            stat_res = stat[i]()
-            logger[i](stat_res["loss_wm_s"], stat_res["loss_wm_r"], stat_res["loss_pm"],
-                    epoch=epoch_id, iteration=epoch_id, prefix=f"EvaluationResults-Seg{i}")
     for i in range(seg_num):
+        stat_res = stat[i]()
+        logger[i](stat_res["loss_wm_s"], 
+                  stat_res["loss_wm_r"], 
+                  stat_res["loss_pm"],
+                  epoch=epoch_id)
         stat[i].reset()
 
 if __name__=='__main__':
@@ -275,6 +291,6 @@ if __name__=='__main__':
     os.environ['MASTER_PORT'] = config.train_config.master_port        # Example port, choose an available port
 
     mp.spawn(main_epoch,
-             args=(use_gpu, world_size, config, 0, config.run_name),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)

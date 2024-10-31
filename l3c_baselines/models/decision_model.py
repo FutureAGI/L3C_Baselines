@@ -34,10 +34,9 @@ class SADecisionModel(nn.Module):
         """
         B = s_arr.shape[0]
         NT = s_arr.shape[1]
-        Ba = a_arr.shape[0]
-        NTa = a_arr.shape[1]
+        H = s_arr.shape[2]
 
-        assert Ba == B and NTa == NT
+        assert s_arr.shape[:2] == a_arr.shape[:2]
 
         # Add state dropouts
         device = s_arr.device
