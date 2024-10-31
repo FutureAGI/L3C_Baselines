@@ -15,9 +15,6 @@ def focal_loss(out, gt, gamma=0):
     return -torch.sum(preds * gt_logits, dim=-1)
 
 def metrics(out, gt=None, loss_type='ent', **kwargs):
-    dim = out.dim()
-    assert dim >= 3 and dim == gt.dim(), \
-        "Input must be at least 3 dimension (bsz, time, *) and the label and prediction must be equal"
     if(loss_type == 'mse'):
         assert gt is not None, "Ground Truth Must Be Provided When Using MSE Loss"
         loss_array = torch.mean((out - gt)) ** 2, dim=[i for i in range(2, dim)])

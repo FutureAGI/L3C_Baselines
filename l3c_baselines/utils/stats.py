@@ -47,27 +47,27 @@ class DistStatistics(object):
         assert count.numel() == 1, "count must have only one element"
 
         for key, value in kwargs.items():
-            if torch.isinf(value).any() or torch.isnan(value).any():
-                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
-                zeroflag = True
-        safe_stats = dict()
-        if zeroflag:
-            for key, value in kwargs.items():
-                safe_stats[key] = torch.zeros_like(value)
-        else:
-            for key, value in kwargs.items():
-                safe_stats[key] = value.detach()
-
-        for key, value in safe_stats.items():
             if(key not in self._data):
-                raise KeyError(f"Key {key} not registered in Statistics class")
+                log_warn(f"Key {key} not registered in DistStatistics object")
+            
+            if isinstance(value, list) or isinstance(value, tuple):
+                fvalue = torch.stack(value, dim=0).to(device)
+            elif(isinstance(value, torch.Tensor)):
+                fvalue = value.to(device)
+            else:
+                fvalue = torch.Tensor(value).to(device)
+
+            if torch.isinf(fvalue).any() or torch.isnan(fvalue).any():
+                log_warn(f"'Device:{device}' stating '{key}' has inf/NaN")
+                fvalue = torch.where(torch.isfinite(fvalue), 
+                                     fvalue, torch.zeros_like(fvalue))
             
             #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
-            gathered_tensors = [torch.zeros_like(value) for _ in range(dist.get_world_size())]
+            gathered_tensors = [torch.zeros_like(fvalue) for _ in range(dist.get_world_size())]
             gathered_counts = [torch.zeros_like(count) for _ in range(dist.get_world_size())]
 
             # gather values from all devices
-            dist.all_gather(gathered_tensors, value.data)
+            dist.all_gather(gathered_tensors, fvalue.data)
             dist.all_gather(gathered_counts, count.data)
 
             #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
@@ -93,9 +93,14 @@ class DistStatistics(object):
         stat_res = dict()
         for key in self.keys:
             mean,var,cnt = self._stat(key)
+            assert cnt.numel() == 1
+            cnt = int(cnt)
             if(mean.numel() < 2):
-                mean = float(mean)
-                var = float(var)
+                mean = mean.squeeze().item()
+                var = var.squeeze().item()
+            else:
+                mean = mean.squeeze().tolist()
+                var = var.squeeze().tolist()
             stat_res[key] = {"mean":mean,"var":var, 'cnt': cnt}
         if(reset):
             self.reset()

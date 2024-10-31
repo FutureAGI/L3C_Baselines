@@ -93,8 +93,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     train_stat = DistStatistics("loss_worldmodel_state", 
                                 "loss_worldmodel_reward", 
                                 "loss_policymodel", 
-                                "entropy",
-                                "count")
+                                "entropy")
 
     # Initialize the optimizers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
@@ -111,7 +110,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             train_config.load_model_path.lower() != 'none'):
         model = custom_load_model(model, f'{train_config.load_model_path}/model.pth', 
                                   black_list=train_config.load_model_parameter_blacklist, 
-                                  strict_check=False)
+                                  strict_check=False, verbose=main)
 
     # Perform the first evaluation
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
@@ -176,10 +175,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             # Statistics
             stat_res = train_stat()
             logger(scheduler.get_last_lr()[0], 
-                    stat_res["loss_worldmodel_state"], 
-                    stat_res["loss_worldmodel_reward"], 
-                    stat_res["loss_policymodel"], 
-                    stat_res["entropy"],
+                    stat_res["loss_worldmodel_state"]["mean"], 
+                    stat_res["loss_worldmodel_reward"]["mean"], 
+                    stat_res["loss_policymodel"]["mean"], 
+                    stat_res["entropy"]["mean"],
                     epoch=rid,
                     iteration=batch_idx)
             train_stat.reset()
@@ -223,11 +222,10 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
     seg_num = (config.seq_len - 1) // config.seg_len + 1
 
-    stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm", "count") for _ in range(seg_num)]
+    stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm") for _ in range(seg_num)]
 
-    if(main):
-        log_debug("Start evaluation ...")
-        log_progress(0)
+    log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
+    log_progress(0, on=main)
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
@@ -254,8 +252,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
             start_position += bactions.shape[1]
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
+        log_progress((batch_idx + 1) / all_length, on=main)
 
     for i in range(seg_num):
         stat_res = stat[i]()

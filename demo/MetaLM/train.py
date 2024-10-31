@@ -67,7 +67,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             train_config.load_model_path.lower() != 'none'):
         model = custom_load_model(model, 
                                   f'{train_config.load_model_path}/model.pth', 
-                                  strict_check=False)
+                                  strict_check=False,
+                                  verbose=main)
 
     # Perform the first evaluation
     test_config = config.test_config
@@ -96,19 +97,22 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 if(train_config.use_scaler):
                     scaler.scale(loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
                 else:
                     loss.backward()
-                    optimizer.step()
 
-                scheduler.step()
+                clip_grad_norm_(model.module.parameters(), 1.0)
 
-                logger(scheduler.get_last_lr()[0], 
-                       float(loss.detach().cpu().numpy()), 
-                       iteration=batch_idx, 
-                       epoch=epoch_id)
+            if(train_config.use_scaler):
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            scheduler.step()
+
+            logger(scheduler.get_last_lr()[0], 
+                    float(loss.detach().cpu().numpy()), 
+                    iteration=batch_idx, 
+                    epoch=epoch_id)
 
     # Example training loop
     for epoch_id in range(1, train_config.max_epochs + 1):
@@ -133,9 +137,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     dataloader = DataLoader(dataset, batch_size=config.batch_size, sampler=sampler)
     all_length = len(dataloader)
 
-    if(main):
-        log_debug("Start Evaluation...")
-        log_progress(0)
+    log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
+    log_progress(0, on=main)
+
     stat = DistStatistics("perplexity", "count")
 
     for batch_idx, (feature, label) in enumerate(dataloader):
@@ -153,11 +157,11 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
                                 perplexity=loss, 
                                 count=cnt)
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
+        log_progress((batch_idx + 1) / all_length, on=main)
+
+    stat_res = stat()
 
     if(main):
-        stat_res = stat()
         logger = Logger(*stat_res.keys())
         logger(*stat_res.values(), epoch=epoch_id)
 
