@@ -24,7 +24,7 @@ class VAE(nn.Module):
         z_log_var = self.layer_var(hidden)
         return z_exp.reshape(nB, nT, self.hidden_size), z_log_var.reshape(nB, nT, self.hidden_size)
 
-    def reconstruct(self,l3c_baselines. inputs, _sigma=1.0):
+    def reconstruct(self,inputs, _sigma=1.0):
         nB, nT, nC, nW, nH = inputs.shape
         z_exp, z_log_var = self.forward(inputs)
         epsilon = torch.randn_like(z_log_var).to(z_log_var.device)

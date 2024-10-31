@@ -83,7 +83,7 @@ class AnyMDPRSA(RSADecisionModel):
                             reward_dropout=0.0,
                             update_memory=True,
                             gamma = 0.98,
-                            reduce='mean'):
+                            reduce_dim=1):
     
         # Predict the latent representation of action and next frame (World Model)
         s_pred, a_pred, r_pred, _ = self.forward(prompts, observations[:, :-1], behavior_actions, rewards,
@@ -98,9 +98,9 @@ class AnyMDPRSA(RSADecisionModel):
         ps, pe = start_position, start_position + seq_len
 
         # World Model Loss - States and Rewards
-        loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-s"] = ce_loss_mask(s_pred, observations[:, 1:], mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
         loss["wm-r"] = mse_loss_mask(r_pred, rewards.view(*rewards.shape,1), 
-                                    mask=self.loss_weight[:, ps:pe], reduce=reduce)
+                                    mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
 
         # Policy Model and Entropy Loss
         loss["pm"] = ce_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)

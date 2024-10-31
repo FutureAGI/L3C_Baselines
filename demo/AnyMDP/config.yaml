@@ -158,8 +158,9 @@ test_config:
     master_port: "12201"
     load_model_path: None
     seq_len: 16000
-    seg_len: 1000
-    downsample_size: 100
+    seg_len: 4000
+    downsample_size: 10
+    output: "./plot/"
 
 demo_config:
     master_port: "12211"

@@ -164,8 +164,9 @@ class DistStatistics(object):
     """
     Provide distributed statistics
     """
-    def __init__(self, *keys, verbose=False):
+    def __init__(self, *keys, verbose=False, pointwise=False):
         self.keys = keys
+        self.pointwise = pointwise
         if("count" in keys):
             self.is_average = True
             if(verbose):
@@ -205,40 +206,6 @@ class DistStatistics(object):
                 value *= cnt
             dist.all_reduce(value.data)
             self._data[key].append(value.cpu().detach())
-
-    def __call__(self):
-        stat_res = dict()
-        for key in self.keys:
-            stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
-            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
-                stat_res[key] = float(stat_res[key])
-        if(self.is_average):
-            for key in self.keys:
-                if(key != "count"):
-                    stat_res[key] /= float(stat_res["count"])
-
-        return stat_res
-
-class DistStatistics2(object):
-    """
-    Provide distributed statistics, position wise analysis, calculate mean and std.
-    """
-    def __init__(self, *keys, verbose=False):
-        self.keys = keys
-        if("count" in keys):
-            self.is_average = True
-            if(verbose):
-                log_debug("Found 'count' keyword in keys, statistics will be averaged by count")
-        else:
-            self.is_average = False
-            if(verbose):
-                log_debug("No 'count' keyword detected, statistics will be summed but not averaged")
-        self.reset()
-
-    def reset(self):
-        self._data = dict()
-        for key in self.keys:
-            self._data[key] = []
 
     def append_with_safety(self, device, **kwargs):
         zeroflag = False
@@ -295,15 +262,24 @@ class DistStatistics2(object):
             else:
                 # todo: print self._data["count"][index] to check
                 res_mean, res_var, res_count = self.update_mean_var_count_from_moments(res_mean, res_var, res_count, element[0], element[1], count_list[index])
-        return [res_mean, res_var], res_count 
-    
+        return [res_mean, res_var], res_count
+
     def __call__(self):
         stat_res = dict()
-        for key in self.keys:
-            if(key != "count"):
-                stat_res[key], stat_res["count"] = self.cal_res_for_each_key(key)
-                # if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
-                #     stat_res[key] = float(stat_res[key])
+
+        if(self.pointwise):
+            for key in self.keys:
+                if(key != "count"):
+                    stat_res[key], stat_res["count"] = self.cal_res_for_each_key(key)
+        else:
+            for key in self.keys:
+                stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
+                if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
+                    stat_res[key] = float(stat_res[key])
+            if(self.is_average):
+                for key in self.keys:
+                    if(key != "count"):
+                        stat_res[key] /= float(stat_res["count"])
 
         return stat_res
 

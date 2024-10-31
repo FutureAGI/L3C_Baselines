@@ -20,7 +20,7 @@ from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, DistStatistics2, rewards2go
+from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -50,8 +50,13 @@ def calculate_result_matrix(loss_matrix):
 
     return result_matrix
 
+def string_mean_var(downsample_length, mean, var):
+    string=""
+    for i in range(mean.shape[0]):
+        string += f'{downsample_length * i}\t{mean[i]}\t{var[i]}\n'
+    return string
 
-def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, logger_position_wise, downsample_length = 10):
+def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample_length = 10):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -59,12 +64,10 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
 
     all_length = len(dataloader)
 
-    seg_num = (config.seq_len - 1) // config.seg_len + 1
-
     if config.downsample_size is not None:
         downsample_length = config.downsample_size
 
-    stat2 = DistStatistics2("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count")
+    stat2 = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count", pointwise=True)
     if(main):
         log_debug("Start evaluation ...")
         log_progress(0)
@@ -138,22 +141,15 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, epoch_id, 
     
 
     if(main):
-        #log for position-wise loss anylsis
-        # dim = [3, T//downsample_length]. Row 1 is mean, row 2 is 90% lower confidence bound, row 3 is 90% upper confidence bound.
-        stat_res_wm_s = torch.stack((stat2()["loss_wm_s_ds"][0],
-                                     (stat2()["loss_wm_s_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_wm_s_ds"][1]) / torch.sqrt(stat2()["count"]))), 
-                                     (stat2()["loss_wm_s_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_wm_s_ds"][1]) / torch.sqrt(stat2()["count"])))), 
-                                     dim = 0)
-        stat_res_wm_r = torch.stack((stat2()["loss_wm_r_ds"][0],
-                                     (stat2()["loss_wm_r_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_wm_r_ds"][1]) / torch.sqrt(stat2()["count"]))),
-                                     (stat2()["loss_wm_r_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_wm_r_ds"][1]) / torch.sqrt(stat2()["count"])))),
-                                     dim = 0)
-        stat_res_pm = torch.stack((stat2()["loss_pm_ds"][0],
-                                   (stat2()["loss_pm_ds"][0] - 1.645*(torch.sqrt(stat2()["loss_pm_ds"][1]) / torch.sqrt(stat2()["count"]))),
-                                   (stat2()["loss_pm_ds"][0] + 1.645*(torch.sqrt(stat2()["loss_pm_ds"][1]) / torch.sqrt(stat2()["count"])))),
-                                   dim = 0)
-        logger_position_wise(stat_res_wm_s, stat_res_wm_r, stat_res_pm, 
-                             epoch=epoch_id, iteration=epoch_id, prefix="EvaluationResults-Positionwise")
+        stat_res_wm_s = string_mean_var(downsample_length, stat2()["loss_wm_s_ds"][0], stat2()["loss_wm_s_ds"][1])
+        with open(f'{config.output}/position_wise_wm_s.txt:0:1:2:world_model_state:red', 'w') as f_model:
+            f_model.write(stat_res_wm_s)
+        stat_res_wm_r = string_mean_var(downsample_length, stat2()["loss_wm_r_ds"][0], stat2()["loss_wm_r_ds"][1])
+        with open(f'{config.output}/position_wise_wm_r.txt:0:1:2:world_model_reward:blue', 'w') as f_model:
+            f_model.write(stat_res_wm_r)
+        stat_res_pm = string_mean_var(downsample_length, stat2()["loss_pm_ds"][0], stat2()["loss_pm_ds"][1])
+        with open(f'{config.output}/position_wise_pm.txt:0:1:2:policy_model:green', 'w') as f_model:
+            f_model.write(stat_res_pm)
         
     stat2.reset()
 
@@ -193,15 +189,9 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
                                   black_list=train_config.load_model_parameter_blacklist, 
                                   strict_check=False)
         print("------------Load model success!------------")
-    
-    # Initiate logger
-    logger_eval_position_wise = None
-    if(main):
-        logger_eval_position_wise = Logger("validation_state_pred_position_wise", "validation_reward_pred_position_wise", "validation_policy_position_wise",
-                    sum_iter=train_config.max_epochs, use_tensorboard=True, field=f"runs/validate-{run_name}-PositionWise", position_wise=True)
 
     # Perform the first evaluation
-    anymdp_model_epoch(rank, world_size, test_config, model, main, device, 0, logger_eval_position_wise)
+    anymdp_model_epoch(rank, world_size, test_config, model, main, device, test_config.downsample_size)
 
     return
 
