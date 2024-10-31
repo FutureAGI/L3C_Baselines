@@ -164,8 +164,9 @@ class DistStatistics(object):
     """
     Provide distributed statistics
     """
-    def __init__(self, *keys, verbose=False):
+    def __init__(self, *keys, verbose=False, pointwise=False):
         self.keys = keys
+        self.pointwise = pointwise
         if("count" in keys):
             self.is_average = True
             if(verbose):
@@ -206,16 +207,79 @@ class DistStatistics(object):
             dist.all_reduce(value.data)
             self._data[key].append(value.cpu().detach())
 
+    def append_with_safety(self, device, **kwargs):
+        zeroflag = False
+        if("count" in kwargs):
+            cnt = kwargs["count"]
+        else:
+            cnt = 1
+        for key, value in kwargs.items():
+            if torch.isinf(value).any() or torch.isnan(value).any():
+                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
+                zeroflag = True
+        safe_stats = dict()
+        if zeroflag:
+            for key, value in kwargs.items():
+                safe_stats[key] = torch.zeros_like(value)
+        else:
+            for key, value in kwargs.items():
+                safe_stats[key] = value.clone().detach()
+        for key, value in safe_stats.items():
+            if(key not in self._data):
+                raise KeyError(f"Key {key} not registered in Statistics class")
+            #if(key != "count"):
+                #value *= cnt
+            #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
+            value_gpu = value.to('cuda')
+            gathered_tensors = [torch.zeros_like(value_gpu.data) for _ in range(dist.get_world_size())]
+            dist.all_gather(gathered_tensors, value_gpu.data)
+            #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
+            self._data[key].append(gathered_tensors)
+
+    def update_mean_var_count_from_moments(self, mean, var, count, batch_mean, batch_var, batch_count):
+        delta = batch_mean - mean
+        tot_count = count + batch_count
+
+        new_mean = mean + delta * batch_count / tot_count
+        m_a = var * count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + torch.square(delta) * count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
+        return new_mean, new_var, new_count
+
+    def cal_res_for_each_key(self, key):
+        res_mean = None
+        res_var = None
+        res_count = None
+        combined_list = [item for sublist in self._data[key] for item in sublist]
+        count_list = [item for sublist in self._data["count"] for item in sublist]
+        for index, element in enumerate(combined_list):
+            if index == 0:
+                res_mean = element[0]
+                res_var = element[1]
+                res_count = count_list[index]
+            else:
+                # todo: print self._data["count"][index] to check
+                res_mean, res_var, res_count = self.update_mean_var_count_from_moments(res_mean, res_var, res_count, element[0], element[1], count_list[index])
+        return [res_mean, res_var], res_count
+
     def __call__(self):
         stat_res = dict()
-        for key in self.keys:
-            stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
-            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
-                stat_res[key] = float(stat_res[key])
-        if(self.is_average):
+
+        if(self.pointwise):
             for key in self.keys:
                 if(key != "count"):
-                    stat_res[key] /= float(stat_res["count"])
+                    stat_res[key], stat_res["count"] = self.cal_res_for_each_key(key)
+        else:
+            for key in self.keys:
+                stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
+                if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
+                    stat_res[key] = float(stat_res[key])
+            if(self.is_average):
+                for key in self.keys:
+                    if(key != "count"):
+                        stat_res[key] /= float(stat_res["count"])
 
         return stat_res
 

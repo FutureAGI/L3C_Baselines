@@ -76,7 +76,7 @@ class E2EObjNavSA(nn.Module):
                         start_position=0, 
                         state_dropout=0.0, 
                         update_memory=True,
-                        reduce='mean'):
+                        reduce_dim=1):
         
         self.img_encoder.requires_grad_(False)
         self.img_decoder.requires_grad_(False)
@@ -103,20 +103,20 @@ class E2EObjNavSA(nn.Module):
         ps, pe = start_position, start_position + seq_len
 
         # World Model Loss - Latent Space
-        loss["wm-latent"] = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-latent"] = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
 
         # World Model Loss - Raw Image
         obs_pred = self.vae.decoding(z_pred)
-        loss["wm-raw"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-raw"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
 
         # Decision Model Loss
         if(self.policy_loss == 'crossentropy'):
             assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
             loss_weight = label_actions.ge(0) * label_actions.lt(self.nactions) * self.loss_weight[:, ps:pe]
             truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
-            loss["pm"] = ce_loss_mask(a_pred, truncated_actions, mask=loss_weight, reduce=reduce)
+            loss["pm"] = ce_loss_mask(a_pred, truncated_actions, mask=loss_weight, reduce_dim=reduce_dim)
         elif(self.policy_loss == 'mse'):
-            loss["pm"] = mse_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce=reduce)
+            loss["pm"] = mse_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce_dim=reduce_dim)
         loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=label_actions.device)
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 

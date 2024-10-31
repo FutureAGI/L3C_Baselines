@@ -122,7 +122,9 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
         label_policy,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
-    tasks_num = len(tasks_from_file)
+    tasks_num = None
+    if(tasks_from_file is not None):
+        tasks_num = len(tasks_from_file)
     for idx in epoch_ids:
         env = gym.make("anymdp-v0", max_steps=max_steps)
 
@@ -131,7 +133,7 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
             task_id = (work_id + idx * world_work) % tasks_num
             task = tasks_from_file[task_id]
         else:
-            task = AnyMDPTaskSampler(128, 5)
+            task = AnyMDPTaskSampler(nstates, nactions)
 
         env.set_task(task)
         results = run_epoch(env, max_steps, 
@@ -153,6 +155,8 @@ if __name__=="__main__":
     parser.add_argument("--output_path", type=str, default="./anymdp_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
     parser.add_argument("--task_source", type=str, choices=['FILE', 'NEW'], help="choose task source to generate the trajectory. FILE: tasks sample from existing file; NEW: create new tasks")
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
+    parser.add_argument("--state_num", type=int, default=128, help="state num, default:128")
+    parser.add_argument("--action_num", type=int, default=5, help="action num, default:5")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
     parser.add_argument('--reference_config', nargs='*', help="List of reference policy: e.g., 0.1,0.3 represent OPT=0.1,Q=0.3")
     parser.add_argument('--behavior_config', nargs='*', help="List of behavior policy: e.g., 0.1,0.3 represent OPT=0.1,Q=0.3")
@@ -198,7 +202,7 @@ if __name__=="__main__":
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_anymdp, 
-                args=(worker_id, args.workers, args.output_path, range(n_b, n_e), 128, 5, behavior_noise, 
+                args=(worker_id, args.workers, args.output_path, range(n_b, n_e), args.state_num, args.action_num, behavior_noise, 
                       p_ref, b_ref, args.max_steps, tasks_from_file))
         processes.append(process)
         process.start()
