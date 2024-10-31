@@ -60,7 +60,7 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
-    dataloader = PrefetchDataLoader(dataset, batch_size=1, rank=rank, world_size=world_size)
+    dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
 
     all_length = len(dataloader)
 
@@ -87,11 +87,18 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
         loss_pm_T = None      
         for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                     config.seq_len, config.seg_len, device, 
-                    (sarr, 1), baarr, laarr, (rarr, 1), (r2goarr, 1)):
+                    (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
             with torch.no_grad():
                 # loss dim is Bxt, t = T // seg_len 
                 loss = model.module.sequential_loss(
-                            states, bactions, lactions, r2go[:, :-1], r2go[:, 1:], start_position=start_position, reduce_dim=None)
+                            r2go[:, :-1],
+                            states, 
+                            rewards, 
+                            bactions, 
+                            lactions, 
+                            r2go[:, 1:], 
+                            start_position=start_position,
+                            reduce_dim=None)
             if (sub_idx == 0):
                 loss_wm_s_T=torch.nan_to_num(loss["wm-s"], nan=0.0)
                 loss_wm_r_T=torch.nan_to_num(loss["wm-r"], nan=0.0)
@@ -141,14 +148,27 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
     
 
     if(main):
+        if not os.path.exists(config.output):
+            os.makedirs(config.output)
         stat_res_wm_s = string_mean_var(downsample_length, stat2()["loss_wm_s_ds"][0], stat2()["loss_wm_s_ds"][1])
-        with open(f'{config.output}/position_wise_wm_s.txt:0:1:2:world_model_state:red', 'w') as f_model:
+        file_path = f'{config.output}/position_wise_wm_s.txt'
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        with open(file_path, 'w') as f_model:
             f_model.write(stat_res_wm_s)
+        
         stat_res_wm_r = string_mean_var(downsample_length, stat2()["loss_wm_r_ds"][0], stat2()["loss_wm_r_ds"][1])
-        with open(f'{config.output}/position_wise_wm_r.txt:0:1:2:world_model_reward:blue', 'w') as f_model:
+        file_path = f'{config.output}/position_wise_wm_r.txt'
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        with open(file_path, 'w') as f_model:
             f_model.write(stat_res_wm_r)
+        
         stat_res_pm = string_mean_var(downsample_length, stat2()["loss_pm_ds"][0], stat2()["loss_pm_ds"][1])
-        with open(f'{config.output}/position_wise_pm.txt:0:1:2:policy_model:green', 'w') as f_model:
+        file_path = f'{config.output}/position_wise_pm.txt'
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        with open(file_path, 'w') as f_model:
             f_model.write(stat_res_pm)
         
     stat2.reset()
