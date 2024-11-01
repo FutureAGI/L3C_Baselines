@@ -29,7 +29,7 @@ def run_epoch(
     
     # Steps to reset the environment
     def resample_reset_steps(_lambda):
-        return int(max(1.0 + 0.30 * random.normal(), 0.20) * _lambda)
+        return int(max(2.0.random.random() + random.normal(), 0.20) * _lambda)
 
     # Steps to reset the 
     cur_reset_steps=resample_reset_steps(avg_steps_reset)
@@ -143,6 +143,7 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
 
         file_path = f'{path_name}/record-{idx:06d}'
         create_directory(file_path)
+        print(results["states"])
 
         numpy.save("%s/observations.npy" % file_path, results["states"])
         numpy.save("%s/actions_behavior.npy" % file_path, results["actions_behavior"])

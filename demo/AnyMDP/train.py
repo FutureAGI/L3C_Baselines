@@ -242,12 +242,13 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
                         config.seq_len, config.seg_len, device, 
                         (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
                 losses.append(model.module.sequential_loss(
-                            r2go[:, :-1],
+                            None,
                             states, 
                             rewards, 
                             bactions, 
                             lactions, 
-                            r2go[:, 1:], start_position=start_position))
+                            loss_is_weighted=False,
+                            start_position=start_position))
 
             start_position += bactions.shape[1]
 

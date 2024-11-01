@@ -19,7 +19,7 @@ from collections import defaultdict
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import count_parameters, check_model_validity, model_path
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path, safety_check
 from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
@@ -52,8 +52,8 @@ def calculate_result_matrix(loss_matrix):
 
 def string_mean_var(downsample_length, res):
     string=""
-    for i in range(res["mean"].shape[0]):
-        string += f'{downsample_length * i}\t{res["mean"][i]}\t{res["var"][i]}\n'
+    for i, (xm,xb) in enumerate(zip(res["mean"], res["bound"])):
+        string += f'{downsample_length * i}\t{xm}\t{xb}\n'
     return string
 
 def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample_length = 10):
@@ -64,13 +64,12 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
 
     all_length = len(dataloader)
 
-    if config.downsample_size is not None:
+    if config.has_attr("downsample_size") and config.downsample_size is not None:
         downsample_length = config.downsample_size
 
-    stat2 = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds")
-    if(main):
-        log_debug("Start evaluation ...")
-        log_progress(0)
+    stat = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds")
+    log_debug("Start evaluation ...", on=main)
+    log_progress(0, on=main)
     dataset.reset(0)
 
     loss_wm_s_T_batch = None
@@ -82,73 +81,56 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
         model.module.reset()
         sarr, baarr, laarr, rarr = batch
         r2goarr = rewards2go(rarr)
-        loss_wm_s_T = None
-        loss_wm_r_T = None
-        loss_pm_T = None      
+        loss_wm_s_T = []
+        loss_wm_r_T = []
+        loss_pm_T = []     
         for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                     config.seq_len, config.seg_len, device, 
                     (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
             with torch.no_grad():
                 # loss dim is Bxt, t = T // seg_len 
                 loss = model.module.sequential_loss(
-                            r2go[:, :-1],
+                            None,
                             states, 
                             rewards, 
                             bactions, 
                             lactions, 
-                            r2go[:, 1:], 
                             start_position=start_position,
+                            loss_is_weighted=False,
                             reduce_dim=None)
-            if (sub_idx == 0):
-                loss_wm_s_T=torch.nan_to_num(loss["wm-s"], nan=0.0)
-                loss_wm_r_T=torch.nan_to_num(loss["wm-r"], nan=0.0)
-                loss_pm_T=torch.nan_to_num(loss["pm"], nan=0.0)
-            else:
-                loss_wm_s_T = torch.cat((loss_wm_s_T, torch.nan_to_num(loss["wm-s"], nan=0.0)), dim=1)
-                loss_wm_r_T = torch.cat((loss_wm_r_T, torch.nan_to_num(loss["wm-r"], nan=0.0)), dim=1)
-                loss_pm_T = torch.cat((loss_pm_T, torch.nan_to_num(loss["pm"], nan=0.0)), dim=1)
+            loss_wm_s_T.append(safety_check(loss["wm-s"]))
+            loss_wm_r_T.append(safety_check(loss["wm-r"]))
+            loss_pm_T.append(safety_check(loss["pm"]))
             start_position += bactions.shape[1]
         
         # Append over all segment, loss_wm_s_arr, loss_wm_r_arr and loss_pm_arr dim become BxT
         # Downsample over T, dim become [B,T//downsample_length]
-        dim_1, seq_length = loss_wm_s_T.shape
-        num_elements_to_keep = seq_length // downsample_length * downsample_length
-        loss_wm_s_ds = torch.mean(loss_wm_s_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
-        loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
-        loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
+        loss_wm_s_T = torch.cat(loss_wm_s_T, dim=1)
+        loss_wm_r_T = torch.cat(loss_wm_r_T, dim=1)
+        loss_pm_T = torch.cat(loss_pm_T, dim=1)
+
+        bsz, nT = loss_wm_s_T.shape
+
+        nseg = nT // downsample_length
+        eff_T = nseg * downsample_length
+
+        loss_wm_s_T = torch.mean(loss_wm_s_T[:, :eff_T].view(bsz, nseg, -1), dim=-1)
+        loss_wm_r_T = torch.mean(loss_wm_r_T[:, :eff_T].view(bsz, nseg, -1), dim=-1)
+        loss_pm_T = torch.mean(loss_pm_T[:, :eff_T].view(bsz, nseg, -1), dim=-1)
         
-        loss_wm_s_T_batch = torch.cat((loss_wm_s_T_batch, loss_wm_s_ds), dim=0) if loss_wm_s_T_batch is not None else loss_wm_s_ds
-        loss_wm_r_T_batch = torch.cat((loss_wm_r_T_batch, loss_wm_r_ds), dim=0) if loss_wm_r_T_batch is not None else loss_wm_r_ds
-        loss_pm_T_batch = torch.cat((loss_pm_T_batch, loss_pm_ds), dim=0) if loss_pm_T_batch is not None else loss_pm_ds
-        loss_count_batch += dim_1
+        for i in range(bsz):
+            stat.gather(rank,
+                    loss_wm_s_ds=loss_wm_s_T[i],
+                    loss_wm_r_ds=loss_wm_r_T[i],
+                    loss_pm_ds=loss_pm_T[i],
+                    count=1)
+        log_progress(batch_idx / len(dataloader), on=main)
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
-
-    # finish batch loop
-    # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
-    # Get the result in each device
-    stat_loss_wm_s = calculate_result_matrix(loss_wm_s_T_batch)
-    stat_loss_wm_r = calculate_result_matrix(loss_wm_r_T_batch)
-    stat_loss_pm = calculate_result_matrix(loss_pm_T_batch)
-    # Merge the result accross all device
-    stat2.append_with_safety(rank, 
-                            loss_wm_s_ds=stat_loss_wm_s, 
-                            loss_wm_r_ds=stat_loss_wm_r, 
-                            loss_pm_ds=stat_loss_pm,
-                            count=torch.tensor(loss_count_batch))
-    if(main):
-        print("------------Debug: stat_loss_wm_s =",stat_loss_wm_s)
-        print("------------Debug: stat_loss_wm_r =",stat_loss_wm_r)
-        print("------------Debug: stat_loss_pm =",stat_loss_pm)
-        print("------------Debug: loss_count_batch =",loss_count_batch)
-    
+    stat_res = stat()
 
     if(main):
         if not os.path.exists(config.output):
             os.makedirs(config.output)
-
-        stat_res = stat2()
 
         stat_res_wm_s = string_mean_var(downsample_length, stat_res["loss_wm_s_ds"])
         file_path = f'{config.output}/position_wise_wm_s.txt'
@@ -171,10 +153,7 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
         with open(file_path, 'w') as f_model:
             f_model.write(stat_res_pm)
         
-    stat2.reset()
-
-def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
-    
+def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -193,7 +172,6 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     test_config = config.test_config
-    train_config = config.train_config
     
     # Load Model
     model = AnyMDPRSA(config.model_config, verbose=main)
@@ -202,16 +180,12 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         model = DDP(model, device_ids=[rank])
     else:
         model = DDP(model)
-    if(test_config.has_attr("load_model_path") and 
-            test_config.load_model_path is not None and 
-            test_config.load_model_path.lower() != 'none'):
-        model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', 
-                                  black_list=train_config.load_model_parameter_blacklist, 
-                                  strict_check=False)
-        print("------------Load model success!------------")
+
+    model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', strict_check=False)
+    print("------------Load model success!------------")
 
     # Perform the first evaluation
-    anymdp_model_epoch(rank, world_size, test_config, model, main, device, test_config.downsample_size)
+    anymdp_model_epoch(rank, world_size, test_config, model, main, device)
 
     return
 
@@ -239,10 +213,10 @@ if __name__=='__main__':
             config.set_value(key, value)
             print(f"Rewriting configurations from args: {key} to {value}")
     print("Final configuration:\n", config)
-    demo_config = config.demo_config
-    os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
+
+    os.environ['MASTER_PORT'] = config.test_config.master_port        # Example port, choose an available port
 
     mp.spawn(anymdp_main_epoch,
-             args=(use_gpu, world_size, config, 0, config.run_name),
+             args=(use_gpu, world_size, config, 0),
              nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
              join=True)
