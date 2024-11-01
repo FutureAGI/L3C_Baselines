@@ -64,7 +64,7 @@ def worker_fn(dataset, length, index_queue, output_queue):
         if index is None:
             break
 
-        if index > length:
+        if index > length - 1:
             # Allowing fetch index to exceed max length to accommodate certain mistake
             real_idx = index % length
         else:

@@ -4,8 +4,9 @@ run_name: YOUR_NAME_TO_RUN
 log_config:
   use_tensorboard: True
   tensorboard_log: ./runs/
-  training_log: ./runs/logs/train.log
-  evaluation_log: ./runs/logs/eval.log
+  training_log_causal: ./runs/causal_train.log
+  training_log_vae: ./runs/vae_train.log
+  evaluation_log: ./runs/eval.log
 
 model_config:
   context_warmup: 1000

@@ -114,7 +114,7 @@ class E2EObjNavSA(nn.Module):
                                           gt=z_rec_l[:, 1:], 
                                           loss_wht=loss_weight, 
                                           reduce_dim=reduce_dim,
-                                          nee_cnt=True)
+                                          need_cnt=True)
 
         # World Model Loss - Raw Image
         obs_pred = self.vae.decoding(z_pred)
