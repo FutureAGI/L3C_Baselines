@@ -41,11 +41,23 @@ def format_cache(cache, prefix=''):
     else:
         return prefix + ' ' + str(type(cache))
 
+def safety_check(tensor, replacement=0, msg=None):
+    has_inf = torch.isinf(tensor)
+    has_nan = torch.isnan(tensor)
+    
+    if has_inf.any() or has_nan.any():
+        tensor[has_inf] = replacement
+        tensor[has_nan] = replacement
+        if(msg is not None):
+            log_warn(f"In {msg}, NAN/INF encounted")
+
+    return tensor
+
 def memory_cpy(cache):
     if(cache is None):
         return None
     elif(isinstance(cache, torch.Tensor)):
-        return cache.detach().clone()
+        return safety_check(cache.detach().clone(), msg='memory_cpy')
     elif(isinstance(cache, list)):
         return [memory_cpy(c) for c in cache]
     elif(isinstance(cache, tuple)):
@@ -61,18 +73,23 @@ def model_path(save_model_path, epoch_id):
         os.makedirs(directory_path)
     return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
+def reset_optimizer_state(optimizer):
+    state = optimizer.state
+    for k in list(state.keys()):
+        for sk in list(state[k].keys()):
+            state[k][sk].zero_()
 
-def gradient_failsafe(model, optimizer, scaler):
+def gradient_failsafe(model, optimizer, scaler=None):
     overflow=False
-    for param in model.parameters():
+    for name, param in model.named_parameters():
         if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
-            log_warn("gradient contains inf or nan, setting those gradients to zero.")
+            log_warn(f"gradient of {name} contains inf or nan, setting those gradients to zero.")
+            param.grad.zero_()
             overflow=True
     if(overflow):
-        for param in model.parameters():
-            param.grad.zero_()
-        scaler.unscale_(optimizer)
-        optimizer.__setstate__({'state': defaultdict(dict)})
+        if(scaler is not None):
+            scaler.unscale_(optimizer)
+        reset_optimizer_state(optimizer)
 
 def img_pro(observations):
     return observations / 255

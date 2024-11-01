@@ -90,16 +90,21 @@ class DistStatistics(object):
     def __call__(self, reset=True):
         stat_res = dict()
         for key in self.keys:
-            mean,var,cnt = self._stat(key)
+            mean,std,cnt = self._stat(key)
+            # 95% Confidence Bound For Mean
+            bound = 2.0 * std / torch.sqrt(cnt)
             assert cnt.numel() == 1
             cnt = int(cnt)
             if(mean.numel() < 2):
                 mean = mean.squeeze().item()
-                var = var.squeeze().item()
+                std = std.squeeze().item()
+                bound = bound.squeeze().item()
             else:
                 mean = mean.squeeze().tolist()
-                var = var.squeeze().tolist()
-            stat_res[key] = {"mean":mean,"var":var,'cnt': cnt}
+                std = std.squeeze().tolist()
+                bound = bound.squeeze().tolist()
+            stat_res[key] = {"mean":mean,"std":std,'cnt':cnt,
+                    'bound':bound}
         if(reset):
             self.reset()
         return stat_res
