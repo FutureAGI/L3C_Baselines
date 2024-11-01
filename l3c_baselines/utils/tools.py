@@ -2,14 +2,15 @@ import os
 import re
 import sys
 import yaml
-import torch
 import numpy
+import torch
 from torch import nn
-import torch.distributed as dist
 from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
 from collections import defaultdict
+from restools.logging import log_warn, log_debug, log_progress, log_fatal, Logger
+from restools.configure import Configure
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -40,11 +41,23 @@ def format_cache(cache, prefix=''):
     else:
         return prefix + ' ' + str(type(cache))
 
+def safety_check(tensor, replacement=0, msg=None):
+    has_inf = torch.isinf(tensor)
+    has_nan = torch.isnan(tensor)
+    
+    if has_inf.any() or has_nan.any():
+        tensor[has_inf] = replacement
+        tensor[has_nan] = replacement
+        if(msg is not None):
+            log_warn(f"In {msg}, NAN/INF encounted")
+
+    return tensor
+
 def memory_cpy(cache):
     if(cache is None):
         return None
     elif(isinstance(cache, torch.Tensor)):
-        return cache.detach().clone()
+        return safety_check(cache.detach().clone(), msg='memory_cpy')
     elif(isinstance(cache, list)):
         return [memory_cpy(c) for c in cache]
     elif(isinstance(cache, tuple)):
@@ -60,7 +73,34 @@ def model_path(save_model_path, epoch_id):
         os.makedirs(directory_path)
     return (f'{directory_path}/model.pth', f'{directory_path}/vae_optimizer.pth', f'{directory_path}/seq_optimizer.pth') 
 
-def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.0e+2, strict_check=False):  
+def reset_optimizer_state(optimizer):
+    state = optimizer.state
+    for k in list(state.keys()):
+        for sk in list(state[k].keys()):
+            state[k][sk].zero_()
+
+def gradient_failsafe(model, optimizer, scaler=None):
+    overflow=False
+    for name, param in model.named_parameters():
+        if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
+            log_warn(f"gradient of {name} contains inf or nan, setting those gradients to zero.")
+            param.grad.zero_()
+            overflow=True
+    if(overflow):
+        if(scaler is not None):
+            scaler.unscale_(optimizer)
+        reset_optimizer_state(optimizer)
+
+def img_pro(observations):
+    return observations / 255
+
+def img_post(observations):
+    return observations * 255
+
+def print_memory(info="Default"):
+    print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
+
+def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.0e+2, strict_check=False, verbose=False):  
     """
     In case of hard condition, shape mismatch, nan/inf are not allowed, which directly lead to failure
     """
@@ -83,40 +123,50 @@ def custom_load_model(model, state_dict_path, black_list=[], max_norm_allowed=1.
             hits_black = False
             for name in black_list:
                 if(param_name.find(name) > -1):
-                    print(f"Parameter hits {param_name} black lists {name}")
+                    log_debug(f"Parameter hits {param_name} black lists {name}", on=verbose)
                     hits_black = True
             if(hits_black):
                 continue
 
             if model_param_shape == param_tensor.shape and (not is_nan):  
                 if(not norm_valid):
-                    print(f"[Warning] Large norm ({l2_norm}) encountered in parameter {param_name}. Keep Loading...")
+                    log_warn(f"Large norm ({l2_norm}) encountered in parameter {param_name}. Keep Loading...", on=verbose)
                 if(is_inf):
-                    print(f"[Warning] INF encountered in parameter {param_name}. Keep Loading...")
+                    log_warn(f"[Warning] INF encountered in parameter {param_name}. Keep Loading...", on=verbose)
                 matched_state_dict[param_name] = param_tensor  
             elif(is_nan):
                 e = f"NAN encountered for parameter {param_name}"
                 if(strict_check):
-                    raise Exception(e, "Quit Job...")
+                    log_fatal(e, "Quit Job...")
                 else:
-                    print(e, "Skipping loading...")
+                    log_warn(e, "Skipping loading...", on=verbose)
             else:  
                 e = f"Shape mismatch for parameter {param_name}; Model: {model_param_shape}; Load: {param_tensor.shape}"  
                 if(strict_check):
-                    raise Exception(e, "Quit Job...")
+                    log_fatal(e, "Quit Job...")
                 else:
-                    print(e, "Skipping loading...")
+                    if(param_tensor.ndim == len(model_param_shape)):
+                        log_warn(e, "Skipping loading...", on=verbose)
+                    else:
+                        minimal_shape = []
+                        for ns,nt in zip(param_tensor.shape, model_param_shape):
+                            minimal_shape.append(min(ns,nt))
+                        minimal_match = model_state_dict[param_name].clone()
+                        match_inds = tuple(slice(0, n) for n in minimal_shape)
+                        minimal_match[match_inds] = param_tensor[match_inds]
+                        matched_state_dict[param_name] = minimal_match
+                        log_warn(e, f"Apply fractional loading with shape {minimal_shape}...", on=verbose)
         else:  
             e = f"Parameter name {param_name} not found in the current model"
             if(strict_check):
-                raise Exception(e, "Quit Job...")
+                raise log_fatal(e, "Quit Job...")
             else:
-                print(e, "Skipping loading...")
+                log_warn(e, "Skipping loading...", on=verbose)
       
     model.load_state_dict(matched_state_dict, strict=False)  
     return model  
 
-def check_model_validity(model, max_norm_allowed=100.0):
+def check_model_validity(model, max_norm_allowed=100.0, verbose=False):
     # Check the validity of model in RunTime
     param_isnormal = dict()
     for param_name, param_tensor in model.named_parameters():
@@ -130,94 +180,14 @@ def check_model_validity(model, max_norm_allowed=100.0):
 
         param_isnormal[param_name] = False
         if(is_nan):
-            print(f"[Warning] NAN encountered in parameter {param_name}.")
+            log_warn(f"NAN encountered in parameter {param_name}.")
         elif(is_inf):
-            print(f"[Warning] INF encountered in parameter {param_name}.")
+            log_warn(f"INF encountered in parameter {param_name}.")
         elif not norm_valid:
-            print(f"[Warning] Large norm ({l2_norm}) encountered in parameter {param_name}.")
+            log_warn(f"Large norm ({l2_norm}) encountered in parameter {param_name}.")
         else:
             param_isnormal[param_name] = True
     return param_isnormal
-
-def img_pro(observations):
-    return observations / 255
-
-def img_post(observations):
-    return observations * 255
-
-def print_memory(info="Default"):
-    print(info, "Memory allocated:", torch.cuda.memory_allocated(), "Memory cached:", torch.cuda.memory_cached())
-
-def gradient_failsafe(model, optimizer, scaler):
-    overflow=False
-    for param in model.parameters():
-        if param.grad is not None and (torch.isinf(param.grad).any() or torch.isnan(param.grad).any()):
-            print("Warning: Gradient contains inf or nan, setting those gradients to zero.")
-            overflow=True
-    if(overflow):
-        for param in model.parameters():
-            param.grad.zero_()
-        scaler.unscale_(optimizer)
-        optimizer.__setstate__({'state': defaultdict(dict)})
-
-class DistStatistics(object):
-    """
-    Provide distributed statistics
-    """
-    def __init__(self, *keys, verbose=False):
-        self.keys = keys
-        if("count" in keys):
-            self.is_average = True
-            if(verbose):
-                log_debug("Found 'count' keyword in keys, statistics will be averaged by count")
-        else:
-            self.is_average = False
-            if(verbose):
-                log_debug("No 'count' keyword detected, statistics will be summed but not averaged")
-        self.reset()
-
-    def reset(self):
-        self._data = dict()
-        for key in self.keys:
-            self._data[key] = []
-
-    def add_with_safety(self, device, **kwargs):
-        zeroflag = False
-        if("count" in kwargs):
-            cnt = kwargs["count"]
-        else:
-            cnt = 1
-        for key, value in kwargs.items():
-            if torch.isinf(value).any() or torch.isnan(value).any():
-                print(f"[WARNING] 'Device:{device}' stating '{key}' suffering prediction loss = NAN/INF, fill with 0")
-                zeroflag = True
-        safe_stats = dict()
-        if zeroflag:
-            for key, value in kwargs.items():
-                safe_stats[key] = torch.zeros_like(value)
-        else:
-            for key, value in kwargs.items():
-                safe_stats[key] = value.clone().detach()
-        for key, value in safe_stats.items():
-            if(key not in self._data):
-                raise KeyError(f"Key {key} not registered in Statistics class")
-            if(key != "count"):
-                value *= cnt
-            dist.all_reduce(value.data)
-            self._data[key].append(value.cpu().detach())
-
-    def __call__(self):
-        stat_res = dict()
-        for key in self.keys:
-            stat_res[key] = torch.stack(self._data[key]).sum(dim=0)
-            if(len(stat_res[key].shape) < 1 or stat_res[key].numel() < 2):
-                stat_res[key] = float(stat_res[key])
-        if(self.is_average):
-            for key in self.keys:
-                if(key != "count"):
-                    stat_res[key] /= float(stat_res["count"])
-
-        return stat_res
 
 def rewards2go(rewards, gamma=0.98):
     """

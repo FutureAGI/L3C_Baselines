@@ -8,7 +8,7 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import ce_loss_mask, mse_loss_mask, img_pro, img_post
+from l3c_baselines.utils import weighted_loss, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.modules import ImageEncoder, ImageDecoder, VAE
 from .decision_model import SADecisionModel
@@ -76,7 +76,8 @@ class E2EObjNavSA(nn.Module):
                         start_position=0, 
                         state_dropout=0.0, 
                         update_memory=True,
-                        reduce='mean'):
+                        loss_is_weighted=True,
+                        reduce_dim=1):
         
         self.img_encoder.requires_grad_(False)
         self.img_decoder.requires_grad_(False)
@@ -102,22 +103,43 @@ class E2EObjNavSA(nn.Module):
         seq_len = z_pred.shape[1]
         ps, pe = start_position, start_position + seq_len
 
+        if(loss_is_weighted):
+            loss_weight = self.loss_weight[:, ps:pe]
+        else:
+            loss_weight = None
+
         # World Model Loss - Latent Space
-        loss["wm-latent"] = mse_loss_mask(z_pred, z_rec_l[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-latent"], loss["count"] = weighted_loss(z_pred, 
+                                          loss_type="mse",
+                                          gt=z_rec_l[:, 1:], 
+                                          loss_wht=loss_weight, 
+                                          reduce_dim=reduce_dim,
+                                          nee_cnt=True)
 
         # World Model Loss - Raw Image
         obs_pred = self.vae.decoding(z_pred)
-        loss["wm-raw"] = mse_loss_mask(obs_pred, inputs[:, 1:], mask=self.loss_weight[:, ps:pe], reduce=reduce)
+        loss["wm-raw"] = weighted_loss(obs_pred, 
+                                       loss_type="mse",
+                                       gt=inputs[:, 1:], 
+                                       loss_wht=loss_weight, 
+                                       reduce_dim=reduce_dim)
 
         # Decision Model Loss
         if(self.policy_loss == 'crossentropy'):
             assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
             loss_weight = label_actions.ge(0) * label_actions.lt(self.nactions) * self.loss_weight[:, ps:pe]
             truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
-            loss["pm"] = ce_loss_mask(a_pred, truncated_actions, mask=loss_weight, reduce=reduce)
+            loss["pm"] = weighted_loss(a_pred,
+                                       loss_type="ce",
+                                       gt=truncated_actions, 
+                                       loss_wht=loss_weight, 
+                                       reduce_dim=reduce_dim)
         elif(self.policy_loss == 'mse'):
-            loss["pm"] = mse_loss_mask(a_pred, label_actions, mask=self.loss_weight[:, ps:pe], reduce=reduce)
-        loss["count"] = torch.tensor(bsz * seq_len, dtype=torch.int, device=label_actions.device)
+            loss["pm"] = weighted_loss(a_pred,
+                                       loss_type="mse", 
+                                       gt=label_actions, 
+                                       loss_wht=loss_weight, 
+                                       reduce_dim=reduce_dim)
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
         return loss

@@ -2,66 +2,79 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-def mse_loss_mask(img_out, img_gt, mask=None, reduce="mean"):
+def ent_loss(act_out):
     """
-    input shape: (B, T, *)
-    mask shape: (B, T)
-    reduce for dim=1
+    this returns negative entropy p * log(p) instead of - p * log(p)
+    which is directly ready to be minimized, do not add negative sign
     """
-    dim = img_out.dim()
-    assert dim >= 3 and dim == img_gt.dim(), "Input must be at least 3 dimension (bsz, time, *) and the label and prediction must be equal"
-    mse_loss = torch.mean(((img_out - img_gt)) ** 2, dim=[i for i in range(2, dim)])
-    if mask is not None:
-        mse_loss = mse_loss * mask
-        if reduce == "mean":
-            sum_mask = torch.mean(mask)
-            sum_loss = torch.mean(mse_loss)
+    return torch.sum(torch.log(act_out + 1.0e-10) * act_out, dim=-1)
+
+def focal_loss(out, gt, gamma=0):
+    gt_logits = F.one_hot(gt, out.shape[-1])
+    preds = torch.log(out + 1.0e-10) * ((1.0 - out) ** gamma)
+    return -torch.sum(preds * gt_logits, dim=-1)
+
+def metrics(out, gt=None, loss_type='ent', **kwargs):
+    if(loss_type == 'mse'):
+        assert gt is not None, "Ground Truth Must Be Provided When Using MSE Loss"
+        loss_array = torch.mean((out - gt) ** 2, dim=[i for i in range(2, out.ndim)])
+    elif(loss_type == 'ce'):
+        assert gt is not None, "Ground Truth Must Be Provided When Using Cross Entropy Loss"
+        if('gamma' not in kwargs):
+            loss_array = focal_loss(out, gt)
         else:
-            sum_mask = torch.mean(mask, dim=0)
-            sum_loss = torch.mean(mse_loss, dim=0)
-        mse_loss = sum_loss / sum_mask
+            loss_array = focal_loss(out, gt, kwargs['gamma'])
+    elif(loss_type == 'ent'):
+        return ent_loss(out)
     else:
-        if reduce == "mean":
-            mse_loss = torch.mean(mse_loss)
-        else:
-            mse_loss = torch.mean(mse_loss, dim=0)
+        raise ValueError('Unknown loss type {}'.format(loss_type))
+    return loss_array
+    
 
-    return mse_loss
-
-def ce_loss_mask(act_out, act_gt, mask = None, gamma=1, reduce="mean"):
+def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
     """
-    input shape: (B, T, H)
-    mask shape: (B, T)
-    reudce for dim=1
-    """
-    gt_logits = F.one_hot(act_gt, act_out.shape[-1])
-    preds = torch.log(act_out + 1.0e-10) * ((1.0 - act_out) ** gamma)
-    ce_loss = -torch.sum(preds * gt_logits, dim=-1)
+    input and ground truth shape: (B, T, *)
+    loss_wht shape: (B, T) (or broadcastable), loss weight for each sample
 
-    if mask is not None:
-        ce_loss = ce_loss * mask
-        if reduce == "mean":
-            sum_mask = torch.mean(mask)
-            sum_loss = torch.mean(ce_loss)
-        else:
-            sum_mask = torch.mean(mask, dim=0)
-            sum_loss = torch.mean(ce_loss, dim=0)
-        ce_loss = sum_loss / sum_mask
+    loss_type: 'mse', 'ce'
+    reduce_dim: None - Not Reduced At All
+                0 - Only reduce the batch dimension
+                1 - Only reduce both the batch and the temporal dimension
+    return:
+        mse_loss: weighted mean of losses
+        sample_cnt: sum of all loss_whts, the same dimension as mse_loss
+    """
+    
+    loss_array = metrics(out, **kwargs)
+
+    if(loss_wht is None):
+        loss_wht = torch.full(loss_array.shape[:2], 1.0)
+        sample_cnt = loss_array.numel()
     else:
-        if reduce == "mean":
-            ce_loss = torch.mean(ce_loss)
+        assert loss_wht.shape[1] == loss_array.shape[1]
+        assert loss_wht.shape[0] == loss_array.shape[0] or loss_wht.shape[0] == 1,\
+                "loss_wht must be (bsz, time) or (1, time)"
+        if(loss_wht.shape[0] == 1):
+            sample_cnt = torch.sum(loss_wht) * loss_array.shape[0]
         else:
-            ce_loss = torch.mean(ce_loss, dim=0)
+            sample_cnt = torch.sum(loss_wht)
+        loss_array = loss_array * loss_wht
 
-    return ce_loss
+    if(reduce_dim is not None):
+        if(reduce_dim==0):
+            # verage over batch dimension only
+            rdim = [0]
+            lambda_ = 1.0 / mse.shape[0]
+        elif(reduce_dim==1):
+            # average over the batch and time dimension
+            # must consider the loss weight
+            rdim = [0, 1]
+            lambda_ = 1.0 / sample_cnt
+        else:
+            raise ValueError("reduce_dim should be either None, 0 or 1.")
+        loss_array = torch.sum(loss_array, dim=rdim) * lambda_
 
-def ent_loss(act_out, reduce="mean"):
-    """
-    input shape: (B, T, H)
-    mask shape: (B, T)
-    reudce for dim=1
-    """
-    if reduce == "mean":
-        return torch.mean(torch.log(act_out + 1.0e-10) * act_out)
+    if(not need_cnt):
+        return loss_array
     else:
-        return torch.mean(torch.log(act_out + 1.0e-10) * act_out, dim=0)
+        return loss_array, sample_cnt
