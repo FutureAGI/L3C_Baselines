@@ -136,7 +136,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             train_config.load_model_path is not None and 
             train_config.load_model_path.lower() != 'none'):
         model = custom_load_model(model, f'{train_config.load_model_path}/model.pth', 
-                                  black_list=train_config.load_model_parameter_blacklist, 
+                                  black_list=train_config.load_model_parameter_blacklist,
+                                  verbose=main, 
                                   strict_check=False)
 
     # Perform the first evaluation
@@ -150,7 +151,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            train_stat_vae.reset()
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                             train_config.seq_len_vae, train_config.seg_len_vae, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
@@ -207,7 +207,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             acc_iter += 1
             # Important: Must reset the model before each segment
             model.module.reset()
-            train_stat_causal.reset()
             start_position = 0
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                     train_config.seq_len_causal, train_config.seg_len_causal, device, (batch[0], 1), *batch[1:]):
@@ -248,9 +247,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             if(main):
                 stat_res = train_stat_causal()
                 logger_causal(causal_scheduler.get_last_lr()[0],
-                              stat_res["loss_wm_raw"], 
-                              stat_res["loss_wm_latent"], 
-                              stat_res["loss_pm"], 
+                              stat_res["loss_wm_raw"]["mean"], 
+                              stat_res["loss_wm_latent"]["mean"], 
+                              stat_res["loss_pm"]["mean"], 
                               epoch=rid, 
                               iteration=batch_idx)
 
@@ -304,9 +303,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
                             "loss_pm", 
                             "count"))
 
-    if(main):
-        log_debug("Start evaluation ...")
-        log_progress(0)
+    log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
+    log_progress(0, on=main)
+
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
@@ -318,7 +317,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
             with torch.no_grad():
                 loss_vae = model.module.vae_loss(obs)
                 loss = model.module.sequential_loss(
-                            obs, bacti, lacti, bevs, start_position=start_position)
+                            obs, bacti, lacti, bevs,
+                            loss_is_weighted=False,
+                            start_position=start_position)
 
             stats[sub_idx].add_with_safety(rank, 
                                 loss_rec=loss_vae["Reconstruction-Error"], 
@@ -329,14 +330,14 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
             start_position += bacti.shape[1]
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
+        log_progress((batch_idx + 1) / all_length, on=main)
+
     for stat, log in zip(stats, logger):
         stat_res = stat()
-        log(stat_res["loss_rec"], 
-                stat_res["loss_wm_raw"], 
-                stat_res["loss_wm_latent"], 
-                stat_res["loss_pm"], 
+        log(stat_res["loss_rec"]["mean"], 
+                stat_res["loss_wm_raw"]["mean"], 
+                stat_res["loss_wm_latent"]["mean"], 
+                stat_res["loss_pm"]["mean"], 
                 epoch=epoch_id)
 
 if __name__=='__main__':
