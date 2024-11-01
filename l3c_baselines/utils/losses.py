@@ -64,7 +64,7 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         if(reduce_dim==0):
             # verage over batch dimension only
             rdim = [0]
-            lambda_ = 1.0 / mse.shape[0]
+            lambda_ = 1.0 / loss_array.shape[0]
         elif(reduce_dim==1):
             # average over the batch and time dimension
             # must consider the loss weight

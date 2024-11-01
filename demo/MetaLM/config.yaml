@@ -1,4 +1,12 @@
 ---
+run_name: YOUR_NAME_TO_RUN
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: ./runs/
+  training_log: ./runs/train.log
+  evaluation_log: ./runs/eval.log
+
 model_config:
   vocab_size: 128
   max_position: 16000
