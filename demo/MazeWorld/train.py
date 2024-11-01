@@ -317,7 +317,9 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
             with torch.no_grad():
                 loss_vae = model.module.vae_loss(obs)
                 loss = model.module.sequential_loss(
-                            obs, bacti, lacti, bevs, start_position=start_position)
+                            obs, bacti, lacti, bevs,
+                            loss_is_weighted=False,
+                            start_position=start_position)
 
             stats[sub_idx].add_with_safety(rank, 
                                 loss_rec=loss_vae["Reconstruction-Error"], 
