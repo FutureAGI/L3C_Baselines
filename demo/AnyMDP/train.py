@@ -78,17 +78,15 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     field=f"{log_config.tensorboard_log}/train-{run_name}")
 
     # Evaluation Logger
-    logger_eval = []
-    for i in range((test_config.seq_len - 1) // test_config.seg_len + 1):
-        logger_eval.append(
-                Logger("validation_state_pred", 
-                       "validation_reward_pred", 
-                       "validation_policy",
-                       use_tensorboard=log_config.use_tensorboard,
-                       log_file=log_config.evaluation_log,
-                       prefix=f"{run_name}-Evaluation-{i}",
-                       on=main,
-                       field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
+    logger_eval = Logger("validation_state_pred", 
+                    "validation_reward_pred", 
+                    "validation_policy",
+                    start_iter=0, 
+                    use_tensorboard=log_config.use_tensorboard,
+                    log_file=log_config.evaluation_log,
+                    prefix=f"{run_name}-Evaluation",
+                    on=main,
+                    field=f"{log_config.tensorboard_log}/validate-{run_name}")
 
     train_stat = DistStatistics("loss_worldmodel_state", 
                                 "loss_worldmodel_reward", 
@@ -222,7 +220,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
     seg_num = (config.seq_len - 1) // config.seg_len + 1
 
-    stat = [DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm") for _ in range(seg_num)]
+    stat = DistStatistics("loss_wm_s", "loss_wm_r", "loss_pm")
 
     log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
     log_progress(0, on=main)
@@ -232,35 +230,34 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
         model.module.reset()
         sarr, baarr, laarr, rarr = batch
         r2goarr = rewards2go(rarr)
-        for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
-                    config.seq_len, config.seg_len, device, 
-                    (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
-            with torch.no_grad():
-                loss = model.module.sequential_loss(
+        losses = []
+        with torch.no_grad():
+            for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
+                        config.seq_len, config.seg_len, device, 
+                        (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
+                losses.append(model.module.sequential_loss(
                             r2go[:, :-1],
                             states, 
                             rewards, 
                             bactions, 
                             lactions, 
-                            r2go[:, 1:], start_position=start_position)
-
-            stat[sub_idx].add_with_safety(rank, 
-                                loss_wm_s=loss["wm-s"], 
-                                loss_wm_r=loss["wm-r"], 
-                                loss_pm=loss["pm"],
-                                count=loss["count"])
+                            r2go[:, 1:], start_position=start_position))
 
             start_position += bactions.shape[1]
 
+        stat.add_with_safety(rank, 
+                loss_wm_s=[loss["wm-s"] for loss in losses], 
+                loss_wm_r=[loss["wm-r"] for loss in losses], 
+                loss_pm=[loss["pm"] for loss in losses],
+                count=[loss["count"] for loss in losses])
+
         log_progress((batch_idx + 1) / all_length, on=main)
 
-    for i in range(seg_num):
-        stat_res = stat[i]()
-        logger[i](stat_res["loss_wm_s"], 
-                  stat_res["loss_wm_r"], 
-                  stat_res["loss_pm"],
-                  epoch=epoch_id)
-        stat[i].reset()
+    stat_res = stat()
+    logger(stat_res["loss_wm_s"]["mean"], 
+                stat_res["loss_wm_r"]["mean"], 
+                stat_res["loss_pm"]["mean"],
+                epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

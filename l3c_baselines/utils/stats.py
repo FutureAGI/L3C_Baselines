@@ -7,20 +7,6 @@ from dateutil.parser import parse
 from collections import defaultdict
 from l3c_baselines.utils import log_debug, log_warn
 
-
-def incremental_update_mean_var(mean, var, count, 
-                                batch_mean, batch_var, batch_count):
-    delta = batch_mean - mean
-    tot_count = count + batch_count
-
-    new_mean = mean + delta * batch_count / tot_count
-    m_a = var * count
-    m_b = batch_var * batch_count
-    M2 = m_a + m_b + torch.square(delta) * count * batch_count / tot_count
-    new_var = M2 / tot_count
-    new_count = tot_count
-    return new_mean, new_var, new_count
-
 class DistStatistics(object):
     """
     Provide distributed statistics over GPUs
@@ -41,11 +27,15 @@ class DistStatistics(object):
         Count being regarded as the number of samples behind each of the value
         if value is an array, then it is regarded as the number of samples behind each of the value
         """
-        zeroflag = False
         if(count is None):
-            count = torch.Tensor([1]).to(device)
-        assert count.numel() == 1, "count must have only one element"
-
+            fcount = torch.Tensor([1]).to(device)
+        elif(isinstance(count, list) or isinstance(count, tuple)):
+            fcount = torch.stack(count, dim=0).to(device)
+        elif(isinstance(count, torch.Tensor)):
+            fcount = count.clone().to(device)
+        else:
+            fcount = torch.Tensor([count]).to(device)
+        
         for key, value in kwargs.items():
             if(key not in self._data):
                 log_warn(f"Key {key} not registered in DistStatistics object")
@@ -53,22 +43,32 @@ class DistStatistics(object):
             if isinstance(value, list) or isinstance(value, tuple):
                 fvalue = torch.stack(value, dim=0).to(device)
             elif(isinstance(value, torch.Tensor)):
-                fvalue = value.to(device)
+                fvalue = value.clone().to(device)
             else:
                 fvalue = torch.Tensor(value).to(device)
+
+            assert fcount.numel() == 1 or fcount.numel() == fvalue.numel(), \
+                f"dimension mismatch between statistic count {fcount.shape} and value {fvalue.shape}"
 
             if torch.isinf(fvalue).any() or torch.isnan(fvalue).any():
                 log_warn(f"'Device:{device}' stating '{key}' has inf/NaN")
                 fvalue = torch.where(torch.isfinite(fvalue), 
                                      fvalue, torch.zeros_like(fvalue))
             
+            # Make sure both has the same dimension
+            fvalue = fvalue.squeeze()
+            if(fcount.ndim > fvalue):
+                fcount = fcount.squeeze()
+            while(fcount.ndim < fvalue.ndim):
+                fcount = fcount.unsqueeze(-1)
+            
             #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
             gathered_tensors = [torch.zeros_like(fvalue) for _ in range(dist.get_world_size())]
-            gathered_counts = [torch.zeros_like(count) for _ in range(dist.get_world_size())]
+            gathered_counts = [torch.zeros_like(fcount) for _ in range(dist.get_world_size())]
 
             # gather values from all devices
             dist.all_gather(gathered_tensors, fvalue.data)
-            dist.all_gather(gathered_counts, count.data)
+            dist.all_gather(gathered_counts, fcount.data)
 
             #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
             #Each element can be a length-1, length-2 tensors
@@ -78,8 +78,6 @@ class DistStatistics(object):
     def _stat(self, key):
         value = torch.stack(self._data[key], dim=0)
         counts = torch.stack(self._count[key], dim=0)
-
-        counts = counts.view([-1] + [1] * (value.ndim - 1))
 
         sum_cnt = torch.clip(torch.sum(counts), min=1)
         x_mean = torch.sum(value * counts, dim=0, keepdim=False) / sum_cnt
@@ -101,7 +99,7 @@ class DistStatistics(object):
             else:
                 mean = mean.squeeze().tolist()
                 var = var.squeeze().tolist()
-            stat_res[key] = {"mean":mean,"var":var, 'cnt': cnt}
+            stat_res[key] = {"mean":mean,"var":var,'cnt': cnt}
         if(reset):
             self.reset()
         return stat_res
