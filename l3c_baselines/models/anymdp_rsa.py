@@ -109,6 +109,97 @@ class AnyMDPRSA(RSADecisionModel):
         loss["causal-l2"] = parameters_regularization(self)
 
         return loss
+    
+    def inference_step_by_step(self, prompts, 
+                            observations, 
+                            rewards, 
+                            behavior_actions, 
+                            temp,
+                            state_dropout=0.0,
+                            device=None,
+                            cache=None, 
+                            need_cache=False,
+                            update_memory=True):
+        """
+        Given: cache - from s_0, a_0, r_0, ..., s_{tc}, a_{tc}, r_{tc}
+               observations: s_{tc}, ... s_{t}
+               actions: a_{tc}, ..., a_{t-1}
+               rewards: r_{tc}, ..., r_{t-1}
+        Returns:
+            obs_pred: numpy.array [1, state_dim], s_{t+1} (for easy case, state dim = 1, i.e. 1~128)
+            act_pred: numpy.array [1], a_{t}
+            r_pred: numpy.array [1], r_{t}
+            new_cache: torch.array caches up to s_0, a_0, a_r, ..., s_{t}, a_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
+        """        
+        obss = numpy.array(observations, dtype=numpy.int64)
+        acts = numpy.array(behavior_actions, dtype=numpy.int64)
+        rews = numpy.array(rewards, dtype=numpy.int64)
+
+        # Nobs, W, H, C = obss.shape # for img
+        (Nobs,) = obss.shape # for easy case
+        (Nacts,) = acts.shape
+        (Nrews,) = rews.shape
+
+        assert Nobs == Nacts + 1 == Nrews + 1
+
+        valid_obs = torch.from_numpy(obss).int()
+        valid_obs = torch.cat((valid_obs, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+        valid_act = None
+        valid_rew = None
+        if(Nacts < 1):
+            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+            valid_rew = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        else:
+            valid_act = torch.from_numpy(acts).int()
+            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+            valid_rew = torch.from_numpy(rews).int()
+            valid_rew = torch.cat((valid_rew, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+
+        # Update the cache first
+        # Only use ground truth
+        if(Nobs > 1):
+            with torch.no_grad():
+                s_pred, a_pred, r_pred, valid_cache  = self.forward(
+                    prompts, 
+                    observations[:, :-1], 
+                    behavior_actions[:, :-1], 
+                    rewards[:, :-1],
+                    cache=cache, need_cache=need_cache, state_dropout=state_dropout,
+                    T=temp,
+                    update_memory=update_memory)
+        else:
+            valid_cache = cache
+        n_obs = observations[:, -1:]
+        n_action = behavior_actions[:, -1:]
+        n_reward = rewards[:, -1:]
+        # Q: Temp 怎么给?
+        # Predict the latent representation of action and next frame (World Model)
+        o_pred, a_pred, r_pred, new_cache = self.forward(
+            prompts, 
+            n_obs, 
+            n_action, 
+            n_reward,
+            cache=valid_cache, need_cache=need_cache, state_dropout=state_dropout,
+            T=temp,
+            update_memory=update_memory)
+        # Q: How to sample output?
+        # Draw samples randomly according to the probability distribution of the input tensor. The result returned is a tensor containing the sampled values.
+        pred_action = torch.multinomial(a_pred[:, -1:], num_samples=1).squeeze(1)
+        # Get the sample index which has same value as pred_action.
+        pred_action_sample_index = torch.nonzero(pred_action == a_pred[:, -1:]).squeeze(1)
+        action_out = pred_action.squeeze(0).cpu().numpy()
+
+        # Get the reward according to the sample index.
+        pred_reward_sample = r_pred[ : , pred_action_sample_index]
+        # Get the mean of the reward as reward output.
+        reward_out = torch.mean(pred_reward_sample[:, -1:]).squeeze(0).cpu().numpy()
+
+        pre_state_sample = o_pred[:, pred_action_sample_index]
+        pred_state = torch.multinomial(pre_state_sample[:, -1:], num_samples=1).squeeze(1)
+        state_out = pred_state.squeeze(0).cpu().numpy()
+
+
+        return state_out, action_out, reward_out, new_cache
         
 
 if __name__=="__main__":
@@ -125,9 +216,9 @@ if __name__=="__main__":
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(None, observation, reward, action, action)
-    rec_img, img_out, act_out, cache = model.inference_step_by_step(
-            observation[:, :5], action[:, :4], 1.0, 0, observation.device)
-    print("vae:", vae_loss, "sequential:", losses)
-    print(img_out[0].shape, act_out.shape)
-    print(len(cache))
-    print(cache[0].shape)
+    # rec_img, img_out, act_out, cache = model.inference_step_by_step(
+    #         observation[:, :5], action[:, :4], 1.0, 0, observation.device)
+    # print("vae:", vae_loss, "sequential:", losses)
+    # print(img_out[0].shape, act_out.shape)
+    # print(len(cache))
+    # print(cache[0].shape)
