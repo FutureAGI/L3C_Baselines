@@ -50,24 +50,16 @@ class LanguageModel(nn.Module):
     def reset(self):
         self.encoder.reset()
 
-    def perplexity(self, inputs, outputs, start_position=0, use_loss_weight=True, update_memory=True):
+    def perplexity(self, inputs, outputs, start_position=0, is_loss_weighted=True, update_memory=True, reduce_dim=1):
         seq_len = inputs.shape[1]
         logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
         loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
         if(self.loss_weight.shape[1] < start_position + seq_len):
             log_fatal(f"specified max_position {self.loss_weight.shape[1]} is shorter" +
                     f" than sequence length {start_position + seq_len}, quit")
-        if(use_loss_weight):
+        if(is_loss_weighted):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
-        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=1)
-
-    def perplexity_array(self, inputs, outputs, start_position=0, use_loss_weight=True, update_memory=True):
-        seq_len = inputs.shape[1]
-        logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
-        loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
-        if(use_loss_weight):
-            loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
-        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=0)
+        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=reduce_dim)
 
     def inference_seg(self, inputs, L, 
                       temp_default=1.0, 

@@ -30,7 +30,7 @@ class DistStatistics(object):
         if(count is None):
             fcount = torch.Tensor([1]).to(device)
         elif(isinstance(count, list) or isinstance(count, tuple)):
-            fcount = torch.stack(count, dim=0).to(device)
+            fcount = torch.Tensor(count).to(device)
         elif(isinstance(count, torch.Tensor)):
             fcount = count.clone().to(device)
         else:

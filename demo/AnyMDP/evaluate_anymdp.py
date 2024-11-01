@@ -124,34 +124,21 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
                     loss_wm_r_ds=loss_wm_r_T[i],
                     loss_pm_ds=loss_pm_T[i],
                     count=1)
-        log_progress(batch_idx / len(dataloader), on=main)
+        log_progress((batch_idx + 1) / len(dataloader), on=main)
 
     stat_res = stat()
 
     if(main):
         if not os.path.exists(config.output):
             os.makedirs(config.output)
-
-        stat_res_wm_s = string_mean_var(downsample_length, stat_res["loss_wm_s_ds"])
-        file_path = f'{config.output}/position_wise_wm_s.txt'
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        with open(file_path, 'w') as f_model:
-            f_model.write(stat_res_wm_s)
         
-        stat_res_wm_r = string_mean_var(downsample_length, stat_res["loss_wm_r_ds"])
-        file_path = f'{config.output}/position_wise_wm_r.txt'
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        with open(file_path, 'w') as f_model:
-            f_model.write(stat_res_wm_r)
-        
-        stat_res_pm = string_mean_var(downsample_length, stat_res["loss_pm_ds"])
-        file_path = f'{config.output}/position_wise_pm.txt'
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        with open(file_path, 'w') as f_model:
-            f_model.write(stat_res_pm)
+        for key_name in stat_res:
+            res_text = string_mean_var(downsample_length, stat_res[key_name])
+            file_path = f'{config.output}/result_{key_name}.txt'
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            with open(file_path, 'w') as f_model:
+                f_model.write(res_text)
         
 def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank):
     if use_gpu:
