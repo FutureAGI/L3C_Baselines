@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
 from collections import defaultdict
-from l3c_baselines.utils import log_debug, log_warn, log_fatal
+from restools.logging import log_warn, log_debug, log_progress, log_fatal, Logger
+from restools.configure import Configure
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

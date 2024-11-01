@@ -147,7 +147,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                             + train_config.lossweight_policymodel * loss["pm"])
                 start_position += bactions.shape[1]
 
-                train_stat.add_with_safety(
+                train_stat.gather(
                             rank,
                             loss_worldmodel_state = loss["wm-s"],
                             loss_worldmodel_reward = loss["wm-r"],
@@ -245,7 +245,7 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
             start_position += bactions.shape[1]
 
-        stat.add_with_safety(rank, 
+        stat.gather(rank, 
                 loss_wm_s=[loss["wm-s"] for loss in losses], 
                 loss_wm_r=[loss["wm-r"] for loss in losses], 
                 loss_pm=[loss["pm"] for loss in losses],

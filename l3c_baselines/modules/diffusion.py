@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from l3c_baselines.utils import mse_loss_mask
+from l3c_baselines.utils import weighted_loss
 
 class DiffusionLayers(nn.Module):
     def __init__(self, T, hidden_size, condition_size, inner_hidden_size, beta=(0.05, 0.20)):
@@ -46,7 +46,7 @@ class DiffusionLayers(nn.Module):
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
         x_t, eps, _ = self.diffusion_forward(x0, _t)
         eps_t = self.step_forward(x_t, _t, cond)
-        loss = mse_loss_mask(eps_t, eps, mask=mask, reduce_dim=reduce_dim)
+        loss = weighted_loss(eps_t, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim)
         return loss
 
     def forward(self, x0, cond, mask=None, reduce_dim=1, t=None):

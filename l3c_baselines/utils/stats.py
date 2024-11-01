@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
 from collections import defaultdict
-from l3c_baselines.utils import log_debug, log_warn
+from .tools import log_debug, log_warn
 
 class DistStatistics(object):
     """
@@ -22,7 +22,7 @@ class DistStatistics(object):
             self._data[key] = []
             self._count[key] = []
 
-    def append_with_safety(self, device, count=None, **kwargs):
+    def gather(self, device, count=None, **kwargs):
         """
         Count being regarded as the number of samples behind each of the value
         if value is an array, then it is regarded as the number of samples behind each of the value
@@ -57,7 +57,7 @@ class DistStatistics(object):
             
             # Make sure both has the same dimension
             fvalue = fvalue.squeeze()
-            if(fcount.ndim > fvalue):
+            if(fcount.ndim > fvalue.ndim):
                 fcount = fcount.squeeze()
             while(fcount.ndim < fvalue.ndim):
                 fcount = fcount.unsqueeze(-1)

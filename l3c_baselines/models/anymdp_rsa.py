@@ -105,7 +105,7 @@ class AnyMDPRSA(RSADecisionModel):
         # World Model Loss - States and Rewards
         loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
                                      gt=observations[:, 1:], 
-                                     loss_type="mse",
+                                     loss_type="ce",
                                      loss_wht=loss_weight, 
                                      reduce_dim=reduce_dim,
                                      need_cnt=True)

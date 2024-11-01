@@ -7,7 +7,7 @@ def ent_loss(act_out):
     this returns negative entropy p * log(p) instead of - p * log(p)
     which is directly ready to be minimized, do not add negative sign
     """
-    return torch.log(act_out + 1.0e-10) * act_out
+    return torch.sum(torch.log(act_out + 1.0e-10) * act_out, dim=-1)
 
 def focal_loss(out, gt, gamma=0):
     gt_logits = F.one_hot(gt, out.shape[-1])
@@ -17,17 +17,18 @@ def focal_loss(out, gt, gamma=0):
 def metrics(out, gt=None, loss_type='ent', **kwargs):
     if(loss_type == 'mse'):
         assert gt is not None, "Ground Truth Must Be Provided When Using MSE Loss"
-        loss_array = torch.mean((out - gt)) ** 2, dim=[i for i in range(2, dim)])
+        loss_array = torch.mean((out - gt) ** 2, dim=[i for i in range(2, out.ndim)])
     elif(loss_type == 'ce'):
         assert gt is not None, "Ground Truth Must Be Provided When Using Cross Entropy Loss"
         if('gamma' not in kwargs):
-            loss_array = ent_loss(out, gt)
+            loss_array = focal_loss(out, gt)
         else:
-            loss_array = ent_loss(out, gt, kwargs['gamma'])
+            loss_array = focal_loss(out, gt, kwargs['gamma'])
     elif(loss_type == 'ent'):
         return ent_loss(out)
     else:
         raise ValueError('Unknown loss type {}'.format(loss_type))
+    return loss_array
     
 
 def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):

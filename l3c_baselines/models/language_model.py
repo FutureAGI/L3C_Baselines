@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
 from l3c_baselines.utils import format_cache
-from l3c_baselines.utils import ce_loss_mask, mse_loss_mask
+from l3c_baselines.utils import weighted_loss
 from l3c_baselines.utils import count_parameters
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
@@ -59,7 +59,7 @@ class LanguageModel(nn.Module):
                     f" than sequence length {start_position + seq_len}, quit")
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
-        return ce_loss_mask(logits, outputs, gamma=0, mask=loss_weight, reduce_dim=0)
+        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=1)
 
     def perplexity_array(self, inputs, outputs, start_position=0, use_loss_weight=True, update_memory=True):
         seq_len = inputs.shape[1]
@@ -67,7 +67,7 @@ class LanguageModel(nn.Module):
         loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
-        return ce_loss_mask(logits, outputs, gamma=0, mask=loss_weight, reduce_dim=0)
+        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=0)
 
     def inference_seg(self, inputs, L, 
                       temp_default=1.0, 
