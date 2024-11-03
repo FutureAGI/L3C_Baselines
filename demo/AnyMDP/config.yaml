@@ -171,6 +171,8 @@ test_config:
 
 demo_config:
     master_port: "12211"
+    seg_len: 2000
+    task_num: 20000
     time_step: 2048
 
     model_config:

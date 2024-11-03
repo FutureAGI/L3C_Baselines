@@ -76,135 +76,93 @@ def string_mean_var(downsample_length, mean, var):
     for i in range(mean.shape[0]):
         string += f'{downsample_length * i}\t{mean[i]}\t{var[i]}\n'
     return string
-
-def anymdp_model_epoch(rank, env, task_num, config, model, main, device, downsample_length = 10):
+# config = demo_config
+def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length = 10):
     # Example training loop
 
     state_init, _ = env.reset()
     obs_arr = [state_init]
     act_arr = []
     rew_arr = []
+    obs_pred_arr = []
+    rew_pred_arr = []
     
-    step = 1
+    total_step = 1
+    success_count = 0
+    obs_loss_total = 0.0
+    rew_loss_total = 0.0
+    # task-wise loss
+    obs_loss_list = []
+    rew_loss_list = []
+    success_rate_list = []
+    downsample_scuccess_count = 0
+
     cache = None
     model.init_mem()
-
-    for task_index in range(task_num):
+    temperature = config.T_ini
+    new_tasks = False
+    segment_id = 0
+    for task_index in range(config.task_num):
         done = False
+        step = 1
+        task_start_position = len(rew_arr)
+        segment_id = len(rew_arr)//config.seg_len
+        segment_start_position = segment_id * config.seg_len
         while not done:
-            
-            
-    # dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
-    # dataloader = PrefetchDataLoader(dataset, batch_size=config.batch_size, rank=rank, world_size=world_size)
-    # all_length = len(dataloader)
+            temperature = max(temperature * (1.0 - config.T_dec), config.T_min)
+            state_out, action_out, reward_out, new_cache = model.module.inference_step_by_step(
+                observations = obs_arr[segment_start_position:],
+                rewards = rew_arr[segment_start_position:],
+                behavior_actions = act_arr[segment_start_position:],
+                temp = temperature,
+                new_tasks = new_tasks,
+                device = device,
+                cache = cache,
+                need_cache = True,
+                update_memory = True
+            )
+            if new_tasks:
+                # Remove the init state in next task form the obs_arr
+                # If we don't want to remove init state, we need to append 0 value to both act_arr and rew_arr.
+                obs_arr.pop(-1) 
+            new_tasks = False
+            cache = new_cache
+            act_arr.append(action_out)
+            new_state, new_reward, done, _ = env.step(action_out)
+            obs_arr.append(new_state)   
+            rew_arr.append(new_reward)
+            obs_pred_arr.append(state_out)
+            rew_pred_arr.append(reward_out)
+            if done:
+                new_tasks = True
+                if new_reward==1:
+                    success_count += 1
+                    downsample_scuccess_count += 1
+            else:
+                step += 1
+        # Reset the environment, prepare new task.
+        next_task_state_init, _ = env.reset()
+        obs_arr.append(next_task_state_init)
+        # Start statistics
+        # -World model loss
+        # --Easy case, obs value is discrete value, if obs is img or continous value, refer to MazeWorld/evaluate.py.
+        obs_loss = numpy.mean(obs_arr[task_start_position + 1:] - obs_pred_arr)
+        rew_loss = numpy.mean(rew_arr[task_start_position:] - rew_pred_arr)
+        # --obs_loss and rew_loss is task-wise loss, for step-wise/position-wise loss, then we don't need to average arcoss step.
+        obs_loss_list.append(obs_loss)
+        rew_loss_list.append(rew_loss)
+        obs_loss_total = (obs_loss_total*total_step + obs_loss*step)/(total_step+step)
+        rew_loss_total = (rew_loss_total*total_step + rew_loss*step)/(total_step+step)
+        total_step += step
+        if task_index % downsample_length == 0:
+            success_rate_list.append(downsample_scuccess_count/downsample_length)
+            downsample_scuccess_count = 0
+    total_success_rate = success_count/config.task_num
+    # Todo: Logger
+    # 拼接统计数据
+    # 拼接并保存obs_arr，act_arr，rew_arr，可根据downsample区间内的成功率来切分不同的数据集，teacher & student
 
-    # if config.downsample_size is not None:
-    #     downsample_length = config.downsample_size
-
-    # stat2 = DistStatistics("loss_wm_s_ds", "loss_wm_r_ds", "loss_pm_ds", "count", pointwise=True)
-    # if(main):
-    #     log_debug("Start evaluation ...")
-    #     log_progress(0)
-    # dataset.reset(0)
-
-    # loss_wm_s_T_batch = None
-    # loss_wm_r_T_batch = None
-    # loss_pm_T_batch = None
-    # loss_count_batch = 0
-    # for batch_idx, batch in enumerate(dataloader):
-    #     start_position = 0
-    #     model.module.reset()
-    #     sarr, baarr, laarr, rarr = batch
-    #     r2goarr = rewards2go(rarr)
-    #     loss_wm_s_T = None
-    #     loss_wm_r_T = None
-    #     loss_pm_T = None      
-    #     for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
-    #                 config.seq_len, config.seg_len, device, 
-    #                 (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
-    #         with torch.no_grad():
-    #             # loss dim is Bxt, t = T // seg_len 
-    #             loss = model.module.sequential_loss(
-    #                         r2go[:, :-1],
-    #                         states, 
-    #                         rewards, 
-    #                         bactions, 
-    #                         lactions, 
-    #                         r2go[:, 1:], 
-    #                         start_position=start_position,
-    #                         reduce_dim=None)
-    #         if (sub_idx == 0):
-    #             loss_wm_s_T=torch.nan_to_num(loss["wm-s"], nan=0.0)
-    #             loss_wm_r_T=torch.nan_to_num(loss["wm-r"], nan=0.0)
-    #             loss_pm_T=torch.nan_to_num(loss["pm"], nan=0.0)
-    #         else:
-    #             loss_wm_s_T = torch.cat((loss_wm_s_T, torch.nan_to_num(loss["wm-s"], nan=0.0)), dim=1)
-    #             loss_wm_r_T = torch.cat((loss_wm_r_T, torch.nan_to_num(loss["wm-r"], nan=0.0)), dim=1)
-    #             loss_pm_T = torch.cat((loss_pm_T, torch.nan_to_num(loss["pm"], nan=0.0)), dim=1)
-    #         start_position += bactions.shape[1]
-        
-    #     # Append over all segment, loss_wm_s_arr, loss_wm_r_arr and loss_pm_arr dim become BxT
-    #     # Downsample over T, dim become [B,T//downsample_length]
-    #     dim_1, seq_length = loss_wm_s_T.shape
-    #     num_elements_to_keep = seq_length // downsample_length * downsample_length
-    #     loss_wm_s_ds = torch.mean(loss_wm_s_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
-    #     loss_wm_r_ds = torch.mean(loss_wm_r_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
-    #     loss_pm_ds = torch.mean(loss_pm_T[:, :num_elements_to_keep].view(dim_1, seq_length//downsample_length, -1), dim=2)
-        
-    #     loss_wm_s_T_batch = torch.cat((loss_wm_s_T_batch, loss_wm_s_ds), dim=0) if loss_wm_s_T_batch is not None else loss_wm_s_ds
-    #     loss_wm_r_T_batch = torch.cat((loss_wm_r_T_batch, loss_wm_r_ds), dim=0) if loss_wm_r_T_batch is not None else loss_wm_r_ds
-    #     loss_pm_T_batch = torch.cat((loss_pm_T_batch, loss_pm_ds), dim=0) if loss_pm_T_batch is not None else loss_pm_ds
-    #     loss_count_batch += dim_1
-
-        
-        
-
-    #     if(main):
-    #         log_progress((batch_idx + 1) / all_length)
-
-    # # finish batch loop
-    # # Calculate result matrix, dim become [2,T//downsample_length], first row is position_wise mean, second row is variance.
-    # # Get the result in each device
-    # stat_loss_wm_s = calculate_result_matrix(loss_wm_s_T_batch)
-    # stat_loss_wm_r = calculate_result_matrix(loss_wm_r_T_batch)
-    # stat_loss_pm = calculate_result_matrix(loss_pm_T_batch)
-    # # Merge the result accross all device
-    # stat2.append_with_safety(rank, 
-    #                         loss_wm_s_ds=stat_loss_wm_s, 
-    #                         loss_wm_r_ds=stat_loss_wm_r, 
-    #                         loss_pm_ds=stat_loss_pm,
-    #                         count=torch.tensor(loss_count_batch))
-    # if(main):
-    #     print("------------Debug: stat_loss_wm_s =",stat_loss_wm_s)
-    #     print("------------Debug: stat_loss_wm_r =",stat_loss_wm_r)
-    #     print("------------Debug: stat_loss_pm =",stat_loss_pm)
-    #     print("------------Debug: loss_count_batch =",loss_count_batch)
     
-
-    # if(main):
-        # if not os.path.exists(config.output):
-        #     os.makedirs(config.output)
-        # stat_res_wm_s = string_mean_var(downsample_length, stat2()["loss_wm_s_ds"][0], stat2()["loss_wm_s_ds"][1])
-        # file_path = f'{config.output}/position_wise_wm_s.txt'
-        # if os.path.exists(file_path):
-        #     os.remove(file_path)
-        # with open(file_path, 'w') as f_model:
-        #     f_model.write(stat_res_wm_s)
-        
-        # stat_res_wm_r = string_mean_var(downsample_length, stat2()["loss_wm_r_ds"][0], stat2()["loss_wm_r_ds"][1])
-        # file_path = f'{config.output}/position_wise_wm_r.txt'
-        # if os.path.exists(file_path):
-        #     os.remove(file_path)
-        # with open(file_path, 'w') as f_model:
-        #     f_model.write(stat_res_wm_r)
-        
-        # stat_res_pm = string_mean_var(downsample_length, stat2()["loss_pm_ds"][0], stat2()["loss_pm_ds"][1])
-        # file_path = f'{config.output}/position_wise_pm.txt'
-        # if os.path.exists(file_path):
-        #     os.remove(file_path)
-        # with open(file_path, 'w') as f_model:
-        #     f_model.write(stat_res_pm)
-    #stat2.reset()
 
 def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     
@@ -225,8 +183,8 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if(main):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
-    test_config = config.test_config
     train_config = config.train_config
+    demo_config = config.demo_config
     
     # Load Model
     model = AnyMDPRSA(config.model_config, verbose=main)
@@ -235,16 +193,16 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         model = DDP(model, device_ids=[rank])
     else:
         model = DDP(model)
-    if(test_config.has_attr("load_model_path") and 
-            test_config.load_model_path is not None and 
-            test_config.load_model_path.lower() != 'none'):
-        model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', 
+    if(demo_config.model_config.has_attr("load_model_path") and 
+            demo_config.model_config.load_model_path is not None and 
+            demo_config.model_config.load_model_path.lower() != 'none'):
+        model = custom_load_model(model, f'{demo_config.model_config.load_model_path}/model.pth', 
                                   black_list=train_config.load_model_parameter_blacklist, 
                                   strict_check=False)
         print("------------Load model success!------------")
-
+    env = create_env(demo_config.env_config.name)
     # Perform the first evaluation
-    anymdp_model_epoch(rank, world_size, test_config, model, main, device, test_config.downsample_size)
+    anymdp_model_epoch(rank, demo_config, env, model, main, device, demo_config.downsample_size)
 
     return
 
@@ -275,23 +233,7 @@ if __name__=='__main__':
     demo_config = config.demo_config
     os.environ['MASTER_PORT'] = demo_config.master_port        # Example port, choose an available port
 
-    # mp.spawn(anymdp_main_epoch,
-    #          args=(use_gpu, world_size, config, 0, config.run_name),
-    #          nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
-    #          join=True)
-    env = create_env(demo_config.env_config.name)
-    env.reset()
-    print("Action space: ", env.action_space)
-    print("Observation space: ", env.observation_space)
-    MAX_ITERATIONS = 10
-    for i in range(MAX_ITERATIONS):
-        random_action = env.action_space.sample()
-        print("Random action: ", random_action)
-        new_state, reward, done, info = env.step(random_action)
-        print("New state: ", new_state)
-        print("Reward: ", reward)
-        print("Done: ", done)
-        print("Info: ", info)
-        env.render()
-        if done:
-            break
+    mp.spawn(anymdp_main_epoch,
+             args=(use_gpu, world_size, config, 0, config.run_name),
+             nprocs=world_size if use_gpu else min(world_size, 4),  # Limit CPU processes if desired
+             join=True)

@@ -115,6 +115,7 @@ class AnyMDPRSA(RSADecisionModel):
                             rewards, 
                             behavior_actions, 
                             temp,
+                            new_tasks=False,
                             state_dropout=0.0,
                             device=None,
                             cache=None, 
@@ -139,8 +140,10 @@ class AnyMDPRSA(RSADecisionModel):
         (Nobs,) = obss.shape # for easy case
         (Nacts,) = acts.shape
         (Nrews,) = rews.shape
-
-        assert Nobs == Nacts + 1 == Nrews + 1
+        if new_tasks:
+            assert Nobs == Nacts + 2 == Nrews + 2
+        else:
+            assert Nobs == Nacts + 1 == Nrews + 1
 
         valid_obs = torch.from_numpy(obss).int()
         valid_obs = torch.cat((valid_obs, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
@@ -149,6 +152,14 @@ class AnyMDPRSA(RSADecisionModel):
         if(Nacts < 1):
             valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
             valid_rew = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        elif(new_tasks):
+            valid_act = torch.from_numpy(acts).int()
+            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+            init_value = torch.zeros((1, 1), dtype=torch.int64).to(device)
+            valid_act = torch.cat((valid_act, init_value), dim=1)
+            valid_rew = torch.from_numpy(rews).int()
+            valid_rew = torch.cat((valid_rew, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+            valid_rew = torch.cat((valid_rew, init_value), dim=1)
         else:
             valid_act = torch.from_numpy(acts).int()
             valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
@@ -172,7 +183,6 @@ class AnyMDPRSA(RSADecisionModel):
         n_obs = observations[:, -1:]
         n_action = behavior_actions[:, -1:]
         n_reward = rewards[:, -1:]
-        # Q: Temp 怎么给?
         # Predict the latent representation of action and next frame (World Model)
         o_pred, a_pred, r_pred, new_cache = self.forward(
             prompts, 
@@ -185,19 +195,10 @@ class AnyMDPRSA(RSADecisionModel):
         # Q: How to sample output?
         # Draw samples randomly according to the probability distribution of the input tensor. The result returned is a tensor containing the sampled values.
         pred_action = torch.multinomial(a_pred[:, -1:], num_samples=1).squeeze(1)
-        # Get the sample index which has same value as pred_action.
-        pred_action_sample_index = torch.nonzero(pred_action == a_pred[:, -1:]).squeeze(1)
         action_out = pred_action.squeeze(0).cpu().numpy()
 
-        # Get the reward according to the sample index.
-        pred_reward_sample = r_pred[ : , pred_action_sample_index]
-        # Get the mean of the reward as reward output.
-        reward_out = torch.mean(pred_reward_sample[:, -1:]).squeeze(0).cpu().numpy()
-
-        pre_state_sample = o_pred[:, pred_action_sample_index]
-        pred_state = torch.multinomial(pre_state_sample[:, -1:], num_samples=1).squeeze(1)
-        state_out = pred_state.squeeze(0).cpu().numpy()
-
+        state_out = o_pred.squeeze(1).squeeze(0).cpu().numpy()
+        reward_out = r_pred.squeeze(1).squeeze(0).cpu().numpy()
 
         return state_out, action_out, reward_out, new_cache
         
