@@ -31,7 +31,6 @@ class AnyMDPDataSet(Dataset):
         random.seed(seed)
         random.shuffle(self.file_list)
 
-
     def __getitem__(self, index):
         path = self.file_list[index]
 

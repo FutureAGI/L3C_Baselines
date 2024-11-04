@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from l3c_baselines.utils import mse_loss_mask
+from l3c_baselines.utils import weighted_loss
 
 class VAE(nn.Module):
     def __init__(
@@ -41,7 +41,7 @@ class VAE(nn.Module):
     def loss(self, inputs, _sigma=0.0):
         outputs, z_exp, z_log_var = self.reconstruct(inputs, _sigma = _sigma)
         kl_loss = torch.mean(-0.5 * torch.sum(1 + z_log_var - torch.square(z_exp) - torch.exp(z_log_var), axis=1))
-        reconstruction_loss = mse_loss_mask(outputs, inputs, reduce_dim = 0)
+        reconstruction_loss = weighted_loss(outputs, loss_type="mse", gt=inputs, reduce_dim=1)
 
         return {"Reconstruction-Error": reconstruction_loss,
                 "KL-Divergence": kl_loss}

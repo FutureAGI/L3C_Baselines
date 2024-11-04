@@ -19,7 +19,8 @@ class NaiveDataLoader(DataLoader):
         self.world_size = world_size
         self.index = 0
         self.local_index = 0
-        self.length = (len(self.dataset) - 1) // (self.batch_size * self.world_size) + 1
+        self.physical_length = len(self.dataset)
+        self.length = (self.physical_length - 1) // (self.batch_size * self.world_size) + 1
         self.data_volume = len(self.dataset)
 
     def __iter__(self):
@@ -63,7 +64,7 @@ def worker_fn(dataset, length, index_queue, output_queue):
         if index is None:
             break
 
-        if index > length:
+        if index > length - 1:
             # Allowing fetch index to exceed max length to accommodate certain mistake
             real_idx = index % length
         else:
@@ -83,7 +84,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         world_size=1,
         batch_size=4,
         num_workers=2,
-        prefetch_batches=1,
+        prefetch_batches=2,
         collate_fn=torch_collate,
     ):
         super().__init__(dataset, 
@@ -104,7 +105,7 @@ class PrefetchDataLoader(NaiveDataLoader):
         for _ in range(num_workers):
             index_queue = multiprocessing.Queue()
             worker = multiprocessing.Process(
-                target=worker_fn, args=(self.dataset, self.length, index_queue, self.output_queue)
+                target=worker_fn, args=(self.dataset, self.physical_length, index_queue, self.output_queue)
             )
             worker.daemon = True
             worker.start()

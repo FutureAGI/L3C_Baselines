@@ -91,18 +91,15 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                         field=f"{log_config.tensorboard_log}/train-{run_name}")
 
 
-    logger_eval = []
-    for i in range((test_config.seq_len - 1) // test_config.seg_len + 1):
-        logger_eval.append(
-                Logger("validation_reconstruction", 
+    logger_eval = Logger("validation_reconstruction", 
                        "validation_worldmodel_raw", 
                        "validation_worldmodel_latent",
                        "validation_policymodel",
                        use_tensorboard=log_config.use_tensorboard,
                        log_file=log_config.evaluation_log,
-                       prefix=f"{run_name}-Evaluation-{i}",
+                       prefix=f"{run_name}-Evaluation",
                        on=main,
-                       field=f"{log_config.tensorboard_log}/validate-{run_name}-Seg{i}"))
+                       field=f"{log_config.tensorboard_log}/validate-{run_name}")
 
     train_stat_vae = DistStatistics("loss_rec", "loss_kl")
     train_stat_causal = DistStatistics("loss_wm_raw", "loss_wm_latent", "loss_pm")
@@ -136,7 +133,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             train_config.load_model_path is not None and 
             train_config.load_model_path.lower() != 'none'):
         model = custom_load_model(model, f'{train_config.load_model_path}/model.pth', 
-                                  black_list=train_config.load_model_parameter_blacklist, 
+                                  black_list=train_config.load_model_parameter_blacklist,
+                                  verbose=main, 
                                   strict_check=False)
 
     # Perform the first evaluation
@@ -150,7 +148,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         dataloader.dataset.reset(rid)
         for batch_idx, batch in enumerate(dataloader):
             acc_iter += 1
-            train_stat_vae.reset()
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                             train_config.seq_len_vae, train_config.seg_len_vae, device, (batch[0], 1), *batch[1:]):
                 obs = obs.permute(0, 1, 4, 2, 3)
@@ -160,7 +157,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     loss = model.module.vae_loss(obs, _sigma=sigma_scheduler())
                     vae_loss = loss["Reconstruction-Error"] + lambda_scheduler() * loss["KL-Divergence"]
 
-                train_stat_vae.add_with_safety(
+                train_stat_vae.gather(
                     rank,
                     loss_rec = loss["Reconstruction-Error"],
                     loss_kl = loss["KL-Divergence"])
@@ -186,8 +183,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             logger_vae(sigma_scheduler(), 
                     lambda_scheduler(), 
                     vae_scheduler.get_last_lr()[0],
-                    stat_res["loss_rec"],
-                    stat_res["loss_kl"],
+                    stat_res["loss_rec"]["mean"],
+                    stat_res["loss_kl"]["mean"],
                     epoch=rid, 
                     iteration=batch_idx)
 
@@ -207,7 +204,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             acc_iter += 1
             # Important: Must reset the model before each segment
             model.module.reset()
-            train_stat_causal.reset()
             start_position = 0
             for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                     train_config.seq_len_causal, train_config.seg_len_causal, device, (batch[0], 1), *batch[1:]):
@@ -225,7 +221,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                             + train_config.lossweight_l2 * loss["causal-l2"])
                 start_position += bacti.shape[1]
 
-                train_stat_causal.add_with_safety(
+                train_stat_causal.gather(
                     rank,
                     loss_wm_raw = loss["wm-raw"],
                     loss_wm_latent = loss["wm-latent"],
@@ -233,24 +229,26 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
-                    gradient_failsafe(model.module, causal_optimizer, scaler)
+                    clip_grad_norm_(model.module.parameters(), 1.0)
                 else:
                     causal_loss.backward()
-                clip_grad_norm_(model.module.parameters(), 1.0)
+                    clip_grad_norm_(model.module.parameters(), 1.0)
 
             if(train_config.use_scaler):
+                gradient_failsafe(model.module, causal_optimizer, scaler)
                 scaler.step(causal_optimizer)
                 scaler.update()
             else:
+                gradient_failsafe(model.module, causal_optimizer)
                 causal_optimizer.step()
             causal_scheduler.step()
 
             if(main):
                 stat_res = train_stat_causal()
                 logger_causal(causal_scheduler.get_last_lr()[0],
-                              stat_res["loss_wm_raw"], 
-                              stat_res["loss_wm_latent"], 
-                              stat_res["loss_pm"], 
+                              stat_res["loss_wm_raw"]["mean"], 
+                              stat_res["loss_wm_latent"]["mean"], 
+                              stat_res["loss_pm"]["mean"], 
                               epoch=rid, 
                               iteration=batch_idx)
 
@@ -296,48 +294,48 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
 
     all_length = len(dataloader)
 
-    stats = []
-    for i in range(len(logger)):
-        stats.append(DistStatistics("loss_rec", 
+    stats = DistStatistics("loss_rec", 
                             "loss_wm_raw", 
                             "loss_wm_latent", 
-                            "loss_pm", 
-                            "count"))
+                            "loss_pm")
 
-    if(main):
-        log_debug("Start evaluation ...")
-        log_progress(0)
+    log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
+    log_progress(0, on=main)
+
     dataset.reset(0)
     for batch_idx, batch in enumerate(dataloader):
         start_position = 0
         model.module.reset()
+        losses_vae = []
+        losses = []
         for sub_idx, obs, bacti, lacti, bactd, lactd, rews, bevs in segment_iterator(
                     config.seq_len, config.seg_len, device, (batch[0], 1), *batch[1:]):
             obs = obs.permute(0, 1, 4, 2, 3)
 
             with torch.no_grad():
-                loss_vae = model.module.vae_loss(obs)
-                loss = model.module.sequential_loss(
-                            obs, bacti, lacti, bevs, start_position=start_position)
-
-            stats[sub_idx].add_with_safety(rank, 
-                                loss_rec=loss_vae["Reconstruction-Error"], 
-                                loss_wm_raw=loss["wm-raw"], 
-                                loss_wm_latent=loss["wm-latent"], 
-                                loss_pm=loss["pm"],
-                                count=loss["count"])
-
+                losses_vae.append(model.module.vae_loss(obs))
+                print("vae_loss", losses_vae[-1]["Reconstruction-Error"].shape)
+                losses.append(model.module.sequential_loss(
+                            obs, bacti, lacti, bevs,
+                            loss_is_weighted=False,
+                            start_position=start_position))
             start_position += bacti.shape[1]
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
-    for stat, log in zip(stats, logger):
-        stat_res = stat()
-        log(stat_res["loss_rec"], 
-                stat_res["loss_wm_raw"], 
-                stat_res["loss_wm_latent"], 
-                stat_res["loss_pm"], 
-                epoch=epoch_id)
+        stats.gather(rank, 
+                        loss_rec=[loss["Reconstruction-Error"] for loss in losses_vae], 
+                        loss_wm_raw=[loss["wm-raw"] for loss in losses], 
+                        loss_wm_latent=[loss["wm-latent"] for loss in losses], 
+                        loss_pm=[loss["pm"] for loss in losses],
+                        count=[loss["count"] for loss in losses])
+
+        log_progress((batch_idx + 1) / all_length, on=main)
+
+    stat_res = stats()
+    logger(stat_res["loss_rec"]["mean"], 
+            stat_res["loss_wm_raw"]["mean"], 
+            stat_res["loss_wm_latent"]["mean"], 
+            stat_res["loss_pm"]["mean"], 
+            epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

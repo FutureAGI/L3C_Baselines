@@ -13,10 +13,10 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from l3c_baselines.dataloader import LMDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import show_bar, model_path
+from l3c_baselines.utils import model_path
 from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
-from l3c_baselines.models import LanguageModel
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from l3c_baselines.models import LanguageModel
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
@@ -52,26 +52,44 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Example dataset and dataloader
     train_config = config.train_config
     test_config = config.test_config
+    log_config = config.log_config
+    run_name = config.run_name
 
     dataset = LMDataSet(train_config.data_path, train_config.file_size, verbose=main)
     dataloader = PrefetchDataLoader(dataset, batch_size=train_config.batch_size, rank=rank, world_size=world_size)
 
-    logger = Logger("learning_rate", "perplexity", 
-                on=main, max_iter=len(dataloader), use_tensorboard=True)
+    logger = Logger("learning_rate",
+                    "loss", 
+                    on=main, 
+                    max_iter=len(dataloader), 
+                    use_tensorboard=True,
+                    log_file=log_config.training_log,
+                    prefix=f"{run_name}-Training",
+                    field=f"{log_config.tensorboard_log}/train-{run_name}")
+
+    logger_eval = Logger("perplexity", 
+                        on=main, 
+                        use_tensorboard=True,
+                        log_file=log_config.evaluation_log,
+                        prefix=f"{run_name}-Evaluation",
+                        field=f"{log_config.tensorboard_log}/validate-{run_name}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config.lr)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda x:noam_scheduler(x, train_config.lr_decay_interval))
+
+    stat = DistStatistics("perplexity")
 
     if(train_config.has_attr("load_model_path") and 
             train_config.load_model_path is not None and 
             train_config.load_model_path.lower() != 'none'):
         model = custom_load_model(model, 
                                   f'{train_config.load_model_path}/model.pth', 
-                                  strict_check=False)
+                                  strict_check=False,
+                                  verbose=main)
 
     # Perform the first evaluation
     test_config = config.test_config
-    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0)
+    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
     scaler = GradScaler()
     scheduler.step(train_config.lr_start_step)
 
@@ -91,24 +109,31 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 optimizer.zero_grad()
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp):
                     loss = model.module.perplexity(fea, lab, start_position=start_position)
+                cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
+
+                stat.gather(rank, perplexity=loss, count=cnt)
+
                 start_position += fea.shape[1]
 
                 if(train_config.use_scaler):
                     scaler.scale(loss).backward()
                     gradient_failsafe(model.module, optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
                 else:
                     loss.backward()
-                    optimizer.step()
 
-                scheduler.step()
+                clip_grad_norm_(model.module.parameters(), 1.0)
 
-                logger(scheduler.get_last_lr()[0], 
-                       float(loss.detach().cpu().numpy()), 
-                       iteration=batch_idx, 
-                       epoch=epoch_id)
+            if(train_config.use_scaler):
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            scheduler.step()
+
+            logger(scheduler.get_last_lr()[0], 
+                    stat()["perplexity"]["mean"],
+                    iteration=batch_idx, 
+                    epoch=epoch_id)
 
     # Example training loop
     for epoch_id in range(1, train_config.max_epochs + 1):
@@ -117,14 +142,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
         if(main and epoch_id % train_config.evaluation_interval == 0):
             mod_path, opt_path_vae, opt_path_seq = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
-            #torch.save(optimizer.state_dict(), opt_path_seq)
 
         model.eval()
-        # Perform the evaluation according to interval
         if(epoch_id % train_config.evaluation_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id)
+            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
 
-def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id):
+def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id, logger):
     # Example training loop
 
     results = []
@@ -133,33 +156,31 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id)
     dataloader = DataLoader(dataset, batch_size=config.batch_size, sampler=sampler)
     all_length = len(dataloader)
 
-    if(main):
-        log_debug("Start Evaluation...")
-        log_progress(0)
-    stat = DistStatistics("perplexity", "count")
+    log_debug(f"Start Evaluation for Epoch-{epoch_id}", on=main)
+    log_progress(0, on=main)
+
+    stat = DistStatistics("perplexity")
 
     for batch_idx, (feature, label) in enumerate(dataloader):
         model.module.reset()
         start_position = 0
+        losses = []
+        cnts = []
         for sub_idx, fea, lab in segment_iterator(
                         config.seq_len, config.seg_len, device, feature, label):
             fea = fea.to(device)
             lab = lab.to(device)
             with torch.no_grad():
-                loss = model.module.perplexity(fea, lab)
-                cnt = torch.tensor(fea.shape[0] * fea.shape[1]).to(loss.device)
+                losses.append(model.module.perplexity(fea, lab))
+                cnts.append(torch.tensor(fea.shape[0] * fea.shape[1]).to(fea.device))
 
-            stat.add_with_safety(rank, 
-                                perplexity=loss, 
-                                count=cnt)
+        stat.gather(rank, perplexity=losses, count=cnts)
 
-        if(main):
-            log_progress((batch_idx + 1) / all_length)
+        log_progress((batch_idx + 1) / all_length, on=main)
 
-    if(main):
-        stat_res = stat()
-        logger = Logger(*stat_res.keys())
-        logger(*stat_res.values(), epoch=epoch_id)
+    stat_res = stat()
+
+    logger(stat_res["perplexity"]["mean"], epoch=epoch_id)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
