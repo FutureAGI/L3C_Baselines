@@ -18,7 +18,7 @@ from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader, segment_it
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics
+from l3c_baselines.utils import Configure, apply_gradient_safely, DistStatistics
 from l3c_baselines.models import E2EObjNavSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -139,10 +139,12 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     # Perform the first evaluation
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
-    scaler = GradScaler()
+    
+    scaler=None
+    if(train_config.use_scaler)
+        scaler = GradScaler()
 
     # VAE training loop
-
     def vae_round(rid, dataloader, max_save_iteartions=-1):
         acc_iter = 0
         dataloader.dataset.reset(rid)
@@ -164,16 +166,10 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(train_config.use_scaler):
                     scaler.scale(vae_loss).backward()
-                    gradient_failsafe(model.module, vae_optimizer, scaler)
-                    clip_grad_norm_(model.module.parameters(), 1.0)
                 else:
                     vae_loss.backward()
 
-            if(train_config.use_scaler):
-                scaler.step(vae_optimizer)
-                scaler.update()
-            else:
-                vae_optimizer.step()
+            apply_gradient_safely(model.module, vae_optimizer, scaler)
 
             vae_scheduler.step()
             sigma_scheduler.step()
@@ -227,20 +223,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     loss_wm_latent = loss["wm-latent"],
                     loss_pm = loss["pm"])
 
-                if(train_config.use_scaler):
-                    scaler.scale(causal_loss).backward()
-                    clip_grad_norm_(model.module.parameters(), 1.0)
-                else:
-                    causal_loss.backward()
-                    clip_grad_norm_(model.module.parameters(), 1.0)
-
-            if(train_config.use_scaler):
-                gradient_failsafe(model.module, causal_optimizer, scaler)
-                scaler.step(causal_optimizer)
-                scaler.update()
-            else:
-                gradient_failsafe(model.module, causal_optimizer)
-                causal_optimizer.step()
+            apply_gradient_safely(model.module, causal_optimizer, scaler)
             causal_scheduler.step()
 
             if(main):

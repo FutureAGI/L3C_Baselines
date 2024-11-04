@@ -14,7 +14,7 @@ from torch.cuda.amp import autocast, GradScaler
 from l3c_baselines.dataloader import LMDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import model_path
-from l3c_baselines.utils import Configure, Logger, gradient_failsafe, DistStatistics
+from l3c_baselines.utils import Configure, Logger, apply_gradient_safely, DistStatistics
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.models import LanguageModel
 
@@ -90,7 +90,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     # Perform the first evaluation
     test_config = config.test_config
     test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
-    scaler = GradScaler()
+    scaler=None
+    if(train_config.use_scaler):
+        scaler = GradScaler()
     scheduler.step(train_config.lr_start_step)
 
     def main_round(rid, dataloader):
@@ -117,17 +119,11 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(train_config.use_scaler):
                     scaler.scale(loss).backward()
-                    gradient_failsafe(model.module, optimizer, scaler)
                 else:
                     loss.backward()
 
-                clip_grad_norm_(model.module.parameters(), 1.0)
+            apply_gradient_safely(model.module, optimizer, scaler)
 
-            if(train_config.use_scaler):
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
             scheduler.step()
 
             logger(scheduler.get_last_lr()[0], 

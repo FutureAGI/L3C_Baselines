@@ -114,6 +114,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
     if(train_config.use_scaler):
         scaler = GradScaler()
+    else:
+        scaler = None
 
     # main training loop
 
@@ -164,15 +166,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 else:
                     causal_loss.backward()
 
-            if(train_config.use_scaler):
-                clip_grad_norm_(model.module.parameters(), 1.0)
-                gradient_failsafe(model.module, optimizer, scaler=scaler)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                clip_grad_norm_(model.module.parameters(), 1.0)
-                gradient_failsafe(model.module, optimizer)
-                optimizer.step()
+            apply_gradient_safely(model, optimizer, scaler)
 
             scheduler.step()
 
