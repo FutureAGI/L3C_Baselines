@@ -164,7 +164,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 else:
                     causal_loss.backward()
 
-            apply_gradient_safely(model, optimizer, scaler)
+            apply_gradient_safely(model, optimizer, scaler=scaler)
             scheduler.step()
 
             # Statistics

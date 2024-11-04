@@ -93,15 +93,16 @@ def reset_optimizer_state(optimizer):
             state[k][sk].zero_()
 
 def apply_gradient_safely(model, optimizer, scaler=None, clip_norm=1.0):
-    overflow=False
     # Clip graident first
     clip_grad_norm_(model.parameters(), clip_norm)
 
+    overflow=False
     for name, param in model.named_parameters():
         if (param.grad is not None):
-            grad, risk = safety_check(param.grad, msg=f"gradient_[{name}]")
-            param.grad.zero_()
-            overflow=True
+            _, risk = safety_check(param.grad, msg=f"gradient_[{name}]")
+            if(risk > 1):
+                param.grad.zero_()
+                overflow=True
     if(overflow):
         reset_optimizer_state(optimizer)
         if(scaler is not None):
