@@ -146,7 +146,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     causal_loss = (train_config.lossweight_worldmodel_states * loss["wm-s"]
                             + train_config.lossweight_worldmodel_rewards * loss["wm-r"]
                             + train_config.lossweight_entropy * loss["ent"]
-                            + train_config.lossweight_policymodel * loss["pm"])
+                            + train_config.lossweight_policymodel * loss["pm"]
+                            + train_config.lossweight_l2 * loss["causal-l2"])
                     if(torch.isnan(causal_loss).any() or torch.isinf(causal_loss).any()):
                         log_warn(f"loss is invalid ({causal_loss}), check {loss}")
                 start_position += bactions.shape[1]
@@ -161,18 +162,18 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
                 if(train_config.use_scaler):
                     scaler.scale(causal_loss).backward()
-                    clip_grad_norm_(model.module.parameters(), 1.0)
                 else:
                     causal_loss.backward()
-                    clip_grad_norm_(model.module.parameters(), 1.0)
 
             if(train_config.use_scaler):
+                clip_grad_norm_(model.module.parameters(), 1.0)
+                gradient_failsafe(model.module, optimizer, scaler=scaler)
                 scaler.step(optimizer)
                 scaler.update()
-                gradient_failsafe(model.module, optimizer, scaler=scaler)
             else:
-                optimizer.step()
+                clip_grad_norm_(model.module.parameters(), 1.0)
                 gradient_failsafe(model.module, optimizer)
+                optimizer.step()
 
             scheduler.step()
 

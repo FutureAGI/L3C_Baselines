@@ -54,25 +54,27 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         assert loss_wht.shape[1] == loss_array.shape[1]
         assert loss_wht.shape[0] == loss_array.shape[0] or loss_wht.shape[0] == 1,\
                 "loss_wht must be (bsz, time) or (1, time)"
-        if(loss_wht.shape[0] == 1):
-            sample_cnt = torch.sum(loss_wht) * loss_array.shape[0]
+        if(reduce_dim == 1):
+            if(loss_wht.shape[0] == 1):
+                sample_cnt = torch.sum(loss_wht) * loss_array.shape[0]
+            else:
+                sample_cnt = torch.sum(loss_wht)
         else:
-            sample_cnt = torch.sum(loss_wht)
+            sample_cnt = torch.full((loss_array.shape[1],), loss_array.shape[0], 
+                                    dtype=loss_wht.dtype, device=loss_wht.device)
         loss_array = loss_array * loss_wht
 
     if(reduce_dim is not None):
         if(reduce_dim==0):
             # verage over batch dimension only
             rdim = [0]
-            lambda_ = 1.0 / loss_array.shape[0]
         elif(reduce_dim==1):
             # average over the batch and time dimension
             # must consider the loss weight
             rdim = [0, 1]
-            lambda_ = 1.0 / sample_cnt
         else:
             raise ValueError("reduce_dim should be either None, 0 or 1.")
-        loss_array = torch.sum(loss_array, dim=rdim) * lambda_
+        loss_array = torch.sum(loss_array, dim=rdim) / sample_cnt
 
     if(not need_cnt):
         return loss_array
