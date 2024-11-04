@@ -84,6 +84,7 @@ class BlockRecurrentWrapper(nn.Module):
             
     def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1, update_memory=True):
         # when update memory = False, inference won't update the memory, but will update the cache
+        # by default the shape of src should be (batch_size, seq_len, dim)
         output, new_cache = self.temporal_module.forward(
                 src, 
                 cache=self.merge_memory_in_cache(cache), 

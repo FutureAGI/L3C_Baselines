@@ -9,7 +9,6 @@ import torch.multiprocessing as mp
 import time
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.amp import autocast, GradScaler
 from collections import defaultdict
@@ -17,8 +16,8 @@ from collections import defaultdict
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path, apply_gradient_safely
+from l3c_baselines.utils import Configure, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
@@ -186,7 +185,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     stat_res["entropy"]["mean"],
                     epoch=rid,
                     iteration=batch_idx)
-            train_stat.reset()
 
             # Safety Check and Save
             if(train_config.has_attr("max_save_iterations") 

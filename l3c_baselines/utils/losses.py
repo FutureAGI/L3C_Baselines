@@ -80,3 +80,13 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         return loss_array
     else:
         return loss_array, sample_cnt
+    
+def parameters_regularization(*layers):
+    norm = 0
+    cnt = 0
+    for layer in layers:
+        for p in layer.parameters():
+            if(p.requires_grad):
+                norm += (p ** 2).sum()
+                cnt += p.numel()
+    return norm / cnt
