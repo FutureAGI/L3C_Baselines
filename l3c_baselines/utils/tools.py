@@ -14,21 +14,33 @@ def count_parameters(model):
 def safety_check(tensor, replacement=None, msg=None, on=True):
     has_inf = torch.isinf(tensor)
     has_nan = torch.isnan(tensor)
-    l2_norm = torch.norm(tensor, p=2).item()
+    has_large = tensor ** 2 > 1.0e+6
 
     risk_level = 0
-    if(l2_norm > 1.0e+6 and msg is not None):
+    if(has_large.any()):
         risk_level=max(risk_level, 1)
-        log_warn(f"{msg}\tl2_norm={l2_norm}", on=on)
-    if has_inf.any() or has_nan.any():
+        if(replacement is None):
+            pass
+        else:
+            tensor[has_large] = replacement
+        if(msg is not None):
+            log_warn(f"{msg}\tl2_norm={l2_norm}", on=on)
+    if has_inf.any():
         risk_level=max(risk_level, 2)
         if(replacement is None):
             pass
         else:
             tensor[has_inf] = replacement
+        if(msg is not None):
+            log_warn(f"{msg}\tINF encounted", on=on)
+    if has_nan.any():
+        risk_level=max(risk_level, 3)
+        if(replacement is None):
+            pass
+        else:
             tensor[has_nan] = replacement
         if(msg is not None):
-            log_warn(f"{msg}\tNAN/INF encounted", on=on)
+            log_warn(f"{msg}\tNAN encounted", on=on)
 
     return tensor, risk_level
 
@@ -86,7 +98,7 @@ def apply_gradient_safely(model, optimizer, scaler=None, clip_norm=1.0):
     clip_grad_norm_(model.parameters(), clip_norm)
 
     for name, param in model.named_parameters():
-        if param.grad is not None):
+        if (param.grad is not None):
             grad, risk = safety_check(param.grad, msg=f"gradient_[{name}]")
             param.grad.zero_()
             overflow=True
@@ -118,16 +130,12 @@ def custom_load_model(model,
     strick_check: if true, parameters with NAN/INF and mismatching shape will cause error
         otherwise, they will be replaced by zero and matched with maximum shared parts
     """
-    saved_state_dict = torch.load(state_dict_path)  
+    saved_state_dict = torch.load(state_dict_path, weights_only=False)  
     model_state_dict = model.state_dict()  
     matched_state_dict = {}  
 
     for param_name, param_tensor in saved_state_dict.items():  
         if param_name in model_state_dict:  
-
-            if(not param_tensor.requires_grad):
-                continue # We do not load non-trainable parameters
-
             model_param_shape = model_state_dict[param_name].shape  
             
             # check wheter parameters is in black list 
@@ -142,7 +150,7 @@ def custom_load_model(model,
             # check whether there are abnormal parameters
             if(strict_check):
                 safe_param, risk = safety_check(param_tensor, 
-                                                msg=f"loading parameters: {param_name}"
+                                                msg=f"loading parameters: {param_name}",
                                                 on=verbose)
                 if(risk > 1):
                     log_fatal(e, "Quit Job...")
@@ -184,6 +192,7 @@ def custom_load_model(model,
                 log_warn(e, "Skipping loading...", on=verbose)
       
     model.load_state_dict(matched_state_dict, strict=False)  
+    log_debug("-" * 20, f"Load model success", "-" * 20, on=verbose)
     return model  
 
 def check_model_validity(model, verbose=False, level=1):

@@ -16,7 +16,7 @@ from collections import defaultdict
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import count_parameters, check_model_validity, model_path, apply_gradient_safely
+from l3c_baselines.utils import count_parameters, check_model_validity, model_path, safety_check, apply_gradient_safely
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
@@ -110,7 +110,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                                   strict_check=False, verbose=main)
 
     # Perform the first evaluation
-    test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
+    #test_epoch(rank, use_gpu, world_size, test_config, model, main, device, 0, logger_eval)
 
     if(train_config.use_scaler):
         scaler = GradScaler()
@@ -149,8 +149,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                             + train_config.lossweight_entropy * loss["ent"]
                             + train_config.lossweight_policymodel * loss["pm"]
                             + train_config.lossweight_l2 * loss["causal-l2"])
-                    if(torch.isnan(causal_loss).any() or torch.isinf(causal_loss).any()):
-                        log_warn(f"loss is invalid ({causal_loss}), check {loss}")
                 start_position += bactions.shape[1]
 
                 train_stat.gather(
@@ -167,7 +165,6 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                     causal_loss.backward()
 
             apply_gradient_safely(model, optimizer, scaler)
-
             scheduler.step()
 
             # Statistics
@@ -188,7 +185,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                 if(main):
                     log_debug("Check current validity and save model for safe...")
                     check_model_validity(model.module)
-                    mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
+                    mod_path = model_path(train_config.save_model_path, epoch_id)
                     torch.save(model.state_dict(), mod_path)
                 test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
 
@@ -201,7 +198,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
             check_model_validity(model.module)
         if(main and epoch_id % train_config.evaluation_interval == 0):
             log_debug(f"Save Model for Epoch-{epoch_id}")
-            mod_path, _, _ = model_path(train_config.save_model_path, epoch_id)
+            mod_path = model_path(train_config.save_model_path, epoch_id)
             torch.save(model.state_dict(), mod_path)
 
         # Perform the evaluation according to interval
