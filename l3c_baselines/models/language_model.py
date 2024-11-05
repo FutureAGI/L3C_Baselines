@@ -25,8 +25,9 @@ class LanguageModel(nn.Module):
         self.output_mapping = ResidualMLPDecoder(config.output_layers)
 
         loss_weight = torch.cat((
-                torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                torch.full((1, config.max_position - config.context_warmup,), 1.0)), dim=1)
+                torch.linspace(0.0, 1.0, config.context_warmup),
+                torch.full((config.max_position - config.context_warmup,), 1.0)), dim=0)
+        loss_weight = loss_weight / torch.sum(loss_weight)
         self.register_buffer('loss_weight', loss_weight)
 
         if(verbose):
@@ -50,11 +51,15 @@ class LanguageModel(nn.Module):
 
     def perplexity(self, inputs, outputs, use_loss_weight=True, update_memory=True, reduce_dim=1):
         seq_len = inputs.shape[1]
-        b = self.encoder.position
-        e = b + seq_len
+        ps = self.encoder.position
+        pe = ps + seq_len
 
         logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
-        loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
+
+        loss_weight = ((outputs.lt(self.nvocab)) * (outputs.ge(0))).to(self.loss_weight.dtype)
+        if(use_loss_weight):
+            loss_weight *= self.loss_weight[ps:pe].unsqueeze(0)
+
         if(self.loss_weight.shape[1] < e):
             log_fatal(f"Loss weight (shape {self.loss_weight.shape[1]}) should be longer" +
                     f" than sequence length {e}")

@@ -132,13 +132,12 @@ def custom_load_model(model,
         otherwise, they will be replaced by zero and matched with maximum shared parts
     """
     saved_state_dict = torch.load(state_dict_path, weights_only=False)  
-    model_state_dict = model.state_dict()  
-    matched_state_dict = {}  
+    matched_state_dict = {} 
 
-    for param_name, param_tensor in saved_state_dict.items():  
-        if param_name in model_state_dict:  
-            model_param_shape = model_state_dict[param_name].shape  
-            
+    # Notice: load only trainable parameters
+    for param_name, param_tensor in model.named_parameters():
+        model_param_shape = param_tensor.shape  
+        if param_name in saved_state_dict:
             # check wheter parameters is in black list 
             hits_black = False
             for name in black_list:
@@ -150,13 +149,13 @@ def custom_load_model(model,
 
             # check whether there are abnormal parameters
             if(strict_check):
-                safe_param, risk = safety_check(param_tensor, 
+                safe_param, risk = safety_check(saved_state_dict[param_name], 
                                                 msg=f"loading parameters: {param_name}",
                                                 on=verbose)
                 if(risk > 1):
                     log_fatal(e, "Quit Job...")
             else:
-                safe_param, risk = safety_check(param_tensor, 
+                safe_param, risk = safety_check(saved_state_dict[param_name], 
                                                 replacement=0, 
                                                 msg=f"loading parameters with replacement: {param_name}",
                                                 on=verbose)
@@ -168,7 +167,7 @@ def custom_load_model(model,
             if model_param_shape == safe_param.shape:  
                 matched_state_dict[param_name] = safe_param
             else:  
-                e = f"Loading {param_name} Shape mismatch: requires {model_param_shape}; gets {param_tensor.shape}"  
+                e = f"Loading {param_name} Shape mismatch: requires {model_param_shape}; gets {safe_param.shape}"  
                 if(strict_check):
                     log_fatal(e, "Quit Job...")
                 else:
@@ -178,7 +177,7 @@ def custom_load_model(model,
                         minimal_shape = []
                         for ns,nt in zip(safe_param.shape, model_param_shape):
                             minimal_shape.append(min(ns,nt))
-                        minimal_match = model_state_dict[param_name].clone()
+                        minimal_match = param_tensor.clone()
                         match_inds = tuple(slice(0, n) for n in minimal_shape)
                         minimal_match[match_inds] = safe_param[match_inds]
                         matched_state_dict[param_name] = minimal_match
@@ -186,7 +185,7 @@ def custom_load_model(model,
                                 f"Apply fractional loading with shape {minimal_shape}...",
                                 on=verbose)
         else:  
-            e = f"Parameter name {param_name} not found in the current model"
+            e = f"Current parameters {param_name} not found in the checkpoint"
             if(strict_check):
                 raise log_fatal(e, "Quit Job...")
             else:

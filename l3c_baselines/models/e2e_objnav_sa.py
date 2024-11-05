@@ -27,8 +27,9 @@ class E2EObjNavSA(nn.Module):
         self.vae = VAE(config.vae_latent_size, self.img_encoder, self.img_decoder) 
 
         loss_weight = torch.cat((
-                    torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                    torch.full((1, config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=1)
+                    torch.linspace(0.0, 1.0, config.context_warmup),
+                    torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=0)
+        loss_weight = loss_weight / torch.sum(loss_weight)
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
@@ -106,7 +107,7 @@ class E2EObjNavSA(nn.Module):
         loss = dict()
 
         if(use_loss_weight):
-            loss_weight = self.loss_weight[:, ps:pe]
+            loss_weight = self.loss_weight[ps:pe]
         else:
             loss_weight = None
 

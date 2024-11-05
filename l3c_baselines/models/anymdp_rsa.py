@@ -89,8 +89,8 @@ class AnyMDPRSA(RSADecisionModel):
                             use_loss_weight=True,
                             reduce_dim=1):
     
-        bsz = a_pred.shape[0]
-        seq_len = a_pred.shape[1]
+        bsz = behavior_actions.shape[0]
+        seq_len = behavior_actions.shape[1]
         # Pay attention position must be acquired before calling forward()
         ps = self.causal_model.position
         pe = ps + seq_len
@@ -105,12 +105,10 @@ class AnyMDPRSA(RSADecisionModel):
         loss = dict()
 
         # Calculate the loss weighting
+        loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
         if(use_loss_weight):
-            loss_weight = self.loss_weight[:, ps:pe]
-        else:
-            loss_weight = None
+            loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
         # Mask out the invalid actions
-        loss_weight *= (label_actions.ge(0) * label_actions.lt(self.nactions))
 
         # World Model Loss - States and Rewards
         loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
@@ -125,14 +123,16 @@ class AnyMDPRSA(RSADecisionModel):
                                      loss_wht=loss_weight, 
                                      reduce_dim=reduce_dim)
 
-        # Policy Model and Entropy Loss
+        # Policy Model
         loss["pm"] = weighted_loss(a_pred, 
                                    gt=label_actions, 
                                    loss_type="ce",
                                    loss_wht=loss_weight, 
                                    reduce_dim=reduce_dim)
+        # Entropy Loss
         loss["ent"] = weighted_loss(a_pred, 
                                     loss_type="ent", 
+                                    loss_wht=loss_weight,
                                     reduce_dim=reduce_dim)
 
         loss["causal-l2"] = parameters_regularization(self)

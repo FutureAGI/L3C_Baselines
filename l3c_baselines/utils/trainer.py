@@ -6,32 +6,32 @@ import numpy
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from functools import wraps
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.amp import autocast, GradScaler
-from l3c_baselines.dataloader import PrefetchDataLoader
+from l3c_baselines.dataloader.prefetch_dataloader import PrefetchDataLoader
 from .tools import Configure, Logger, log_progress, log_debug, log_warn, log_fatal
 from .tools import count_parameters, check_model_validity, model_path, safety_check, apply_gradient_safely, custom_load_model
 from .scheduler import noam_scheduler
 
 def EpochManager(cls):
+    @wraps(cls, updated=())
     class WrapperEpochManager(object):
         def __init__(self, **kwargs):
-            self.computer = cls()
+            self.computer = cls(**kwargs)
             for key in kwargs:
                 setattr(self, key, kwargs[key])
-                setattr(self.computer, key, kwargs[key])
 
-            os.environ['MASTER_PORT'] = self.config.master_port
             
         def get(self, attr, config=None):
             if(hasattr(self.computer, attr)):
                 return getattr(self.computer, attr)
             elif(config is not None):
                 if(config.has_attr(attr)):
-                    return self.config.get_attr(attr)
+                    return getattr(self.config, attr)
                 else:
                     return None
             else:
@@ -67,13 +67,13 @@ def EpochManager(cls):
                     max_iter = -1
 
                 self.logger = Logger(
-                        self.logger_keys,
+                        *self.logger_keys,
                         on=self.main, 
                         max_iter=max_iter,
                         use_tensorboard=self.log_config.use_tensorboard,
                         log_file=log_file,
-                        prefix=f"{self.run_name}-f{process_name}",
-                        field=f"{self.log_config.tensorboard_log}/{process_name}-{self.run_name}")
+                        prefix=f"{self.run_name}-{process_name}",
+                        field=f"{self.log_config.tensorboard_log}/{self.run_name}-{process_name}")
             else:
                 self.logger=None
             self.computer.logger = self.logger
@@ -82,7 +82,7 @@ def EpochManager(cls):
             if(self.is_training):
                 self.optimizer = self.get('optimizer')
                 if(self.optimizer is None):
-                    lr = self.get(self.config, 'lr')
+                    lr = self.get('lr', config=self.config)
                     self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
                     self.computer.optimizer = self.optimizer
 
@@ -92,7 +92,7 @@ def EpochManager(cls):
                     lr_decay_interval = self.get('lr_decay_interval', config=self.config)
                     self.scheduler = LambdaLR(self.optimizer, 
                         lr_lambda=lambda x:noam_scheduler(x, lr_decay_interval))
-                    self.computer.scheduler = self.scheduler
+                    self.computer.lr_scheduler = self.scheduler
                 
                 step = self.get('lr_start_step', config=self.config)
                 if(step is None):
@@ -104,13 +104,13 @@ def EpochManager(cls):
                     self.scaler = GradScaler()
                 self.computer.scaler = self.scaler
 
-        def _epoch_start(self):
+        def _epoch_start(self, eid):
             if(hasattr(self.computer, 'epoch_start')):
-                self.computer.epoch_start()
+                self.computer.epoch_start(eid)
         
-        def _epoch_end(self):
+        def _epoch_end(self, eid):
             if(hasattr(self.computer, 'epoch_end')):
-                self.computer.epoch_end()
+                self.computer.epoch_end(eid)
 
         def _preprocess(self):
             self.init_dataset()
@@ -130,6 +130,7 @@ def EpochManager(cls):
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
 
+            data_length = len(self.dataset)
             for batch_id, batch_data in enumerate(self.dataset):
                 acc_iter += 1
 
@@ -157,12 +158,15 @@ def EpochManager(cls):
                                 and acc_iter > self.config.max_save_iterations 
                                 and self.config.max_save_iterations > 0):
                     acc_iter = 0
+                    log_debug("-"*40, "Check current validity and save model for safe...", on=self.main)
                     if(self.main):
-                        log_debug("-"*40, "Check current validity and save model for safe...", on=self.main)
                         check_model_validity(self.model.module)
-                        model_path = model_path(self.train_config.save_model_path, epoch_id)
-                        torch.save(self.model.state_dict(), model_path)
+                        save_model_path = model_path(self.config.save_model_path, epoch_id)
+                        torch.save(self.model.state_dict(), save_model_path)
                     need_break = True
+
+                if(not self.is_training):
+                    log_progress((batch_id + 1) / data_length, on=self.main)
 
                 yield need_break
             yield True
@@ -172,6 +176,8 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                 model_type, train_objects, evaluate_objects):
     """
     """
+
+
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -205,15 +211,22 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
     if(config.has_attr("load_model_path") and 
             config.load_model_path is not None and 
             config.load_model_path.lower() != 'none'):
+        if(config.has_attr("load_model_parameter_blacklist")):
+            black_list = config.load_model_parameter_blacklist
+        else:
+            black_list = []
         model = custom_load_model(model, f'{config.load_model_path}/model.pth', 
-                                  black_list=config.load_model_parameter_blacklist,
+                                  black_list=black_list,
                                   verbose=main, 
                                   strict_check=False)
+    else:
+        log_warn("No model is loaded as `load_model_path` is not found in config or is None", on=main)
 
     if(not isinstance(train_objects, list) and not isinstance(train_objects, tuple)):
         train_objects = [train_objects]
     if(not isinstance(evaluate_objects, list) and not isinstance(evaluate_objects, tuple)):
         evaluate_objects = [evaluate_objects]
+
 
     train_list = []
     for train_object in train_objects:
@@ -246,25 +259,25 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
     for evaluate_object in evaluate_list:
         evaluate_object._preprocess()
 
-    epoch = 0
-    def evaluate_epoch():
+    def evaluate_epoch(eid):
         for evaluate_object in evaluate_list:
-            evaluate_object._epoch_start()
-            for _ in evaluate_object.run(epoch, device, device_type):
+            evaluate_object._epoch_start(eid)
+            for _ in evaluate_object.run(eid, device, device_type):
                 pass
-            evaluate_object._epoch_end()
+            evaluate_object._epoch_end(eid)
 
     if(len(train_list) < 1):
-        evaluate_epoch() # Doing single epoch evaluation
+        evaluate_epoch(0) # Doing single epoch evaluation
     else:
-        while epoch < config.train_config.epochs:
+        epoch = 0
+        while epoch < config.train_config.max_epochs:
             epoch += 1
             for train_object in train_list:
-                train_object._epoch_start()
+                train_object._epoch_start(epoch)
                 for need_evaluate in train_object.run(epoch, device, device_type):
                     if(need_evaluate):
-                        evaluate_epoch()
-                train_object._epoch_end()
+                        evaluate_epoch(epoch)
+                train_object._epoch_end(epoch)
 
     for train_object in train_list:
         train_object._postprocess()
@@ -299,6 +312,13 @@ class Runner(object):
                 print(f"Rewriting configurations from args: {key} to {value}")
         
         print("Final configuration:\n", self.config)
+
+        if(self.config.has_attr('master_addr')):
+            os.environ['MASTER_ADDR'] = self.config.master_addr
+        else:
+            os.environ['MASTER_ADDR'] = 'localhost' 
+
+        os.environ['MASTER_PORT'] = self.config.master_port
 
     def start(self, model_type, train_objects, evaluate_objects):
         mp.spawn(dist_process,

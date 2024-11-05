@@ -79,7 +79,7 @@ class DistStatistics(object):
         value = torch.stack(self._data[key], dim=0)
         counts = torch.stack(self._count[key], dim=0)
 
-        sum_cnt = torch.clip(torch.sum(counts), min=1)
+        sum_cnt = torch.clip(torch.sum(counts, dim=0), min=1)
         x_mean = torch.sum(value * counts, dim=0, keepdim=False) / sum_cnt
         x2_mean = torch.sum(value ** 2 * counts, dim=0, keepdim=False) / sum_cnt
 
@@ -93,8 +93,6 @@ class DistStatistics(object):
             mean,std,cnt = self._stat(key)
             # 95% Confidence Bound For Mean
             bound = 2.0 * std / torch.sqrt(cnt)
-            assert cnt.numel() == 1
-            cnt = int(cnt)
             if(mean.numel() < 2):
                 mean = mean.squeeze().item()
                 std = std.squeeze().item()

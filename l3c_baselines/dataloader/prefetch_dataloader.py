@@ -8,7 +8,7 @@ import numpy as np
 import multiprocessing
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from l3c_baselines.utils.tools import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class NaiveDataLoader(DataLoader):
     def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):

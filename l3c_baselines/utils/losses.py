@@ -14,7 +14,7 @@ def focal_loss(out, gt, gamma=0):
     preds = torch.log(out + 1.0e-10) * ((1.0 - out) ** gamma)
     return -torch.sum(preds * gt_logits, dim=-1)
 
-def metrics(out, gt=None, loss_type='ent', **kwargs):
+def metrics(out, gt=None, loss_type='mse', **kwargs):
     if(loss_type == 'mse'):
         assert gt is not None, "Ground Truth Must Be Provided When Using MSE Loss"
         loss_array = torch.mean((out - gt) ** 2, dim=[i for i in range(2, out.ndim)])
@@ -56,12 +56,12 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
             # Sum over dimension 0
             counts = torch.full((loss_array.shape[1],), loss_array.shape[0], 
                     dtype=loss_array.dtype, device=loss_array.device)
-            mean_loss = torch.mean(loss_array, dim=[0]])
+            mean_loss = torch.mean(loss_array, dim=[0])
 
             # Sum over dimension 1 if needed
             if(reduce_dim == 1):
                 counts = torch.sum(counts)
-                mean_loss = torch.mean(mean_loss)
+                mean_loss = torch.sum(mean_loss)
         else: # if loss_wht is provided, then samples are summed with the weights
             # The returned counts is the sum of the weights
             if(loss_wht.ndim == 1):
