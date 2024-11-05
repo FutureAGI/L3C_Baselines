@@ -87,17 +87,17 @@ def EpochManager(cls):
                     self.computer.optimizer = self.optimizer
 
                 # Initialize the learning rate schedulers
-                self.scheduler = self.get('lr_scheduler')
-                if(self.scheduler is None):
+                self.lr_scheduler = self.get('lr_scheduler')
+                if(self.lr_scheduler is None):
                     lr_decay_interval = self.get('lr_decay_interval', config=self.config)
-                    self.scheduler = LambdaLR(self.optimizer, 
+                    self.lr_scheduler = LambdaLR(self.optimizer, 
                         lr_lambda=lambda x:noam_scheduler(x, lr_decay_interval))
-                    self.computer.lr_scheduler = self.scheduler
+                    self.computer.lr_scheduler = self.lr_scheduler
                 
                 step = self.get('lr_start_step', config=self.config)
                 if(step is None):
                     step = 0
-                self.scheduler.step(0)
+                self.lr_scheduler.step(0)
 
                 self.scaler=None
                 if(self.config.use_scaler):
@@ -144,7 +144,7 @@ def EpochManager(cls):
                                   epoch_id=epoch_id, 
                                   batch_id=batch_id)
                     apply_gradient_safely(self.model, self.optimizer, scaler=self.scaler)
-                    self.scheduler.step()
+                    self.lr_scheduler.step()
                 else:
                     with torch.no_grad():
                         self.computer.compute(device,
