@@ -29,12 +29,12 @@ def metrics(out, gt=None, loss_type='ent', **kwargs):
     else:
         raise ValueError('Unknown loss type {}'.format(loss_type))
     return loss_array
-    
 
 def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
     """
     input and ground truth shape: (B, T, *)
-    loss_wht shape: (B, T) (or broadcastable), loss weight for each sample
+    loss_wht shape: (B, T) (or (T,))), loss weight for each sample
+    loss_wht should be provided that summation over the T dimension is 1 (or close to 1)
 
     loss_type: 'mse', 'ce'
     reduce_dim: None - Not Reduced At All
@@ -42,44 +42,49 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
                 1 - Only reduce both the batch and the temporal dimension
     return:
         mse_loss: weighted mean of losses
-        sample_cnt: sum of all loss_whts, the same dimension as mse_loss
+        sample_cnt: number of samples corresponding to each position in mse_loss
+                    mainly used for weighting in statistics
     """
     
     loss_array = metrics(out, **kwargs)
 
-    if(loss_wht is None):
-        loss_wht = torch.full(loss_array.shape[:2], 1.0)
-        sample_cnt = loss_array.numel()
+    if(reduce_dim is None): # if not reduced at all, then just return the 2-D loss array
+        return loss_array 
     else:
-        assert loss_wht.shape[1] == loss_array.shape[1]
-        assert loss_wht.shape[0] == loss_array.shape[0] or loss_wht.shape[0] == 1,\
-                "loss_wht must be (bsz, time) or (1, time)"
-        if(reduce_dim == 1):
-            if(loss_wht.shape[0] == 1):
-                sample_cnt = torch.sum(loss_wht) * loss_array.shape[0]
+        assert reduce_dim in [0, 1], "reduce_dim should be either None, 0 or 1."
+        if(loss_wht is None): # if loss_wht is None, then all samples are AVERAGED
+            # Sum over dimension 0
+            counts = torch.full((loss_array.shape[1],), loss_array.shape[0], 
+                    dtype=loss_array.dtype, device=loss_array.device)
+            mean_loss = torch.mean(loss_array, dim=[0]])
+
+            # Sum over dimension 1 if needed
+            if(reduce_dim == 1):
+                counts = torch.sum(counts)
+                mean_loss = torch.mean(mean_loss)
+        else: # if loss_wht is provided, then samples are summed with the weights
+            # The returned counts is the sum of the weights
+            if(loss_wht.ndim == 1):
+                loss_wht = loss_wht.unsqueeze(0)
             else:
-                sample_cnt = torch.sum(loss_wht)
-        else:
-            sample_cnt = torch.full((loss_array.shape[1],), loss_array.shape[0], 
-                                    dtype=loss_wht.dtype, device=loss_wht.device)
-        loss_array = loss_array * loss_wht
+                assert loss_wht.ndim == 2
+                assert loss_wht.shape[0] == loss_array.shape[0]
+            assert loss_wht.shape[1] == loss_array.shape[1]
+            
+            # Mean over dimension 0
+            loss_array = loss_array * loss_wht
+            counts = torch.mean(loss_wht, dim=[0])
+            mean_loss = torch.mean(loss_array, dim=[0])
 
-    if(reduce_dim is not None):
-        if(reduce_dim==0):
-            # verage over batch dimension only
-            rdim = [0]
-        elif(reduce_dim==1):
-            # average over the batch and time dimension
-            # must consider the loss weight
-            rdim = [0, 1]
-        else:
-            raise ValueError("reduce_dim should be either None, 0 or 1.")
-        loss_array = torch.sum(loss_array, dim=rdim) / sample_cnt
-
-    if(not need_cnt):
-        return loss_array
+            # Sum over dimension 1 if needed
+            if(reduce_dim == 1):
+                counts = torch.sum(counts)
+                mean_loss = torch.sum(mean_loss)
+    
+    if(need_cnt):
+        return mean_loss, counts
     else:
-        return loss_array, sample_cnt
+        return mean_loss
     
 def parameters_regularization(*layers):
     norm = 0

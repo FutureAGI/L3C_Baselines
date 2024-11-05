@@ -5,3 +5,4 @@ from .stats import DistStatistics
 from .data_proc import rewards2go, img_pro, img_post
 from .tools import model_path, safety_check, count_parameters,  format_cache, memory_cpy, check_model_validity, custom_load_model, apply_gradient_safely
 from .tools import Configure, Logger, log_warn, log_debug, log_progress, log_fatal
+from .trainer import EpochManager, Runner

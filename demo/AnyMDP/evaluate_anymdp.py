@@ -169,7 +169,6 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank):
         model = DDP(model)
 
     model = custom_load_model(model, f'{test_config.load_model_path}/model.pth', strict_check=False)
-    print("------------Load model success!------------")
 
     # Perform the first evaluation
     anymdp_model_epoch(rank, world_size, test_config, model, main, device)

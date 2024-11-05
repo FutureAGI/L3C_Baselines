@@ -54,6 +54,7 @@ class MultiBlocks(nn.Module):
                  **kwargs):
         super(MultiBlocks, self).__init__()
         self.num_layers = num_layers
+        self.position = 0 # This is used to keep compatible with BlockRecurison
         if(need_block_wrapper):
             self.layers = nn.ModuleList(
                 [BlockWrapper(temporal_module, layer_idx=layer_idx, **kwargs) 

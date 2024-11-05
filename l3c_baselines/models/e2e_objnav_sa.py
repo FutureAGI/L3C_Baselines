@@ -73,10 +73,9 @@ class E2EObjNavSA(nn.Module):
 
     def sequential_loss(self, observations, behavior_actions, label_actions, 
                         additional_info=None, # Kept for passing additional information
-                        start_position=0, 
                         state_dropout=0.0, 
                         update_memory=True,
-                        loss_is_weighted=True,
+                        use_loss_weight=True,
                         reduce_dim=1):
         
         self.img_encoder.requires_grad_(False)
@@ -85,6 +84,13 @@ class E2EObjNavSA(nn.Module):
         self.decision_model.requires_grad_(True)
 
         inputs = img_pro(observations)
+
+        bsz = z_pred.shape[0]
+        seq_len = z_pred.shape[1]
+
+        # Pay attention the position must be acquired before calling forward()
+        ps = self.decision_model.causal_model.position
+        pe = ps + seq_len
 
         # Predict the latent representation of action and next frame (World Model)
         z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, 
@@ -99,11 +105,7 @@ class E2EObjNavSA(nn.Module):
         # Calculate the loss information
         loss = dict()
 
-        bsz = z_pred.shape[0]
-        seq_len = z_pred.shape[1]
-        ps, pe = start_position, start_position + seq_len
-
-        if(loss_is_weighted):
+        if(use_loss_weight):
             loss_weight = self.loss_weight[:, ps:pe]
         else:
             loss_weight = None
