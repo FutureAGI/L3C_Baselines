@@ -3,11 +3,12 @@ import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 
-from l3c_baselines.dataloader import AnyMDPDataSet, segment_iterator
+from l3c_baselines.dataloader import segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go
 from l3c_baselines.utils import EpochManager
+from l3c_baselines.dataloader import AnyMDPDataSet
 
 def string_mean_var(downsample_length, res):
     string=""
@@ -15,7 +16,8 @@ def string_mean_var(downsample_length, res):
         string += f'{downsample_length * i}\t{xm}\t{xb}\n'
     return string
 
-class AnyMDPEpochBase:
+@EpochManager
+class AnyMDPEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
@@ -39,7 +41,7 @@ class AnyMDPEpochBase:
             else:
                 self.downsample_length = 100
 
-    def compute(self, device, sarr, baarr, laarr, rarr, 
+    def compute(self, sarr, baarr, laarr, rarr, 
                         epoch_id=-1, 
                         batch_id=-1):
         """
@@ -47,20 +49,11 @@ class AnyMDPEpochBase:
         """
         if(self.is_training):
             assert self.optimizer is not None, "optimizer is required for training"
-            self.logger_keys = ["learning_rate", 
-                        "loss_worldmodel_state", 
-                        "loss_worldmodel_reward", 
-                        "loss_policymodel",
-                        "entropy"]
-        else:
-            self.logger_keys = ["validation_state_pred", 
-                        "validation_reward_pred", 
-                        "validation_policy",]
 
         losses = []
         r2goarr = rewards2go(rarr)
         for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
-                    self.config.seq_len, self.config.seg_len, device, 
+                    self.config.seq_len, self.config.seg_len, self.device, 
                     (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
             loss = self.model.module.sequential_loss(
                     r2go[:, :-1], # Prompts
@@ -83,7 +76,7 @@ class AnyMDPEpochBase:
                     self.scaler.scale(syn_loss).backward()
                 else:
                     syn_loss.backward()
-                self.stat.gather(device,
+                self.stat.gather(self.device,
                     loss_worldmodel_state = loss["wm-s"] / loss["count"],
                     loss_worldmodel_reward = loss["wm-r"] / loss["count"],
                     loss_policymodel = loss["pm"] / loss["count"],
@@ -115,14 +108,12 @@ class AnyMDPEpochBase:
             counts = torch.mean(counts[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
 
             for i in range(bsz):
-                self.stat.gather(device,
+                self.stat.gather(self.device,
                         validation_state_pred=loss_wm_s[i], 
                         validation_reward_pred=loss_wm_r[i], 
                         validation_policy=loss_pm[i],
                         count=counts[i])
             
-@EpochManager
-class AnyMDPEpochTrainValidate(AnyMDPEpochBase):
     def epoch_end(self, epoch_id):
         if(not self.is_training):
             stat_res = self.stat()
@@ -131,13 +122,7 @@ class AnyMDPEpochTrainValidate(AnyMDPEpochBase):
                         stat_res["validation_reward_pred"]["mean"], 
                         stat_res["validation_policy"]["mean"],
                         epoch=epoch_id)
-
-@EpochManager
-class AnyMDPEpochValidate(AnyMDPEpochBase):
-    def epoch_end(self, epoch_id):
-        if(not self.is_training):
-            stat_res = self.stat()
-            if(self.main):
+            if(self.extra_info.lower() == 'validate' and self.main):
                 if not os.path.exists(self.config.output):
                     os.makedirs(self.config.output)
                 for key_name in stat_res:

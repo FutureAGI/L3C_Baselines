@@ -24,25 +24,23 @@ def EpochManager(cls):
             self.computer = cls(**kwargs)
             for key in kwargs:
                 setattr(self, key, kwargs[key])
-
             
-        def get(self, attr, config=None):
+        def get(self, attr, config=None, default=None):
             if(hasattr(self.computer, attr)):
                 return getattr(self.computer, attr)
             elif(config is not None):
                 if(config.has_attr(attr)):
                     return getattr(self.config, attr)
                 else:
-                    return None
+                    return default
             else:
-                return None
+                return default
 
         def init_dataset(self):
             self.dataset = self.get('dataset')
             if(self.dataset is None):
                 DataType = self.get('DataType')
-                if(DataType is None):
-                    log_fatal("Must define `DataType` to initialize the dataset")
+                assert DataType is not None, f"either dataset or DataType must be specified."
                 data = DataType(self.config.data_path, 
                                     self.config.seq_len, 
                                     verbose=self.main)
@@ -51,31 +49,32 @@ def EpochManager(cls):
                 self.computer.dataset = self.dataset
 
         def init_logger(self):
-            self.logger_keys=None
-            if(hasattr(self.computer, 'logger_keys') and len(self.computer.logger_keys)!=0):
-                assert type(self.computer.logger_keys) == list, \
-                    f"The logger_keys must be a list of string."
-                self.logger_keys=self.computer.logger_keys
-
-                if(self.is_training):
-                    log_file = self.log_config.training_log
-                    process_name = "Training"
-                    max_iter = len(self.dataset)
-                else:
-                    log_file = self.log_config.evaluation_log
-                    process_name = "Evaluation"
-                    max_iter = -1
-
-                self.logger = Logger(
-                        *self.logger_keys,
-                        on=self.main, 
-                        max_iter=max_iter,
-                        use_tensorboard=self.log_config.use_tensorboard,
-                        log_file=log_file,
-                        prefix=f"{self.run_name}-{process_name}",
-                        field=f"{self.log_config.tensorboard_log}/{self.run_name}-{process_name}")
-            else:
-                self.logger=None
+            self.logger = self.get('logger')
+            if(self.logger is None):
+                self.logger_keys = self.get('logger_keys')
+                if(self.logger_keys is not None and len(self.computer.logger_keys)!=0):
+                    assert type(self.computer.logger_keys) == list, \
+                        f"The logger_keys must be a list of string."
+                    if(self.is_training):
+                        process_name = f"Training-{self.computer.__class__.__name__}"
+                        max_iter = len(self.dataset)
+                    else:
+                        process_name = f"Evaluation-{self.computer.__class__.__name__}"
+                        max_iter = -1
+                    log_file = self.get('log_file')
+                    if(log_file is None):
+                        if(self.is_training):
+                            log_file = self.log_config.training_log
+                        else:
+                            log_file = self.log_config.evaluation_log
+                    self.logger = Logger(
+                            *self.logger_keys,
+                            on=self.main, 
+                            max_iter=max_iter,
+                            use_tensorboard=self.log_config.use_tensorboard,
+                            log_file=log_file,
+                            prefix=f"{self.run_name}-{process_name}",
+                            field=f"{self.log_config.tensorboard_log}/{self.run_name}-{process_name}")
             self.computer.logger = self.logger
 
         def init_optimizer(self):
@@ -94,21 +93,28 @@ def EpochManager(cls):
                         lr_lambda=lambda x:noam_scheduler(x, lr_decay_interval))
                     self.computer.lr_scheduler = self.lr_scheduler
                 
-                step = self.get('lr_start_step', config=self.config)
-                if(step is None):
-                    step = 0
-                self.lr_scheduler.step(0)
+                step = self.get('lr_start_step', config=self.config, default=0)
+                self.lr_scheduler.step(step)
 
                 self.scaler=None
                 if(self.config.use_scaler):
                     self.scaler = GradScaler()
                 self.computer.scaler = self.scaler
 
+        def _valid_epoch(self, eid):
+            if(hasattr(self.computer, 'valid_epoch')):
+                return self.computer.valid_epoch(eid)
+            return True
+
         def _epoch_start(self, eid):
+            if(not self._valid_epoch(eid)):
+                return
             if(hasattr(self.computer, 'epoch_start')):
                 self.computer.epoch_start(eid)
         
         def _epoch_end(self, eid):
+            if(not self._valid_epoch(eid)):
+                return
             if(hasattr(self.computer, 'epoch_end')):
                 self.computer.epoch_end(eid)
 
@@ -124,6 +130,9 @@ def EpochManager(cls):
                 self.computer.postprocess()
 
         def run(self, epoch_id, device, device_type):
+            if(not self._valid_epoch(eid)):
+                return
+            
             acc_iter = 0
             self.dataset.dataset.reset(epoch_id)
 
@@ -139,7 +148,7 @@ def EpochManager(cls):
                 if(self.is_training):
                     self.optimizer.zero_grad()
                     with autocast(dtype=torch.bfloat16, enabled=self.config.use_amp, device_type=device_type):
-                        self.computer.compute(device,
+                        self.computer.compute(
                                   *batch_data, 
                                   epoch_id=epoch_id, 
                                   batch_id=batch_id)
@@ -147,7 +156,7 @@ def EpochManager(cls):
                     self.lr_scheduler.step()
                 else:
                     with torch.no_grad():
-                        self.computer.compute(device,
+                        self.computer.compute(
                                   *batch_data, 
                                   epoch_id=epoch_id, 
                                   batch_id=batch_id)
@@ -173,7 +182,7 @@ def EpochManager(cls):
     return WrapperEpochManager
 
 def dist_process(rank, use_gpu, world_size, config, main_rank,
-                model_type, train_objects, evaluate_objects):
+                model_type, train_objects, evaluate_objects, extra_info):
     """
     """
 
@@ -239,7 +248,8 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                         device_type=device_type,
                                         device=device,
                                         main=main,
-                                        is_training=True))
+                                        is_training=True,
+                                        extra_info=extra_info))
 
     evaluate_list = []
     for evaluate_object in evaluate_objects:
@@ -252,7 +262,8 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                         device_type=device_type,
                                         device=device,
                                         main=main,
-                                        is_training=False))
+                                        is_training=False,
+                                        extra_info=extra_info))
 
     for train_object in train_list:
         train_object._preprocess()
@@ -320,7 +331,7 @@ class Runner(object):
 
         os.environ['MASTER_PORT'] = self.config.master_port
 
-    def start(self, model_type, train_objects, evaluate_objects):
+    def start(self, model_type, train_objects, evaluate_objects, extra_info=None):
         mp.spawn(dist_process,
                 args=(self.use_gpu, 
                       self.world_size, 
@@ -328,6 +339,7 @@ class Runner(object):
                       0, # always use #0 as the main GPU
                       model_type,
                       train_objects, 
-                      evaluate_objects),
+                      evaluate_objects,
+                      extra_info),
                 nprocs=self.world_size if self.use_gpu else min(self.world_size, 4),  # Limit CPU processes if desired
                 join=True)

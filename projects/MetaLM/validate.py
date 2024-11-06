@@ -1,10 +1,10 @@
 import os
 import sys
-from l3c_baselines.models import AnyMDPRSA
+from l3c_baselines.models import LanguageModel
 from l3c_baselines.utils import Runner
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from anymdp_epoch import AnyMDPEpoch
+from lm_epoch import LMEpoch
 
 if __name__ == "__main__":
     runner=Runner()
-    runner.start(AnyMDPRSA, [], AnyMDPEpoch, extra_info='validate')
+    runner.start(LanguageModel, LMEpoch, LMEpoch, extra_info='validate')

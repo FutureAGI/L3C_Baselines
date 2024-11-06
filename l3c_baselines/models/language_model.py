@@ -65,8 +65,12 @@ class LanguageModel(nn.Module):
                     f" than sequence length {e}")
         if(use_loss_weight):
             loss_weight = self.loss_weight[:, b:e] * loss_weight
-        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=reduce_dim)
 
+        loss = dict()
+        loss["perplexity"], loss["count"] = weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, 
+                             loss_wht=loss_weight, reduce_dim=reduce_dim, need_cnt=True)
+        return loss
+    
     def inference_seg(self, inputs, L, 
                       temp_default=1.0, 
                       temp_setting=None, 
