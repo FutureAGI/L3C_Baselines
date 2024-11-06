@@ -5,9 +5,9 @@ Implementations of baselines for [L3C](https://github.com/FutureAGI/L3C)
 Generative models presents promising capability to generalize and adapt to different tasks. The so-called "In-Context Learning" (ICL) can efficiently adapt to new tasks without tuning the parameters with high sample efficiency. We try build foundation models for learning to learn with ICL, covering the domain of language modeling, world modeling, and decision modeling.
 
 # Directory Structure
-- `demo`: contains the implementations of baselines for L3C.
-    - `MetaLM`: contains the implementations of baselines for MetaLM
-    - `MazeWorld`: contains the implementations of baselines for MazeWorld
+- [projects](./projects): implementations of model training and validating for different projects in L3C.
+    - [MetaLM](./projects/MetaLM) foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
+    - [MazeWorld](./projects/MazeWorld) foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
 
 - `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
 
@@ -43,13 +43,12 @@ Basically you need to modify the configuration file to start the training. The c
 - `model_config`: configuration of the model structure and hyperparameters
 - `train_config`: configuration of the training process, including learning rate, batch size, etc.
 - `test_config`: configuration of the evaluation process, including the dataset to be evaluated
-- `demo_config`: used for generative online evaluations, including step-by-step interaction with the environment.
 
 ### Start Training
 
 To train a model run
 ```bash
-cd L3C_Baselines/demo/xxx
+cd L3C_Baselines/projects/xxx
 python train.py config.yaml
 ```
 
@@ -58,6 +57,12 @@ You might also overwrite the config file with command line arguments with ```--c
 python train.py config.yaml --configs key1=value1 key2=value2 ...
 ```
 
-Notice that the `evaluate.py` and `generate.py` are not underconstruction and not ready for usage. 
+### Validating with static dataset
+```bash
+python validate.py config.yaml --configs key1=value1 key2=value2 ...
+```
+
+### Validating with interaction
+Under development.
 
 Feel free to submit a pull request.
