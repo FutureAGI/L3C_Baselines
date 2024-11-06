@@ -1,5 +1,7 @@
 ---
 run_name: YOUR_NAME_TO_RUN
+master_port: "12402"
+load_model_path: [Path or None]
 
 log_config:
   use_tensorboard: True
@@ -53,12 +55,9 @@ train_config:
 
   lr: 1.0e-3
   lr_decay_interval: 5000
-  lr_start_step: 30000
-  data_path: ./data
-  load_model_path: ./checkpoints2/06
+  lr_start_step: 0
+  data_path: [Path]
   save_model_path: ./checkpoints
-  master_port: "12301"
-  evaluation_interval: 1
 
 test_config:
   batch_size: 4
@@ -67,11 +66,5 @@ test_config:
   seq_len: 4096
   seg_len: 1024
 
-  data_path: ./data
-  master_port: "12303"
-  load_model_path: [PATH]
-
-demo_config:
-  vocab: english
-  load_model_path: [PATH]
-  master_port: "12301"
+  data_path: [Path]
+  output: ./results/

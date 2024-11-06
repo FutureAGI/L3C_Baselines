@@ -41,7 +41,8 @@ class VAE(nn.Module):
     def loss(self, inputs, _sigma=0.0):
         outputs, z_exp, z_log_var = self.reconstruct(inputs, _sigma = _sigma)
         kl_loss = torch.mean(-0.5 * torch.sum(1 + z_log_var - torch.square(z_exp) - torch.exp(z_log_var), axis=1))
-        reconstruction_loss = weighted_loss(outputs, loss_type="mse", gt=inputs, reduce_dim=1)
+        reconstruction_loss, cnt = weighted_loss(outputs, loss_type="mse", gt=inputs, reduce_dim=1, need_cnt=True)
 
         return {"Reconstruction-Error": reconstruction_loss,
-                "KL-Divergence": kl_loss}
+                "KL-Divergence": kl_loss,
+                "count": cnt}

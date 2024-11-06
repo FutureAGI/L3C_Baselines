@@ -31,6 +31,8 @@ class BlockRecurrentWrapper(nn.Module):
     def reset(self):
         # This will clear the memory and the cache
         self.memory = None
+        # Position will be synchronized with the memory
+        self.position = 0
         
     def merge_memory_in_cache(self, cache):
         if(self.memory_type == "kv"):
@@ -84,6 +86,7 @@ class BlockRecurrentWrapper(nn.Module):
             
     def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1, update_memory=True):
         # when update memory = False, inference won't update the memory, but will update the cache
+        # by default the shape of src should be (batch_size, seq_len, dim)
         output, new_cache = self.temporal_module.forward(
                 src, 
                 cache=self.merge_memory_in_cache(cache), 
@@ -91,6 +94,8 @@ class BlockRecurrentWrapper(nn.Module):
                 checkpoints_density=checkpoints_density)
         if(update_memory):
             new_cache = self.update_memory_cache(new_cache)
+            # Update the position at the same time
+            self.position += src.shape[1]
         elif(need_cache):
             new_cache = self.update_cache_only(new_cache)
         else:

@@ -1,18 +1,20 @@
 ---
-run_name: Test
+run_name: [RUN_NAME]
+master_port: "12402"
+load_model_path: [Path or None]
 
 log_config:
   use_tensorboard: True
-  tensorboard_log: ./runs/
-  training_log: ./runs/train.log
-  evaluation_log: ./runs/eval.log
+  tensorboard_log: [Path]
+  training_log: [Path]
+  evaluation_log: [Path]
 
 model_config:
-  context_warmup: 1536
+  context_warmup: 512
   max_position_loss_weighting: 48000
   action_dim: 5
   policy_loss_type: CrossEntropy
-  rsa_type: sar
+  rsa_type: sar  #psa/sar/psar/sa
 
   state_encode:
       input_type: Discrete
@@ -68,7 +70,7 @@ model_config:
       residual_connect: True
       dropout: 0.0
 
-  causal_block_bak_1:
+  causal_block_bak_1: # change to causal_block if use this block
       model_type: TRANSFORMER
       num_layers: 6
       hidden_size: 512
@@ -89,8 +91,8 @@ model_config:
       hidden_size: 512
       inner_hidden_size: 1024
       dropout: 0.10
-      nhead: 16
-      memory_length: 128
+      nhead: 4
+      memory_length: 64
       position_encoding_size: 12000
       use_layer_norm: True
       use_blockrecurrence: True
@@ -104,8 +106,8 @@ model_config:
       inner_hidden_size: 1024
       dropout: 0.10
       nhead: 16
-      expand_k: 0.5
-      expand_v: 1
+      expand_k: 1
+      expand_v: 2
       hidden_ratio: 3.5
       position_encoding_size: 12000
       use_layer_norm: True
@@ -114,7 +116,7 @@ model_config:
       memory_length: 0
       memory_type: MEM
 
-  causal_block_bak_4:  # Mamba has unsolved issues in cache, temporarily avoid using it
+  causal_block_bak_4:
       model_type: Mamba
       num_layers: 12
       hidden_size: 512
@@ -128,74 +130,35 @@ model_config:
       use_blockrecurrence: True
       checkpoints_density: -1
       memory_length: 0
+      memory_type: MEM
 
 train_config:
-    max_epochs: 15
-    batch_size: 8
+    max_epochs: 20
+    batch_size: 12
 
     seq_len: 16000
-    seg_len: 2000
+    seg_len: 4000
 
-    lr: 5.0e-4
+    lr: 2.0e-4
     lr_decay_interval: 2000
-    lr_start_step: 0
+    lr_start_step: 8000
 
-    data_path: "[PATH]"
-    save_model_path: "./checkpoints/"
-    load_model_path: None
-    master_port: "12400"
-    max_save_iterations: 500
-    evaluation_interval: 1
+    data_path: [Path]
+    save_model_path: [Path]
+    max_save_iterations: 1000
 
-    lossweight_policymodel: 0.0
-    lossweight_worldmodel_states: 1.0
-    lossweight_worldmodel_rewards: 0.0
-    lossweight_entropy: 0.0 
-    lossweight_l2: 1.0e-10
+    lossweight_policymodel: 0.2
+    lossweight_worldmodel_states: 0.4
+    lossweight_worldmodel_rewards: 0.4
+    lossweight_entropy: 0.0
+    lossweight_l2: 0.0
 
     use_amp: False
     use_scaler: False
 
-    load_model_parameter_blacklist:
-        - None
-
 test_config:
     batch_size: 16
-    data_path: "[PATH]"
-    master_port: "12201"
-    load_model_path: None
+    data_path: [Path]
+    output: "./results/"
     seq_len: 16000
     seg_len: 4000
-    downsample_size: 10
-    output: "./plot/"
-
-demo_config:
-    master_port: "12211"
-    time_step: 2048
-
-    model_config:
-        load_model_path: "[PATH]"
-        autoregressive_steps:
-            - 0
-            - 100
-            - 1000
-            - 2000
-        autoregressive_length: 10
-        policy:
-            T_ini: 1.0
-            T_dec: 0.005
-            T_min: 0.01
-        load_model_parameter_blacklist:
-            - "attn_mask"
-    maze_config:
-        scale: 15
-        density: 0.36
-        n_landmarks: 10
-    rule_config:
-        mem_kr: 1.0
-    run_model: 0
-    run_rule: 1
-    run_random: 0
-    task_file: "[PATH]"
-    write_video: 0
-    output: "[PATH]"

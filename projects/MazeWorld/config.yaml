@@ -1,11 +1,12 @@
 ---
 run_name: YOUR_NAME_TO_RUN
+master_port: "12402"
+load_model_path: [Path or None]
 
 log_config:
   use_tensorboard: True
   tensorboard_log: ./runs/
-  training_log_causal: ./runs/causal_train.log
-  training_log_vae: ./runs/vae_train.log
+  training_log: ./runs/train.log
   evaluation_log: ./runs/eval.log
 
 model_config:
@@ -80,10 +81,11 @@ train_config:
     epoch_vae_stop: 2
     epoch_causal_start: -1
 
+    seq_len: 16000
     seq_len_vae: 16000
     seq_len_causal: 16000
     seg_len_vae: 100
-    seg_len_causal: 512
+    seg_len_causal: 500
 
     lr_vae: 2.0e-4
     lr_causal: 5.0e-4
@@ -94,10 +96,7 @@ train_config:
 
     data_path: [PATH]
     save_model_path: "./checkpoints"
-    load_model_path: None
-    master_port: "12300"
-    max_save_iterations: 5000
-    evaluation_interval: 1
+    max_save_iterations: 1000
 
     lossweight_policymodel: 0.01
     lossweight_worldmodel_raw: 0.90
@@ -106,9 +105,6 @@ train_config:
 
     use_amp: False
     use_scaler: False
-
-    load_model_parameter_blacklist:
-        - "decision_model"
 
     sigma_scheduler: 1000
     sigma_value:
@@ -127,38 +123,12 @@ train_config:
 test_config:
     batch_size: 1
     data_path: [PATH]
-    master_port: "12201"
-    load_model_path: None
-    seq_len: 16000
-    seg_len: 512
+    epoch_vae_stop: 2
+    epoch_causal_start: -1
 
-demo_config:
-    master_port: "12211"
-    time_step: 2048
+    seq_len_vae: 16000
+    seq_len_causal: 16000
+    seg_len_vae: 500
+    seg_len_causal: 1000
 
-    model_config:
-        load_model_path: "[PATH]"
-        autoregressive_steps:
-            - 0
-            - 100
-            - 1000
-            - 2000
-        autoregressive_length: 10
-        policy:
-            T_ini: 1.0
-            T_dec: 0.005
-            T_min: 0.01
-        load_model_parameter_blacklist:
-            - "attn_mask"
-    maze_config:
-        scale: 15
-        density: 0.36
-        n_landmarks: 10
-    rule_config:
-        mem_kr: 1.0
-    run_model: 0
-    run_rule: 1
-    run_random: 0
-    task_file: "[PATH]"
-    write_video: 0
-    output: "[PATH]"
+    output: ./results

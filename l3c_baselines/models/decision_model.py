@@ -96,7 +96,7 @@ class RSADecisionModel(nn.Module):
         self.mask_query_s = nn.Parameter(mask_embeddings_s, requires_grad=True)
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["psa", "sar", "psar"]
+        self.rsa_choice =  ["psa", "sar", "psar", "sa"]
         self.rsa_occ = len(self.rsa_type)
         self.pm_pos = self.rsa_type.find('s')
         self.wm_pos = self.rsa_type.find('a')
