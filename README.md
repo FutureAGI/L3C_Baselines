@@ -17,9 +17,6 @@ Generative models presents promising capability to generalize and adapt to diffe
     - `models`: contains higher-level models built from basic blocks
     - `dataloader`: contains the dataloader for different tasks
 
-
-Notice currently L3C_Baselines only support L3C==0.1.1.8
-
 # Training and Evaluating
 
 ## Install Requirements
