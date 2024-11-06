@@ -1,6 +1,6 @@
+import os
 import torch
 import torch.optim as optim
-import os
 from torch.optim.lr_scheduler import LambdaLR
 
 from l3c_baselines.dataloader import AnyMDPDataSet, segment_iterator
@@ -34,10 +34,10 @@ class AnyMDPEpochBase:
                         "validation_policy"]
             self.stat = DistStatistics(*self.logger_keys)
             self.reduce = None
-            if(self.config.has_attr("down_sample_length")):
-                self.down_sample_length = self.config.down_sample_length
+            if(self.config.has_attr("downsample_length")):
+                self.downsample_length = self.config.downsample_length
             else:
-                self.down_sample_length = 100
+                self.downsample_length = 100
 
     def compute(self, device, sarr, baarr, laarr, rarr, 
                         epoch_id=-1, 
@@ -70,7 +70,8 @@ class AnyMDPEpochBase:
                     lactions, 
                     state_dropout=0.20, 
                     reward_dropout=0.20,
-                    use_loss_weight=self.is_training) # Do not use loss weight for evaluation
+                    use_loss_weight=self.is_training,
+                    reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
             if(self.is_training):
                 syn_loss = (self.config.lossweight_worldmodel_states * loss["wm-s"]
@@ -105,19 +106,20 @@ class AnyMDPEpochBase:
             counts = torch.cat([loss["count"] for loss in losses], dim=1)
 
             bsz = loss_wm_s.shape[0]
-            seg_num = loss_wm_s.shape[1] // self.down_sample_length
-            valid_seq_len = seg_num * self.down_sample_length
+            seg_num = loss_wm_s.shape[1] // self.downsample_length
+            valid_seq_len = seg_num * self.downsample_length
 
             loss_wm_s = torch.mean(loss_wm_s[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
             loss_wm_r = torch.mean(loss_wm_r[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
             loss_pm = torch.mean(loss_pm[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
             counts = torch.mean(counts[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
 
-            self.stat.gather(device,
-                    validation_state_pred=loss_wm_s, 
-                    validation_reward_pred=loss_wm_r, 
-                    validation_policy=loss_pm,
-                    count=counts)
+            for i in range(bsz):
+                self.stat.gather(device,
+                        validation_state_pred=loss_wm_s[i], 
+                        validation_reward_pred=loss_wm_r[i], 
+                        validation_policy=loss_pm[i],
+                        count=counts[i])
             
 @EpochManager
 class AnyMDPEpochTrainValidate(AnyMDPEpochBase):
