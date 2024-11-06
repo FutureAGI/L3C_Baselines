@@ -5,9 +5,9 @@ Implementations of baselines for [L3C](https://github.com/FutureAGI/L3C)
 Generative models presents promising capability to generalize and adapt to different tasks. The so-called "In-Context Learning" (ICL) can efficiently adapt to new tasks without tuning the parameters with high sample efficiency. We try build foundation models for learning to learn with ICL, covering the domain of language modeling, world modeling, and decision modeling.
 
 # Directory Structure
-- `[projects](./projects)`: implementations of model training and validating for different projects in L3C.
-    - `[MetaLM](./projects/MetaLM)` foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
-    - `[MazeWorld](./projects/MazeWorld）` foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
+- [projects](./projects): implementations of model training and validating for different projects in L3C.
+    - [MetaLM](./projects/MetaLM) foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
+    - [MazeWorld](./projects/MazeWorld) foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
 
 - `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
 
