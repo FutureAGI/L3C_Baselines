@@ -7,4 +7,4 @@ from lm_epoch import LMEpoch
 
 if __name__ == "__main__":
     runner=Runner()
-    runner.start(LanguageModel, LMEpoch, LMEpoch, extra_info='validate')
+    runner.start(LanguageModel, [], LMEpoch, extra_info='validate')

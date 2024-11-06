@@ -122,13 +122,14 @@ class AnyMDPEpoch:
                         stat_res["validation_reward_pred"]["mean"], 
                         stat_res["validation_policy"]["mean"],
                         epoch=epoch_id)
-            if(self.extra_info.lower() == 'validate' and self.main):
-                if not os.path.exists(self.config.output):
-                    os.makedirs(self.config.output)
-                for key_name in stat_res:
-                    res_text = string_mean_var(self.downsample_length, stat_res[key_name])
-                    file_path = f'{self.config.output}/result_{key_name}.txt'
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                    with open(file_path, 'w') as f_model:
-                        f_model.write(res_text)
+            if(self.extra_info is not None):
+                if(self.extra_info.lower() == 'validate' and self.main):
+                    if not os.path.exists(self.config.output):
+                        os.makedirs(self.config.output)
+                    for key_name in stat_res:
+                        res_text = string_mean_var(self.downsample_length, stat_res[key_name])
+                        file_path = f'{self.config.output}/result_{key_name}.txt'
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        with open(file_path, 'w') as f_model:
+                            f_model.write(res_text)

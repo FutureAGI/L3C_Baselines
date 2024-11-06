@@ -20,14 +20,14 @@ class LMEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPDataSet
+        self.DataType=LMDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
-                        "perplexity"]
+                        "train_perplexity"]
             self.stat = DistStatistics(*self.logger_keys[1:])
             self.reduce = 1
         else:
-            self.logger_keys = ["perplexity"]
+            self.logger_keys = ["validate_perplexity"]
             self.stat = DistStatistics(*self.logger_keys)
             self.reduce = None
             if(self.config.has_attr("downsample_length")):
@@ -58,13 +58,13 @@ class LMEpoch:
                 else:
                     syn_loss.backward()
                 self.stat.gather(self.device,
-                    perplexity=syn_loss,
+                    train_perplexity=syn_loss / loss["count"],
                     count = loss["count"])
         if(self.is_training):
             stat_res = self.stat()
             if(self.logger is not None):
                 self.logger(self.optimizer.param_groups[0]['lr'],
-                        stat_res["perplexity"]["mean"],
+                        stat_res["train_perplexity"]["mean"],
                         epoch=epoch_id,
                         iteration=batch_id)
         else:
@@ -80,22 +80,23 @@ class LMEpoch:
 
             for i in range(bsz):
                 self.stat.gather(self.device,
-                        perplexity=perpl[i],
+                        validate_perplexity=perpl[i],
                         count=counts[i])
             
     def epoch_end(self, epoch_id):
         if(not self.is_training):
             stat_res = self.stat()
             if(self.logger is not None):
-                self.logger(stat_res["perplexity"]["mean"], 
+                self.logger(stat_res["validate_perplexity"]["mean"], 
                         epoch=epoch_id)
-            if(self.extra_info.lower() == 'validate' and self.main):
-                if not os.path.exists(self.config.output):
-                    os.makedirs(self.config.output)
-                for key_name in stat_res:
-                    res_text = string_mean_var(self.downsample_length, stat_res[key_name])
-                    file_path = f'{self.config.output}/result_{key_name}.txt'
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                    with open(file_path, 'w') as f_model:
-                        f_model.write(res_text)
+            if(self.extra_info is not None):
+                if(self.extra_info.lower() == 'validate' and self.main):
+                    if not os.path.exists(self.config.output):
+                        os.makedirs(self.config.output)
+                    for key_name in stat_res:
+                        res_text = string_mean_var(self.downsample_length, stat_res[key_name])
+                        file_path = f'{self.config.output}/result_{key_name}.txt'
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        with open(file_path, 'w') as f_model:
+                            f_model.write(res_text)

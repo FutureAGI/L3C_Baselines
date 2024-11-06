@@ -30,6 +30,7 @@ class E2EObjNavSA(nn.Module):
                     torch.linspace(0.0, 1.0, config.context_warmup),
                     torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=0)
         loss_weight = loss_weight / torch.sum(loss_weight)
+
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
@@ -86,8 +87,8 @@ class E2EObjNavSA(nn.Module):
 
         inputs = img_pro(observations)
 
-        bsz = z_pred.shape[0]
-        seq_len = z_pred.shape[1]
+        bsz = behavior_actions.shape[0]
+        seq_len = behavior_actions.shape[1]
 
         # Pay attention the position must be acquired before calling forward()
         ps = self.decision_model.causal_model.position
@@ -112,7 +113,7 @@ class E2EObjNavSA(nn.Module):
             loss_weight = None
 
         # World Model Loss - Latent Space
-        loss["wm-latent"], loss["count"] = weighted_loss(z_pred, 
+        loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                           loss_type="mse",
                                           gt=z_rec_l[:, 1:], 
                                           loss_wht=loss_weight, 
@@ -130,19 +131,29 @@ class E2EObjNavSA(nn.Module):
         # Decision Model Loss
         if(self.policy_loss == 'crossentropy'):
             assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
-            loss_weight = label_actions.ge(0) * label_actions.lt(self.nactions) * self.loss_weight[:, ps:pe]
+            loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
+            if(use_loss_weight):
+                loss_weight = loss_weight * self.loss_weight[ps:pe]
             truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
-            loss["pm"] = weighted_loss(a_pred,
+            loss["pm"], loss["count_pm"] = weighted_loss(a_pred,
                                        loss_type="ce",
                                        gt=truncated_actions, 
                                        loss_wht=loss_weight, 
-                                       reduce_dim=reduce_dim)
+                                       reduce_dim=reduce_dim,
+                                       need_cnt=True)
         elif(self.policy_loss == 'mse'):
-            loss["pm"] = weighted_loss(a_pred,
+            if(use_loss_weight):
+                loss_weight = self.loss_weight[ps:pe]
+            else:
+                loss_weight = None
+            loss["pm"], loss["count_pm"] = weighted_loss(a_pred,
                                        loss_type="mse", 
                                        gt=label_actions, 
                                        loss_wht=loss_weight, 
-                                       reduce_dim=reduce_dim)
+                                       reduce_dim=reduce_dim,
+                                       need_cnt=True)
+        else:
+            log_fatal(f"no such policy loss type: {self.policy_loss}")
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
         return loss

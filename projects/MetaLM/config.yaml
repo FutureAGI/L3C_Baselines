@@ -56,10 +56,8 @@ train_config:
   lr: 1.0e-3
   lr_decay_interval: 5000
   lr_start_step: 0
-  data_path: ./data
+  data_path: [Path]
   save_model_path: ./checkpoints
-  master_port: "12301"
-  evaluation_interval: 1
 
 test_config:
   batch_size: 4
@@ -69,5 +67,4 @@ test_config:
   seg_len: 1024
 
   data_path: [Path]
-  master_port: "12303"
-  load_model_path: [PATH]
+  output: ./results/

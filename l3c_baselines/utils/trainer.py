@@ -36,17 +36,17 @@ def EpochManager(cls):
             else:
                 return default
 
-        def init_dataset(self):
-            self.dataset = self.get('dataset')
-            if(self.dataset is None):
+        def init_dataloader(self):
+            self.dataloader = self.get('dataloader')
+            if(self.dataloader is None):
                 DataType = self.get('DataType')
-                assert DataType is not None, f"either dataset or DataType must be specified."
-                data = DataType(self.config.data_path, 
+                assert DataType is not None, f"either dataloader or DataType must be specified."
+                dataset = DataType(self.config.data_path, 
                                     self.config.seq_len, 
                                     verbose=self.main)
-                self.dataset = PrefetchDataLoader(data, batch_size=self.config.batch_size, 
+                self.dataloader = PrefetchDataLoader(dataset, batch_size=self.config.batch_size, 
                                             rank=self.rank, world_size=self.world_size)
-                self.computer.dataset = self.dataset
+                self.computer.dataloader = self.dataloader
 
         def init_logger(self):
             self.logger = self.get('logger')
@@ -57,7 +57,7 @@ def EpochManager(cls):
                         f"The logger_keys must be a list of string."
                     if(self.is_training):
                         process_name = f"Training-{self.computer.__class__.__name__}"
-                        max_iter = len(self.dataset)
+                        max_iter = len(self.dataloader)
                     else:
                         process_name = f"Evaluation-{self.computer.__class__.__name__}"
                         max_iter = -1
@@ -119,28 +119,28 @@ def EpochManager(cls):
                 self.computer.epoch_end(eid)
 
         def _preprocess(self):
-            self.init_dataset()
-            self.init_logger()
-            self.init_optimizer()
             if(hasattr(self.computer, 'preprocess')):
                 self.computer.preprocess()
+            self.init_dataloader()
+            self.init_logger()
+            self.init_optimizer()
 
         def _postprocess(self):
             if(hasattr(self.computer, 'postprocess')):
                 self.computer.postprocess()
 
         def run(self, epoch_id, device, device_type):
-            if(not self._valid_epoch(eid)):
+            if(not self._valid_epoch(epoch_id)):
                 return
             
             acc_iter = 0
-            self.dataset.dataset.reset(epoch_id)
+            self.dataloader.dataset.reset()
 
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
 
-            data_length = len(self.dataset)
-            for batch_id, batch_data in enumerate(self.dataset):
+            data_length = len(self.dataloader)
+            for batch_id, batch_data in enumerate(self.dataloader):
                 acc_iter += 1
 
                 # Important: Must reset the model before segment iteration
@@ -205,7 +205,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
         main = False
 
     if(main):
-        print("Main gpu", use_gpu, "rank:", rank, device)
+        log_debug("Main gpu", use_gpu, "rank:", rank, device)
 
     # Create model and move it to GPU with id `gpu`
     model = model_type(config.model_config, verbose=main)
@@ -308,9 +308,9 @@ class Runner(object):
         self.use_gpu = torch.cuda.is_available()
         self.world_size = torch.cuda.device_count() if self.use_gpu else os.cpu_count()
         if(self.use_gpu):
-            print("Use Parallel GPUs: %s" % self.world_size)
+            log_debug("Use Parallel GPUs: %s" % self.world_size)
         else:
-            print("Use Parallel CPUs: %s" % self.world_size)
+            log_debug("Use Parallel CPUs: %s" % self.world_size)
 
         self.config = Configure()
         self.config.from_yaml(args.configuration)

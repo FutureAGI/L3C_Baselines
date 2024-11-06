@@ -81,6 +81,7 @@ train_config:
     epoch_vae_stop: 2
     epoch_causal_start: -1
 
+    seq_len: 16000
     seq_len_vae: 16000
     seq_len_causal: 16000
     seg_len_vae: 100
@@ -124,6 +125,10 @@ test_config:
     data_path: [PATH]
     epoch_vae_stop: 2
     epoch_causal_start: -1
-    load_model_path: None
-    seq_len: 16000
-    seg_len: 500
+
+    seq_len_vae: 16000
+    seq_len_causal: 16000
+    seg_len_vae: 500
+    seg_len_causal: 1000
+
+    output: ./results

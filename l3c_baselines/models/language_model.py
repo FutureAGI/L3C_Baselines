@@ -56,15 +56,13 @@ class LanguageModel(nn.Module):
 
         logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
 
+
+        if(self.loss_weight.shape[0] < pe):
+            log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
+                    f" than sequence length {pe}")
         loss_weight = ((outputs.lt(self.nvocab)) * (outputs.ge(0))).to(self.loss_weight.dtype)
         if(use_loss_weight):
             loss_weight *= self.loss_weight[ps:pe].unsqueeze(0)
-
-        if(self.loss_weight.shape[1] < e):
-            log_fatal(f"Loss weight (shape {self.loss_weight.shape[1]}) should be longer" +
-                    f" than sequence length {e}")
-        if(use_loss_weight):
-            loss_weight = self.loss_weight[:, b:e] * loss_weight
 
         loss = dict()
         loss["perplexity"], loss["count"] = weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, 
