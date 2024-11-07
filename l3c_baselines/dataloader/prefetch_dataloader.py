@@ -8,9 +8,9 @@ import numpy as np
 import multiprocessing
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate as torch_collate
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from l3c_baselines.utils.tools import Logger, log_progress, log_debug, log_warn, log_fatal
 
-class NaiveDataLoader(DataLoader):
+class BaseDataLoader(DataLoader):
     def __init__(self, dataset, rank=0, world_size=1, batch_size=4, collate_fn=torch_collate):
         self.dataset = dataset
         self.batch_size = batch_size
@@ -19,9 +19,8 @@ class NaiveDataLoader(DataLoader):
         self.world_size = world_size
         self.index = 0
         self.local_index = 0
-        self.physical_length = len(self.dataset)
-        self.length = (self.physical_length - 1) // (self.batch_size * self.world_size) + 1
         self.data_volume = len(self.dataset)
+        self.length = (self.data_volume - 1) // (self.batch_size * self.world_size) + 1
 
     def __iter__(self):
         self.index = self.rank
@@ -29,7 +28,7 @@ class NaiveDataLoader(DataLoader):
         return self
 
     def __next__(self):
-        if self.local_index >= self.length:
+        if self.local_index >= self.length or self.index >= self.data_volume:
             # stop iteration once index is out of bounds
             raise StopIteration
         data = []
@@ -71,12 +70,11 @@ def worker_fn(dataset, length, index_queue, output_queue):
             real_idx = index
         try:
             output_queue.put((index, dataset[real_idx]))
-        except Exception:
-            print(f"Unexpected error when getting index={index}, actual_index={real_idx}, put None")
-            sys.stdout.flush()
+        except Exception as e:
+            log_warn(f"DataLoader:unexpected error when getting {real_idx}:{e}")
             output_queue.put((index, None))
 
-class PrefetchDataLoader(NaiveDataLoader):
+class PrefetchDataLoader(BaseDataLoader):
     def __init__(
         self,
         dataset,
@@ -100,12 +98,11 @@ class PrefetchDataLoader(NaiveDataLoader):
         self.workers = []
         self.worker_cycle = itertools.cycle(range(num_workers))
         self.cache = {}
-        self.prefetch_local_index = 0
 
         for _ in range(num_workers):
             index_queue = multiprocessing.Queue()
             worker = multiprocessing.Process(
-                target=worker_fn, args=(self.dataset, self.physical_length, index_queue, self.output_queue)
+                target=worker_fn, args=(self.dataset, self.data_volume, index_queue, self.output_queue)
             )
             worker.daemon = True
             worker.start()
@@ -140,7 +137,7 @@ class PrefetchDataLoader(NaiveDataLoader):
     def __iter__(self):
         self.local_index = 0
         self.index = self.rank
-        self.prefetch_index = self.index
+        self.prefetch_index = self.rank
         self.cache = {}
         self.prefetch()
         return self

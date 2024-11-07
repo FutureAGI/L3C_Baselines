@@ -18,11 +18,17 @@ class AnyMDPRSA(RSADecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 
-        loss_weight = torch.cat((
-                    torch.linspace(1.0e-3, 1.0, config.context_warmup).unsqueeze(0),
-                    torch.full((1, config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=1)
+        # Loss weighting
+        loss_weight = torch.cat( (torch.linspace(1.0e-3, 1.0, config.context_warmup),
+                                  torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)
+                                  ), 
+                                dim=0)
+        loss_weight = loss_weight / torch.sum(loss_weight)
+
         self.register_buffer('loss_weight', loss_weight)
         self.set_train_config(config)
+
+        self.nactions = config.action_dim
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
@@ -77,30 +83,32 @@ class AnyMDPRSA(RSADecisionModel):
                             rewards, 
                             behavior_actions, 
                             label_actions, 
-                            additional_info=None, # Kept for passing additional information
-                            start_position=0, 
                             state_dropout=0.0,
                             reward_dropout=0.0,
                             update_memory=True,
-                            loss_is_weighted=True,
+                            use_loss_weight=True,
                             reduce_dim=1):
     
+        bsz = behavior_actions.shape[0]
+        seq_len = behavior_actions.shape[1]
+        # Pay attention position must be acquired before calling forward()
+        ps = self.causal_model.position
+        pe = ps + seq_len
+
         # Predict the latent representation of action and next frame (World Model)
-        s_pred, a_pred, r_pred, _ = self.forward(prompts, observations[:, :-1], behavior_actions, rewards,
+        s_pred, a_pred, r_pred, _ = self.forward(
+                prompts, observations[:, :-1], behavior_actions, rewards,
                 cache=None, need_cache=False, state_dropout=state_dropout,
                 update_memory=update_memory)
 
         # Calculate the loss information
         loss = dict()
 
-        bsz = a_pred.shape[0]
-        seq_len = a_pred.shape[1]
-        ps, pe = start_position, start_position + seq_len
-
-        if(loss_is_weighted):
-            loss_weight = self.loss_weight[:, ps:pe]
-        else:
-            loss_weight = None
+        # Calculate the loss weighting
+        loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
+        if(use_loss_weight):
+            loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
+        # Mask out the invalid actions
 
         # World Model Loss - States and Rewards
         loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
@@ -115,14 +123,16 @@ class AnyMDPRSA(RSADecisionModel):
                                      loss_wht=loss_weight, 
                                      reduce_dim=reduce_dim)
 
-        # Policy Model and Entropy Loss
+        # Policy Model
         loss["pm"] = weighted_loss(a_pred, 
                                    gt=label_actions, 
                                    loss_type="ce",
                                    loss_wht=loss_weight, 
                                    reduce_dim=reduce_dim)
+        # Entropy Loss
         loss["ent"] = weighted_loss(a_pred, 
                                     loss_type="ent", 
+                                    loss_wht=loss_weight,
                                     reduce_dim=reduce_dim)
 
         loss["causal-l2"] = parameters_regularization(self)

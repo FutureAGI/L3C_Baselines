@@ -92,6 +92,13 @@ class CausalBlock(nn.Module):
         self.layers = main_encoder
         self.checkpoints_density = config.checkpoints_density
 
+    @property
+    def position(self):
+        if(hasattr(self.layers, 'position')):
+            return self.layers.position
+        else:
+            return 0
+
     def forward(self, *args, **kwargs):
         kwargs["checkpoints_density"] = self.checkpoints_density
         out, cache = self.layers.forward(*args, **kwargs)

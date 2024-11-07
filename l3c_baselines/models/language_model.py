@@ -25,14 +25,13 @@ class LanguageModel(nn.Module):
         self.output_mapping = ResidualMLPDecoder(config.output_layers)
 
         loss_weight = torch.cat((
-                torch.linspace(0.0, 1.0, config.context_warmup).unsqueeze(0),
-                torch.full((1, config.max_position - config.context_warmup,), 1.0)), dim=1)
+                torch.linspace(0.0, 1.0, config.context_warmup),
+                torch.full((config.max_position - config.context_warmup,), 1.0)), dim=0)
+        loss_weight = loss_weight / torch.sum(loss_weight)
         self.register_buffer('loss_weight', loss_weight)
 
         if(verbose):
             print("Language Model initialized, total params: {}".format(count_parameters(self)))
-
-
 
     def forward(self, inputs, cache=None, need_cache=True, T=1.0, update_memory=True):
         """
@@ -50,17 +49,26 @@ class LanguageModel(nn.Module):
     def reset(self):
         self.encoder.reset()
 
-    def perplexity(self, inputs, outputs, start_position=0, is_loss_weighted=True, update_memory=True, reduce_dim=1):
+    def perplexity(self, inputs, outputs, use_loss_weight=True, update_memory=True, reduce_dim=1):
         seq_len = inputs.shape[1]
-        logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
-        loss_weight = (outputs.lt(self.nvocab)) * (outputs.ge(0))
-        if(self.loss_weight.shape[1] < start_position + seq_len):
-            log_fatal(f"specified max_position {self.loss_weight.shape[1]} is shorter" +
-                    f" than sequence length {start_position + seq_len}, quit")
-        if(is_loss_weighted):
-            loss_weight = self.loss_weight[:, start_position:(start_position + seq_len)] * loss_weight
-        return weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, loss_wht=loss_weight, reduce_dim=reduce_dim)
+        ps = self.encoder.position
+        pe = ps + seq_len
 
+        logits, _ = self.forward(inputs, need_cache=False, update_memory=update_memory)
+
+
+        if(self.loss_weight.shape[0] < pe):
+            log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
+                    f" than sequence length {pe}")
+        loss_weight = ((outputs.lt(self.nvocab)) * (outputs.ge(0))).to(self.loss_weight.dtype)
+        if(use_loss_weight):
+            loss_weight *= self.loss_weight[ps:pe].unsqueeze(0)
+
+        loss = dict()
+        loss["perplexity"], loss["count"] = weighted_loss(logits, gt=outputs, loss_type="ce", gamma=0, 
+                             loss_wht=loss_weight, reduce_dim=reduce_dim, need_cnt=True)
+        return loss
+    
     def inference_seg(self, inputs, L, 
                       temp_default=1.0, 
                       temp_setting=None, 
