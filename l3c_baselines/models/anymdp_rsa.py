@@ -189,19 +189,19 @@ class AnyMDPRSA(RSADecisionModel):
         # Only use ground truth
         if(Nobs > 1):
             with torch.no_grad():
-                s_pred, a_pred, r_pred, valid_cache  = self.forward(
+                o_pred, a_pred, r_pred, valid_cache  = self.forward(
                     prompts, 
-                    observations[:, :-1], 
-                    behavior_actions[:, :-1], 
-                    rewards[:, :-1],
+                    valid_obs[:, 1:-1], 
+                    valid_act[:, :-1], 
+                    valid_rew[:, :-1],
                     cache=cache, need_cache=need_cache, state_dropout=state_dropout,
                     T=temp,
                     update_memory=update_memory)
         else:
             valid_cache = cache
-        n_obs = observations[:, -1:]
-        n_action = behavior_actions[:, -1:]
-        n_reward = rewards[:, -1:]
+        n_obs = valid_obs[:, -1:]
+        n_action = valid_act[:, -1:]
+        n_reward = valid_rew[:, -1:]
         # Predict the latent representation of action and next frame (World Model)
         o_pred, a_pred, r_pred, new_cache = self.forward(
             prompts, 
@@ -213,11 +213,14 @@ class AnyMDPRSA(RSADecisionModel):
             update_memory=update_memory)
         # Q: How to sample output?
         # Draw samples randomly according to the probability distribution of the input tensor. The result returned is a tensor containing the sampled values.
-        pred_action = torch.multinomial(a_pred[:, -1:], num_samples=1).squeeze(1)
+        pred_action = torch.multinomial(a_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
         action_out = pred_action.squeeze(0).cpu().numpy()
 
-        state_out = o_pred.squeeze(1).squeeze(0).cpu().numpy()
-        reward_out = r_pred.squeeze(1).squeeze(0).cpu().numpy()
+        state_out = torch.multinomial(o_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
+        state_out = state_out.squeeze(0).cpu().numpy()
+
+        reward_out = torch.multinomial(r_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
+        reward_out = reward_out.squeeze(0).cpu().numpy()
 
         return state_out, action_out, reward_out, new_cache
         

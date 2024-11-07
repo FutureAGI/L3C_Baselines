@@ -56,7 +56,7 @@ def string_mean_var(downsample_length, res):
         string += f'{downsample_length * i}\t{xm}\t{xb}\n'
     return string
 
-def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample_length = 10):
+def anymdp_model_epoch(rank, world_size, config, model_config, model, main, device, downsample_length = 10):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -89,6 +89,8 @@ def anymdp_model_epoch(rank, world_size, config, model, main, device, downsample
                     (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
             with torch.no_grad():
                 # loss dim is Bxt, t = T // seg_len 
+                if model_config.reward_encode.input_type == "Continuous":
+                    rewards = rewards.view(rewards.shape[0],rewards.shape[1],1)
                 loss = model.module.sequential_loss(
                             None,
                             states, 
@@ -159,6 +161,7 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank):
         print("Main gpu", use_gpu, "rank:", rank, device)
 
     test_config = config.test_config
+    model_config = config.model_config
     
     # Load Model
     model = AnyMDPRSA(config.model_config, verbose=main)
@@ -172,7 +175,7 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank):
     print("------------Load model success!------------")
 
     # Perform the first evaluation
-    anymdp_model_epoch(rank, world_size, test_config, model, main, device)
+    anymdp_model_epoch(rank, world_size, test_config, model_config, model, main, device)
 
     return
 

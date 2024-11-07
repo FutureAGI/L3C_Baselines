@@ -58,6 +58,7 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
     train_config = config.train_config
     test_config = config.test_config
     log_config = config.log_config
+    model_config = config.model_config
 
     # Initialize the Dataset and DataLoader
     dataset = AnyMDPDataSet(train_config.data_path, train_config.seq_len, verbose=main)
@@ -134,6 +135,8 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
                         (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
                 with autocast(dtype=torch.bfloat16, enabled=train_config.use_amp, device_type=device_type):
                     # Calculate THE LOSS
+                    if model_config.reward_encode.input_type == "Continuous":
+                        rewards = rewards.view(rewards.shape[0],rewards.shape[1],1)
                     loss = model.module.sequential_loss(
                         r2go[:, :-1], # Prompts
                         states, 
@@ -213,9 +216,9 @@ def main_epoch(rank, use_gpu, world_size, config, main_rank):
 
         # Perform the evaluation according to interval
         if(epoch_id % train_config.evaluation_interval == 0):
-            test_epoch(rank, use_gpu, world_size, test_config, model, main, device, epoch_id, logger_eval)
+            test_epoch(rank, use_gpu, world_size, test_config, model_config, model, main, device, epoch_id, logger_eval)
 
-def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id, logger):
+def test_epoch(rank, use_gpu, world_size, config, model_config, model, main, device, epoch_id, logger):
     # Example training loop
 
     dataset = AnyMDPDataSet(config.data_path, config.seq_len, verbose=main)
@@ -241,6 +244,8 @@ def test_epoch(rank, use_gpu, world_size, config, model, main, device, epoch_id,
             for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
                         config.seq_len, config.seg_len, device, 
                         (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
+                if model_config.reward_encode.input_type == "Continuous":
+                        rewards = rewards.view(rewards.shape[0],rewards.shape[1],1)
                 losses.append(model.module.sequential_loss(
                             None,
                             states, 

@@ -79,7 +79,7 @@ def string_mean_var(downsample_length, mean, var):
 # config = demo_config
 def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length = 10):
     # Example training loop
-
+    env = env.copy()
     state_init, _ = env.reset()
     obs_arr = [state_init]
     act_arr = []
@@ -98,8 +98,8 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
     downsample_scuccess_count = 0
 
     cache = None
-    model.init_mem()
-    temperature = config.T_ini
+    
+    temperature = config.model_config.policy.T_ini
     new_tasks = False
     segment_id = 0
     for task_index in range(config.task_num):
@@ -109,26 +109,29 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
         segment_id = len(rew_arr)//config.seg_len
         segment_start_position = segment_id * config.seg_len
         while not done:
-            temperature = max(temperature * (1.0 - config.T_dec), config.T_min)
-            state_out, action_out, reward_out, new_cache = model.module.inference_step_by_step(
-                observations = obs_arr[segment_start_position:],
-                rewards = rew_arr[segment_start_position:],
-                behavior_actions = act_arr[segment_start_position:],
-                temp = temperature,
-                new_tasks = new_tasks,
-                device = device,
-                cache = cache,
-                need_cache = True,
-                update_memory = True
-            )
+            temperature = max(temperature * (1.0 - config.model_config.policy.T_dec), config.model_config.policy.T_min)
+            with torch.no_grad():
+              state_out, action_out, reward_out, new_cache = model.module.inference_step_by_step(
+                  None,
+                  observations = obs_arr[segment_start_position:],
+                  rewards = rew_arr[segment_start_position:],
+                  behavior_actions = act_arr[segment_start_position:],
+                  temp = temperature,
+                  new_tasks = new_tasks,
+                  device = device,
+                  cache = cache,
+                  need_cache = True,
+                  update_memory = True
+              )
             if new_tasks:
                 # Remove the init state in next task form the obs_arr
                 # If we don't want to remove init state, we need to append 0 value to both act_arr and rew_arr.
                 obs_arr.pop(-1) 
             new_tasks = False
             cache = new_cache
+            action_out = int(action_out.item())
             act_arr.append(action_out)
-            new_state, new_reward, done, _ = env.step(action_out)
+            new_state, new_reward, done, *_ = env.step(action_out)
             obs_arr.append(new_state)   
             rew_arr.append(new_reward)
             obs_pred_arr.append(state_out)
@@ -146,8 +149,8 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
         # Start statistics
         # -World model loss
         # --Easy case, obs value is discrete value, if obs is img or continous value, refer to MazeWorld/evaluate.py.
-        obs_loss = numpy.mean(obs_arr[task_start_position + 1:] - obs_pred_arr)
-        rew_loss = numpy.mean(rew_arr[task_start_position:] - rew_pred_arr)
+        obs_loss = numpy.mean(numpy.array(obs_arr[task_start_position + 1:]) - numpy.array(obs_pred_arr[task_start_position:]))
+        rew_loss = numpy.mean(numpy.array(rew_arr[task_start_position:]) - numpy.array(rew_pred_arr[task_start_position:]))
         # --obs_loss and rew_loss is task-wise loss, for step-wise/position-wise loss, then we don't need to average arcoss step.
         obs_loss_list.append(obs_loss)
         rew_loss_list.append(rew_loss)

@@ -180,7 +180,7 @@ class RSADecisionModel(nn.Module):
             dpr_mask = torch.bernoulli(pr_mask)
 
             # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
-            reward_in = self.r_encoder(r_arr.view(B, NT, 1)) + eps * dpr_eps
+            reward_in = self.r_encoder(r_arr) + eps * dpr_eps
             reward_in = reward_in * (1 - dpr_mask) + self.mask_query_r * dpr_mask
             reward_in = reward_in.view(B, NT, 1, -1)
             inputs.append(reward_in)
