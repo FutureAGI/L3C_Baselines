@@ -27,6 +27,12 @@ class RWKV6Layer(nn.Module):
         self.encoder = RWKV6Block(
                   self.config,
                   layer_idx=0)
+
+    def init_state(self, batch_size: int) -> Tuple[torch.Tensor]:
+        param = next(self.parameters())
+        state = [param.new_zeros(batch_size, self.hidden_size),
+                 param.new_zeros(batch_size, self.num_heads, self.head_qk_dim, self.head_v_dim)]
+        return state
         
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache and cache is None):

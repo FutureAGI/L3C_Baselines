@@ -163,7 +163,7 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
             task_id = (work_id + idx * world_work) % tasks_num
             task = tasks_from_file[task_id]
         else:
-            task = AnyMDPTaskSampler(nstates, nactions, offpolicy_labeling=is_offpolicy_labeling)
+            task = AnyMDPTaskSampler(nstates, nactions)
 
         env.set_task(task)
         results = run_epoch(env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
