@@ -50,12 +50,18 @@ def format_cache(cache, prefix=''):
     elif(isinstance(cache, numpy.ndarray) or isinstance(cache, torch.Tensor)):
         return prefix + ' ' + str(cache.shape)
     elif(isinstance(cache, list) or isinstance(cache, tuple)):
-        ret_str = prefix + f'List of length {len(cache)}:\n['
-        for subc in cache[:-1]:
-            ret_str += format_cache(subc, prefix + ' -')
-            ret_str += '\n'
-        ret_str += format_cache(cache[-1], prefix + ' -')
+        ret_str = prefix + f'List of length {len(cache)}:['
+        for subc in cache:
+            ret_str += format_cache(subc)
+            ret_str += ';'
         ret_str += ']'
+        return ret_str
+    elif(isinstance(cache, dict)):
+        ret_str = prefix + 'Dicts{'
+        for key in cache:
+            ret_str += format_cache(cache[key], prefix + f'{key}:')
+            ret_str += ';'
+        ret_str += '}'
         return ret_str
     else:
         return prefix + ' ' + str(type(cache))
@@ -64,11 +70,13 @@ def memory_cpy(cache):
     if(cache is None):
         return None
     elif(isinstance(cache, torch.Tensor)):
-        return safety_check(cache.detach().clone(), msg='memory_cpy')
+        return cache.detach().clone()
     elif(isinstance(cache, list)):
         return [memory_cpy(c) for c in cache]
+    elif(isinstance(cache, dict)):
+        return {k:memory_cpy(cache[k]) for k in cache}
     elif(isinstance(cache, tuple)):
-        return tuple([memory_cpy for c in cache])
+        return tuple([memory_cpy(c) for c in cache])
     elif(hasattr(cache, 'clone')):
         return cache.clone()
     else:
