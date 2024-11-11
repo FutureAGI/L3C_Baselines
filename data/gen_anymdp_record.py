@@ -13,7 +13,7 @@ import l3c.mazeworld
 import random as rnd
 from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler, Resampler
-from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverMBRL, AnyMDPSolverQ
+from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS
 from l3c.utils import pseudo_random_seed
 
 class PolicyScheduler:
@@ -49,19 +49,12 @@ class PolicyScheduler:
 def run_epoch(
         env,
         max_steps,
-        avg_steps_reset = 200,
         offpolicy_labeling = True,
         ):
     # Must intialize agent after reset
     steps = 0
-    acc_steps = 0
     
-    # Steps to reset the environment
-    def resample_reset_steps(_lambda):
-        return int(max(2.0 * random.random() + random.normal(), 0.20) * _lambda)
-
     # Steps to reset the 
-    cur_reset_steps=resample_reset_steps(avg_steps_reset)
     naction = env.action_space.n
 
     state_list = list()
@@ -70,7 +63,7 @@ def run_epoch(
     reward_list = list()
     
     solver1 = AnyMDPSolverOpt(env)
-    solver2 = AnyMDPSolverQ(env)
+    solver2 = AnyMDPSolverOTS(env)
 
     state, info = env.reset()
 
@@ -89,6 +82,8 @@ def run_epoch(
     ps_b_traj = ps_b()
     ps_l_traj = ps_l()
 
+    _act_type = ['OPT', 'VI', 'Random']
+
     def gen_act(state, act_type):
         if(act_type == 0):
             act = solver1.policy(state)
@@ -99,33 +94,23 @@ def run_epoch(
         return act
 
     while steps <= max_steps:
-        steps += 1
-        acc_steps += 1
-        if(acc_steps >= cur_reset_steps):
-            next_state, info = env.reset()
-            bact = naction
-            lact = naction
-            acc_steps = 0
-            reward = 0.0
+        bact = gen_act(state, ps_b_traj[steps - 1]) 
+        if(offpolicy_labeling):
+            lact = gen_act(state, ps_l_traj[steps - 1])
         else:
-            bact = gen_act(state, ps_b_traj[steps - 1]) 
-            if(offpolicy_labeling):
-                lact = gen_act(state, ps_l_traj[steps - 1])
-            else:
-                lact = bact
+            lact = bact
 
-            next_state, reward, done, info = env.step(bact)
+        next_state, reward, done, info = env.step(bact)
 
-            ppl = -numpy.log(env.transition_matrix[state, bact, next_state])
-            mse = (reward - env.reward_matrix[state, bact]) ** 2
-            ppl_sum.append(ppl)
-            mse_sum.append(mse)
+        ppl = -numpy.log(env.transition_matrix[state, bact, next_state])
+        mse = (reward - env.reward_matrix[state, bact]) ** 2
+        ppl_sum.append(ppl)
+        mse_sum.append(mse)
 
-            try:
-                solver1.learner(state, bact, next_state, reward, done)
-                solver2.learner(state, bact, next_state, reward, done)
-            except Exception as e:
-                pass
+        solver2.learner(state, bact, next_state, reward, done)
+
+        if(done):
+            next_state, info = env.reset()
 
         state_list.append(state)
         bact_list.append(bact)
@@ -133,6 +118,7 @@ def run_epoch(
         reward_list.append(reward)
 
         state = next_state
+        steps += 1
 
     print("Finish running, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f\n"%(
              numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
@@ -170,7 +156,6 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
 
         file_path = f'{path_name}/record-{idx:06d}'
         create_directory(file_path)
-        print(results["states"])
 
         numpy.save("%s/observations.npy" % file_path, results["states"])
         numpy.save("%s/actions_behavior.npy" % file_path, results["actions_behavior"])
