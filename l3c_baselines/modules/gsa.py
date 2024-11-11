@@ -3,7 +3,7 @@ from torch import nn
 from fla.layers.gsa import GatedSlotAttention
 from fla.layers.gla import GatedLinearAttention
 from fla.models.utils import Cache
-from l3c_baselines.utils import format_cache, memory_cpy        
+from l3c_baselines.utils import format_cache, memory_cpy, log_warn 
 
 class GLABlock(nn.Module):
     def __init__(self,
@@ -18,28 +18,14 @@ class GLABlock(nn.Module):
                   num_heads=num_heads,
                   layer_idx=0)
         
-    def init_state(self, batch_size: int) -> Tuple[torch.Tensor]:
-        param = next(self.parameters())
-        state = tuple()
-        state += (param.new_zeros(batch_size, 
-                                  self.encoder.num_kv_heads, 
-                                  self.encoder.head_k_dim, 
-                                  self.encoder.num_slots),
-                  param.new_zeros(batch_size, 
-                                  self.encoder.num_kv_heads, 
-                                  self.encoder.num_slots, 
-                                  self.encoder.head_v_dim))
-        return state
-        
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache and cache is None):
-            cache = self.encoder.init_state(x.shape[0])
-            cache = Cache.from_legacy_cache([cache])
+            cache = Cache.from_legacy_cache(None)
     
         use_cache = (cache is not None)
         out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
 
-        if(new_cache is not None and need_cache):
+        if(new_cache is not None):
             new_cache.states = memory_cpy(new_cache.states)
 
         return out, new_cache
@@ -58,12 +44,3 @@ class GSABlock(GLABlock):
                   num_heads=num_heads,
                   num_slots=num_slots,
                   layer_idx=0)
-        
-    def init_state(self, batch_size: int) -> Tuple[torch.Tensor]:
-        param = next(self.parameters())
-        state = tuple()
-        state += (param.new_zeros(batch_size, 
-                                  self.encoder.num_heads, 
-                                  self.encoder.head_qk_dim, 
-                                  self.encoder.head_v_dim))
-        return state
