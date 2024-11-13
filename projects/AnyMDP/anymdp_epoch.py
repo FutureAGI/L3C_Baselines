@@ -171,9 +171,9 @@ class AnyMDPGenerator(GeneratorBase):
             done = False
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
-
+            
+            epoch_start_step = step
             while not done:
-                step += 1
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     None,
                     previous_state,
@@ -193,19 +193,20 @@ class AnyMDPGenerator(GeneratorBase):
                 reward_error.append((new_reward - pred_reward) ** 2)
                 state_error.append(-numpy.log(pred_state_dist[new_state]))
 
-
-
                 # start learning
                 self.model.module.in_context_learn(
                     None,
                     previous_state,
                     action,
                     new_reward)
-
+                
+                step += 1
                 if(step > self.max_steps):
-                    break           
+                    break
 
-            self.logger(numpy.mean(rew_arr), numpy.mean(state_error), numpy.mean(reward_error))
+            self.logger(numpy.mean(rew_arr[epoch_start_step:]), 
+                        numpy.mean(state_error[epoch_start_step:]), 
+                        numpy.mean(reward_error[epoch_start_step:]))
             
         ds_state_err = downsample(state_error, self.config.downsample_length)
         ds_reward_err = downsample(reward_error, self.config.downsample_length)
