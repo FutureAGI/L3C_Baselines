@@ -147,38 +147,42 @@ class AnyMDPRSA(RSADecisionModel):
         """
         Generating Step By Step Action and Next Frame Prediction
         Args:
-            prompts: single prompt of size 
-            observation: [bsz, 1]
+            prompts:
+            observation: 
             temp: temperature for sampling
-            device: cuda or cpu
+            single_batch: if true, add additional batch to input tensor
         Returns:
             o_pred: predicted states
             action_out: action decision
             r_pred: predicted rewards
         """
-        device = self.parameters()[0].device
+        device = next(self.parameters()).device
         if(not self.p_included):
             pro_in = None
         elif(not isinstance(prompts, torch.Tensor)):
             pro_in = torch.tensor([prompts], dtype=torch.int64).to(device)
         else:
-            pro_in = prompts
+            pro_in = prompts.to(device)
         if(not isinstance(observation, torch.Tensor)):
             obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
+        else:
+            obs_in = observation.to(device)
+
         if(single_batch):
             if(pro_in is not None):
-                pro_in.unsqueeze(0)
-            obs_in.unsqueeze(0)
+                pro_in = pro_in.unsqueeze(0)
+            obs_in = obs_in.unsqueeze(0)
 
         if(self.r_included):
-            default_r = self.default_r
+            default_r = self.default_r.to(device)
         else:
             default_r = None
+        default_a = self.default_a.to(device)
 
         o_pred, a_pred, r_pred, _ = self.forward(
             pro_in,
             obs_in,
-            self.default_a,
+            default_a,
             default_r,
             T=temp,
             update_memory=False,
@@ -189,7 +193,10 @@ class AnyMDPRSA(RSADecisionModel):
                 a_pred[:, :, action_clip:] = 0.0
             act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
             # bsz, 1, nactions
-            act_in = torch.multinomial(act_in.squeeze(1), num_samples=1).squeeze(1)
+            act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
+            act_out = act_in.squeeze()
+        else:
+            act_in = a_pred
             act_out = act_in.squeeze()
         
         o_pred, a_pred, r_pred, _ = self.forward(
@@ -207,8 +214,14 @@ class AnyMDPRSA(RSADecisionModel):
 
         if(need_numpy):
             act_out = act_out.numpy()
+            if(act_out.size < 2):
+                act_out = act_out.item()
             state = state.numpy()
+            if(state.size < 2):
+                state = state.item()
             reward = reward.numpy()
+            if(reward.size < 2):
+                reward = reward.item()
         
         return state, act_out, reward
 
@@ -223,35 +236,46 @@ class AnyMDPRSA(RSADecisionModel):
         """
         In Context Reinforcement Learning Through an Sequence of Steps
         """
-        device = self.parameters()[0].device
+        device = next(self.parameters()).device
         pro_in = None
         obs_in = None
 
         if(single_batch and single_step):
-            extra_dim = (0, 1)
+            extra_dim = [0, 1]
         elif(single_batch):
-            extra_dim = (0,)
+            extra_dim = 0
         elif(single_step):
-            extra_dim = (1,)
+            extra_dim = 1
         else:
             extra_dim = None
 
-        if(prompts is not None and not isinstance(prompts, torch.Tensor)):
-            pro_in = torch.tensor([prompts], dtype=torch.int64).to(device)
-            if(extra_dim is not None):
-                pro_in = pro_in.unsqueeze(*extra_dim)
-        if(not isinstance(observation, torch.Tensor)):
-            obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
-            if(extra_dim is not None):
-                obs_in = obs_in.unsqueeze(*extra_dim)
+        def proc(x):
+            if(x is None):
+                return x
+            if(single_batch and single_step):
+                return x.unsqueeze(0).unsqueeze(0).to(device)
+            elif(single_batch):
+                return x.unsqueeze(0).to(device)
+            elif(single_setep):
+                return x.unsqueeze(1).to(device)
+            return x.to(device)
+
+        pro_in = prompts
+        obs_in = observation
+        act_in = action
+        rew_in = reward
+        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
+            pro_in = torch.tensor(pro_in)
+        pro_in = proc(pro_in)
+        if(not isinstance(obs_in, torch.Tensor)):
+            obs_in = torch.tensor(obs_in)
+        obs_in = proc(obs_in)
         if(not isinstance(action, torch.Tensor)):
-            act_in = torch.tensor([action], dtype=torch.int64).to(device)
-            if(extra_dim is not None):
-                act_in = act_in.unsqueeze(*extra_dim)
-        if(not isinstance(reward, torch.Tensor) and reward is None):
-            rew_in = torch.tensor([reward], dtype=torch.int64).to(device)
-            if(extra_dim is not None):
-                rew_in = rew_in.unsqueeze(*extra_dim)
+            act_in = torch.tensor(act_in)
+        act_in = proc(act_in)
+        if(not isinstance(reward, torch.Tensor) and reward is not None):
+            rew_in = torch.tensor(rew_in)
+        rew_in = proc(rew_in)
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
         _, _, _, new_cache = self.forward(
@@ -259,7 +283,7 @@ class AnyMDPRSA(RSADecisionModel):
             obs_in,
             act_in,
             rew_in,
-            need_cache=need_cache
+            need_cache=need_cache,
             update_memory=True)
         
         return new_cache

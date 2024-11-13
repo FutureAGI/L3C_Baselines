@@ -164,7 +164,10 @@ test_config:
     seg_len: 4000
 
 generator_config:
+    env: lake4x4
     action_clip: 4
+    epoch_numbers: 1
+    downsample_length: 100
     decoding_strategy:
         T_ini: 1.0
         T_fin: 0.1
