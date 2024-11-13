@@ -17,7 +17,8 @@ class E2EObjNavSA(nn.Module):
     def __init__(self, config, verbose=False): 
         super().__init__()
 
-        # 创建动作编码层
+        self.config = config
+        
         self.img_encoder = ImageEncoder(config.image_encoder_block)
 
         self.img_decoder = ImageDecoder(config.image_decoder_block)

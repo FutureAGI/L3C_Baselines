@@ -221,3 +221,4 @@ def check_model_validity(model, verbose=False, level=1):
         max_risk = max(risk, max_risk)
 
     return (max_risk > level)
+

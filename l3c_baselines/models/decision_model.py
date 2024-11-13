@@ -12,6 +12,8 @@ class SADecisionModel(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
+
         self.causal_model = CausalBlock(config.causal_block)
 
         # 创建Type向量[1, 1, NP, C]
@@ -88,6 +90,8 @@ class RSADecisionModel(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
+
         self.causal_model = CausalBlock(config.causal_block)
         self.hidden_size = config.causal_block.hidden_size
 
@@ -113,15 +117,36 @@ class RSADecisionModel(nn.Module):
         type_embeddings = torch.randn(1, 1, len(self.rsa_type), self.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
 
+        if(self.config.reward_encode.input_type == "Discrete"):
+            self.default_r = torch.full(self.config.reward_encode.input_size, (1, 1), dtype=torch.int64)
+        elif(self.config.reward_encode.input_type == "Continuous"):
+            self.default_r = torch.zeros((1, 1, self.config.reward_encoder.input_size), dtype=torch.float64)
+        else:
+            raise ValueError("Invalid reward encoding type", self.config.reward_encoding)
+
+        if(self.config.action_encode.input_type == "Discrete"):
+            self.default_a = torch.full(self.config.action_encode.input_size, (1, 1), dtype=torch.int64)
+            self.a_is_discrete = True
+        elif(self.config.action_encode.input_type == "Continuous"):
+            self.default_a = torch.zeros((1, 1, self.config.action_encoder.input_size), dtype=torch.float64)
+            self.a_is_discrete = False
+
         if("p" in self.rsa_type):
             self.p_encoder = MLPEncoder(config.prompt_encode)
             self.p_included = True
         else:
             self.p_included = False
+
         if("r" in self.rsa_type):
             mask_embeddings_r = torch.randn(1, 1, self.hidden_size)
             self.mask_query_r = nn.Parameter(mask_embeddings_r, requires_grad=True)
             self.r_encoder = MLPEncoder(config.reward_encode)
+
+            if(self.config.reward_encode.input_type == "Discrete"):
+                default_r = torch.full(self.config.reward_encode.input_size, (1, 1), dtype=torch.int64)
+            elif(self.config.reward_encode.input_type == "Continuous"):
+                default_r = torch.zeros((1, 1, self.config.reward_encoder.input_size), dtype=torch.float64)
+
             self.r_included = True
         else:
             self.r_included = False
