@@ -118,7 +118,7 @@ def EpochManager(cls):
             if(hasattr(self.computer, 'epoch_end')):
                 self.computer.epoch_end(eid)
 
-        def _preprocess(self):
+        def _preprocess(self, config):
             if(hasattr(self.computer, 'preprocess')):
                 self.computer.preprocess()
             self.init_dataloader()

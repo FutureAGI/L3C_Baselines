@@ -104,11 +104,10 @@ class AnyMDPRSA(RSADecisionModel):
         # Calculate the loss information
         loss = dict()
 
-        # Calculate the loss weighting
+        # Mask out the invalid actions
         loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
         if(use_loss_weight):
             loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
-        # Mask out the invalid actions
 
         # World Model Loss - States and Rewards
         loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
@@ -138,101 +137,67 @@ class AnyMDPRSA(RSADecisionModel):
         loss["causal-l2"] = parameters_regularization(self)
 
         return loss
-    
-    def inference_step_by_step(self, prompts, 
-                            observations, 
-                            rewards, 
-                            behavior_actions, 
-                            temp,
-                            new_tasks=False,
-                            state_dropout=0.0,
-                            device=None,
-                            cache=None, 
-                            need_cache=False,
-                            update_memory=True):
-        """
-        Given: cache - from s_0, a_0, r_0, ..., s_{tc}, a_{tc}, r_{tc}
-               observations: s_{tc}, ... s_{t}
-               actions: a_{tc}, ..., a_{t-1}
-               rewards: r_{tc}, ..., r_{t-1}
-        Returns:
-            obs_pred: numpy.array [1, state_dim], s_{t+1} (for easy case, state dim = 1, i.e. 1~128)
-            act_pred: numpy.array [1], a_{t}
-            r_pred: numpy.array [1], r_{t}
-            new_cache: torch.array caches up to s_0, a_0, a_r, ..., s_{t}, a_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
-        """        
-        obss = numpy.array(observations, dtype=numpy.int64)
-        acts = numpy.array(behavior_actions, dtype=numpy.int64)
-        rews = numpy.array(rewards, dtype=numpy.int64)
 
-        # Nobs, W, H, C = obss.shape # for img
-        (Nobs,) = obss.shape # for easy case
-        (Nacts,) = acts.shape
-        (Nrews,) = rews.shape
-        if new_tasks:
-            assert Nobs == Nacts + 2 == Nrews + 2
-        else:
-            assert Nobs == Nacts + 1 == Nrews + 1
+    def generate(self, prompts,
+                       observation,
+                       temp,
+                       device=None,
+                       cache=None,
+                       need_cache=False,
+                       update_memory=False):
 
-        valid_obs = torch.from_numpy(obss).int()
-        valid_obs = torch.cat((valid_obs, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
-        valid_act = None
-        valid_rew = None
-        if(Nacts < 1):
-            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
-            valid_rew = torch.zeros((1, 1), dtype=torch.int64).to(device)
-        elif(new_tasks):
-            valid_act = torch.from_numpy(acts).int()
-            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
-            init_value = torch.zeros((1, 1), dtype=torch.int64).to(device)
-            valid_act = torch.cat((valid_act, init_value), dim=1)
-            valid_rew = torch.from_numpy(rews).int()
-            valid_rew = torch.cat((valid_rew, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
-            valid_rew = torch.cat((valid_rew, init_value), dim=1)
-        else:
-            valid_act = torch.from_numpy(acts).int()
-            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
-            valid_rew = torch.from_numpy(rews).int()
-            valid_rew = torch.cat((valid_rew, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+        # s, a, r = obs, 0 , 0; update memory = false
+        valid_obs = torch.tensor([[observation]], dtype=torch.int64).to(device)
+        valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        valid_rew = torch.zeros((1, 1), dtype=torch.float32).to(device)
 
-        # Update the cache first
-        # Only use ground truth
-        if(Nobs > 1):
-            with torch.no_grad():
-                o_pred, a_pred, r_pred, valid_cache  = self.forward(
-                    prompts, 
-                    valid_obs[:, 1:-1], 
-                    valid_act[:, :-1], 
-                    valid_rew[:, :-1],
-                    cache=cache, need_cache=need_cache, state_dropout=state_dropout,
-                    T=temp,
-                    update_memory=update_memory)
-        else:
-            valid_cache = cache
-        n_obs = valid_obs[:, -1:]
-        n_action = valid_act[:, -1:]
-        n_reward = valid_rew[:, -1:]
-        # Predict the latent representation of action and next frame (World Model)
         o_pred, a_pred, r_pred, new_cache = self.forward(
-            prompts, 
-            n_obs, 
-            n_action, 
-            n_reward,
-            cache=valid_cache, need_cache=need_cache, state_dropout=state_dropout,
+            prompts,
+            valid_obs,
+            valid_act,
+            valid_rew,
             T=temp,
-            update_memory=update_memory)
-        # Q: How to sample output?
-        # Draw samples randomly according to the probability distribution of the input tensor. The result returned is a tensor containing the sampled values.
-        pred_action = torch.multinomial(a_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
-        action_out = pred_action.squeeze(0).cpu().numpy()
+            update_memory=False)
+        a_sample = a_pred[ :, :, : 4]
+        a_normalized = a_sample / a_sample.sum(dim=-1, keepdim=True)
+        action_out = torch.multinomial(a_normalized.squeeze(1), num_samples=1).squeeze(1)
+        action_out = action_out.squeeze(0).cpu().numpy()
+        action_out = int(action_out.item())
+        print("current state = ", observation)
+        print("a_normalized = ",a_normalized)
+        valid_act = torch.tensor([[action_out]], dtype=torch.int64).to(device)
+        # s, a, r = obs, act_pred, 0; update memory = false
+        o_pred, a_pred, r_pred, new_cache = self.forward(
+            prompts,
+            valid_obs,
+            valid_act,
+            valid_rew,
+            T=temp,
+            update_memory=False)
+        return o_pred, action_out, r_pred
 
-        state_out = torch.multinomial(o_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
-        state_out = state_out.squeeze(0).cpu().numpy()
+    def learn(self, prompts,
+                    observation,
+                    action,
+                    reward,
+                    temp,
+                    device=None,
+                    cache=None,
+                    need_cache=False,
+                    update_memory=True):
+        valid_obs = torch.tensor([[observation]], dtype=torch.int64).to(device)
+        valid_act = torch.tensor([[action]], dtype=torch.int64).to(device)
+        valid_rew = torch.tensor([[reward]], dtype=torch.float32).to(device)
 
-        reward_out = torch.multinomial(r_pred[:, -1:].squeeze(1), num_samples=1).squeeze(1)
-        reward_out = reward_out.squeeze(0).cpu().numpy()
-
-        return state_out, action_out, reward_out, new_cache
+        # s, a, r = obs, act_pred, r_pred; update memory = true
+        o_pred, a_pred, r_pred, new_cache = self.forward(
+            prompts,
+            valid_obs,
+            valid_act,
+            valid_rew,
+            T=temp,
+            update_memory=True)
+        return o_pred, a_pred, r_pred
         
 
 if __name__=="__main__":
@@ -249,9 +214,9 @@ if __name__=="__main__":
 
     vae_loss = model.vae_loss(observation)
     losses = model.sequential_loss(None, observation, reward, action, action)
-    # rec_img, img_out, act_out, cache = model.inference_step_by_step(
-    #         observation[:, :5], action[:, :4], 1.0, 0, observation.device)
-    # print("vae:", vae_loss, "sequential:", losses)
-    # print(img_out[0].shape, act_out.shape)
-    # print(len(cache))
-    # print(cache[0].shape)
+    rec_img, img_out, act_out, cache = model.inference_step_by_step(
+            observation[:, :5], action[:, :4], 1.0, 0, observation.device)
+    print("vae:", vae_loss, "sequential:", losses)
+    print(img_out[0].shape, act_out.shape)
+    print(len(cache))
+    print(cache[0].shape)

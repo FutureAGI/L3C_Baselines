@@ -16,13 +16,13 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
 
-package_path = '/home/shaopt/code/foundation_model'
-sys.path.append(package_path)
+package_path = '/home/shaopt/code/test/foundation_model'
+sys.path.insert(0,package_path)
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import count_parameters, check_model_validity, model_path
-from l3c_baselines.utils import Configure, gradient_failsafe, DistStatistics, rewards2go
+from l3c_baselines.utils import Configure, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
 import gymnasium as gym
@@ -32,7 +32,8 @@ os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your
 
 def create_env(env_name):
     if(env_name.lower() == "lake"):
-        env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
+        #env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
+        env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True, max_episode_steps=1000)
         return env
     # elif(env_name.lower() == "cliff"):
     #     env = gym.make('CliffWalking-v0')
@@ -79,87 +80,120 @@ def string_mean_var(downsample_length, mean, var):
 # config = demo_config
 def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length = 10):
     # Example training loop
-    env = env.copy()
-    state_init, _ = env.reset()
-    obs_arr = [state_init]
+
+    new_state, _ = env.reset()
+    obs_arr = [new_state]
     act_arr = []
     rew_arr = []
     obs_pred_arr = []
     rew_pred_arr = []
     
-    total_step = 1
     success_count = 0
-    obs_loss_total = 0.0
-    rew_loss_total = 0.0
-    # task-wise loss
+    success_rate_list = []
     obs_loss_list = []
     rew_loss_list = []
-    success_rate_list = []
     downsample_scuccess_count = 0
+    state_correct_prob = 0.0
+    reward_correct_prob = 0.0
+    interviel_step_count = 0
 
-    cache = None
-    
     temperature = config.model_config.policy.T_ini
-    new_tasks = False
-    segment_id = 0
+    state_out_prob_list = None
+    env_state = None
+    previous_env_state = None
+    env_action = None
     for task_index in range(config.task_num):
         done = False
         step = 1
-        task_start_position = len(rew_arr)
-        segment_id = len(rew_arr)//config.seg_len
-        segment_start_position = segment_id * config.seg_len
         while not done:
             temperature = max(temperature * (1.0 - config.model_config.policy.T_dec), config.model_config.policy.T_min)
             with torch.no_grad():
-              state_out, action_out, reward_out, new_cache = model.module.inference_step_by_step(
-                  None,
-                  observations = obs_arr[segment_start_position:],
-                  rewards = rew_arr[segment_start_position:],
-                  behavior_actions = act_arr[segment_start_position:],
-                  temp = temperature,
-                  new_tasks = new_tasks,
-                  device = device,
-                  cache = cache,
-                  need_cache = True,
-                  update_memory = True
-              )
-            if new_tasks:
-                # Remove the init state in next task form the obs_arr
-                # If we don't want to remove init state, we need to append 0 value to both act_arr and rew_arr.
-                obs_arr.pop(-1) 
-            new_tasks = False
-            cache = new_cache
-            action_out = int(action_out.item())
-            act_arr.append(action_out)
+              state_out, action_out, reward_out = model.module.generate(
+                None,
+                new_state,
+                temp = temperature,
+                device=device)
+            reward_out_prob_list = reward_out
+            #reward_out = torch.multinomial(reward_out.squeeze(1), num_samples=1).squeeze(1)
+            #reward_out = reward_out.squeeze(0).cpu().numpy()
+            #reward_out = int(reward_out.item())
+            #rew_pred_arr.append(reward_out)
+            privous_state = new_state
+            
+            # debg only
+            previous_env_state = new_state
+            env_action = action_out
+            
+            # interact with env
             new_state, new_reward, done, *_ = env.step(action_out)
+            
+            # Test: change reward, die-> -10， alive-> 1, goal->10
+            # if done:
+            #     if new_reward == 1:
+            #         new_reward = 10
+            #     else:
+            #         new_reward = -10
+            # else:
+            #     new_reward = 1
+
+            # collect data
+            act_arr.append(action_out)                     
             obs_arr.append(new_state)   
             rew_arr.append(new_reward)
-            obs_pred_arr.append(state_out)
-            rew_pred_arr.append(reward_out)
-            if done:
-                new_tasks = True
+            # world model reward prediction correct count:
+            # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
+            reward_correct_prob += numpy.abs(reward_out_prob_list[0,0,0].item() - new_reward)
+            # start learning
+            with torch.no_grad():
+              state_out, action_out, reward_out = model.module.learn(
+                None,
+                privous_state,
+                action_out,
+                new_reward,
+                temp = temperature,
+                device=device)
+            state_out_prob_list = state_out[0,0,:16] / state_out[0,0,:16].sum(dim=-1,keepdim=True)
+            #state_out = torch.multinomial(state_out.squeeze(1), num_samples=1).squeeze(1)
+            #state_out = state_out.squeeze(0).cpu().numpy()
+            #state_out = int(state_out.item())
+            #obs_pred_arr.append(state_out)
+            # world model state prediction correct count:
+            # print("state_out_prob_list = ", state_out_prob_list)
+            state_correct_prob += state_out_prob_list[int(new_state)].item()
+            
+            # debug:
+            env_state = int(new_state)
+            
+            # Trail finish or continue:
+            if done: 
+                interviel_step_count += step
                 if new_reward==1:
                     success_count += 1
                     downsample_scuccess_count += 1
             else:
                 step += 1
         # Reset the environment, prepare new task.
-        next_task_state_init, _ = env.reset()
-        obs_arr.append(next_task_state_init)
+        new_state, _ = env.reset()
+        obs_arr.append(new_state)
         # Start statistics
-        # -World model loss
-        # --Easy case, obs value is discrete value, if obs is img or continous value, refer to MazeWorld/evaluate.py.
-        obs_loss = numpy.mean(numpy.array(obs_arr[task_start_position + 1:]) - numpy.array(obs_pred_arr[task_start_position:]))
-        rew_loss = numpy.mean(numpy.array(rew_arr[task_start_position:]) - numpy.array(rew_pred_arr[task_start_position:]))
-        # --obs_loss and rew_loss is task-wise loss, for step-wise/position-wise loss, then we don't need to average arcoss step.
-        obs_loss_list.append(obs_loss)
-        rew_loss_list.append(rew_loss)
-        obs_loss_total = (obs_loss_total*total_step + obs_loss*step)/(total_step+step)
-        rew_loss_total = (rew_loss_total*total_step + rew_loss*step)/(total_step+step)
-        total_step += step
-        if task_index % downsample_length == 0:
+        if task_index > 0 and task_index % downsample_length == 0:
             success_rate_list.append(downsample_scuccess_count/downsample_length)
             downsample_scuccess_count = 0
+            obs_loss_list.append(state_correct_prob/interviel_step_count)
+            rew_loss_list.append(reward_correct_prob/interviel_step_count)
+            interviel_step_count = 0
+            state_correct_prob = 0.0
+            reward_correct_prob = 0.0
+            print("trail idx = ", task_index)
+            print("contex length = ", len(act_arr))
+            print(downsample_length," interval success rate = ", success_rate_list[-1])
+            print(downsample_length," interval obs loss = ", obs_loss_list[-1])
+            print(downsample_length," interval rew loss = ", rew_loss_list[-1])
+            print("previous_env_state = ", previous_env_state)
+            print("env_action = ", env_action)
+            print("state_out_prob_list = ", state_out_prob_list)
+            print("env_state = ", env_state)
+
     total_success_rate = success_count/config.task_num
     # Todo: Logger
     # 拼接统计数据
@@ -199,8 +233,7 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
     if(demo_config.model_config.has_attr("load_model_path") and 
             demo_config.model_config.load_model_path is not None and 
             demo_config.model_config.load_model_path.lower() != 'none'):
-        model = custom_load_model(model, f'{demo_config.model_config.load_model_path}/model.pth', 
-                                  black_list=train_config.load_model_parameter_blacklist, 
+        model = custom_load_model(model, f'{demo_config.model_config.load_model_path}/model.pth',  
                                   strict_check=False)
         print("------------Load model success!------------")
     env = create_env(demo_config.env_config.name)
