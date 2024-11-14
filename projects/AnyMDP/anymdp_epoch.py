@@ -6,9 +6,14 @@ from torch.optim.lr_scheduler import LambdaLR
 from l3c_baselines.dataloader import segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import Configure, DistStatistics, rewards2go
-from l3c_baselines.utils import EpochManager
+from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
+from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
 from l3c_baselines.dataloader import AnyMDPDataSet
+
+import gymnasium as gym
+import numpy
+from gym.envs.toy_text.frozen_lake import generate_random_map
+
 
 def string_mean_var(downsample_length, res):
     string=""
@@ -133,3 +138,95 @@ class AnyMDPEpoch:
                             os.remove(file_path)
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
+
+
+class AnyMDPGenerator(GeneratorBase):
+    def preprocess(self):
+        if(self.config.env.lower() == "lake4x4"):
+            self.env = gym.make(
+                'FrozenLake-v1', 
+                map_name="4x4", 
+                is_slippery=True, 
+                max_episode_steps=1000)
+        else:
+            log_fatal("Unsupported environment:", self.config.env)
+        logger_keys = ["reward", "state_prediction", "reward_prediction"]
+
+        self.stat = DistStatistics(*logger_keys)
+        self.logger = Logger(*logger_keys, 
+                            on=self.main, 
+                            use_tensorboard=False)
+
+    def __call__(self):
+        obs_arr = []
+        act_arr = []
+        rew_arr = []
+        
+        reward_error = []
+        state_error = []
+
+        step = 0
+
+        while step < self.max_steps:
+            done = False
+            previous_state, _ = self.env.reset()
+            obs_arr.append(previous_state)
+            
+            epoch_start_step = step
+            while not done:
+                pred_state_dist, action, pred_reward = self.model.module.generate(
+                    None,
+                    previous_state,
+                    action_clip=self.config.action_clip,
+                    temp=self._scheduler(step))
+                                
+                # interact with env
+                new_state, new_reward, done, *_ = self.env.step(action)
+
+                # collect data
+                act_arr.append(action)                     
+                obs_arr.append(new_state)   
+                rew_arr.append(new_reward)
+                # world model reward prediction correct count:
+                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
+
+                reward_error.append((new_reward - pred_reward) ** 2)
+                state_error.append(-numpy.log(pred_state_dist[new_state]))
+
+                # start learning
+                self.model.module.in_context_learn(
+                    None,
+                    previous_state,
+                    action,
+                    new_reward)
+                
+                step += 1
+                if(step > self.max_steps):
+                    break
+
+            self.logger(numpy.mean(rew_arr[epoch_start_step:]), 
+                        numpy.mean(state_error[epoch_start_step:]), 
+                        numpy.mean(reward_error[epoch_start_step:]))
+            
+        ds_state_err = downsample(state_error, self.config.downsample_length)
+        ds_reward_err = downsample(reward_error, self.config.downsample_length)
+        ds_rewards = downsample(rew_arr, self.config.downsample_length)
+
+        self.stat.gather(self.device,
+                         reward=ds_rewards,
+                         state_prediction=ds_state_err,
+                         reward_prediction=ds_reward_err)
+    
+    def post_process(self):
+        results=self.stat()
+        self.logger(results['reward'], results['state_prediction'], results['reward_prediction'])
+        if(self.config.has_attr("output")):
+            if not os.path.exists(self.config.output):
+                os.makedirs(self.config.output)
+            for key_name in results:
+                res_text = string_mean_var(self.config.downsample_length, results[key_name])
+                file_path = f'{self.config.output}/result_{key_name}.txt'
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                with open(file_path, 'w') as f_model:
+                    f_model.write(res_text)

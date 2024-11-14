@@ -62,12 +62,12 @@ class BlockRecurrentWrapper(nn.Module):
                 self.memory = [c[:, -self.mem_len:].detach().clone() for c in cache]
             else:
                 self.memory = None
-            return None
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
             self.memory = memory_cpy(cache)
         else:
             log_fatal(f"No such memory type: {self.memory_type}")
+        return None
 
     def update_cache_only(self, cache):
         if(self.memory_type == 'kv'):
