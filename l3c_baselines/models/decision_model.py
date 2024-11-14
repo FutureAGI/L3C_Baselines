@@ -12,6 +12,8 @@ class SADecisionModel(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
+
         self.causal_model = CausalBlock(config.causal_block)
 
         # 创建Type向量[1, 1, NP, C]
@@ -88,6 +90,8 @@ class RSADecisionModel(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
+
         self.causal_model = CausalBlock(config.causal_block)
         self.hidden_size = config.causal_block.hidden_size
 
@@ -113,15 +117,36 @@ class RSADecisionModel(nn.Module):
         type_embeddings = torch.randn(1, 1, len(self.rsa_type), self.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
 
+        if(self.config.reward_encode.input_type == "Discrete"):
+            self.default_r = torch.full(self.config.reward_encode.input_size, (1, 1), dtype=torch.int64)
+        elif(self.config.reward_encode.input_type == "Continuous"):
+            self.default_r = torch.zeros((1, 1, self.config.reward_encode.input_size))
+        else:
+            raise ValueError("Invalid reward encoding type", self.config.reward_encoding)
+
+        if(self.config.action_encode.input_type == "Discrete"):
+            self.default_a = torch.full((1, 1), self.config.action_encode.input_size - 1, dtype=torch.int64)
+            self.a_is_discrete = True
+        elif(self.config.action_encode.input_type == "Continuous"):
+            self.default_a = torch.zeros((1, 1, self.config.action_encode.input_size))
+            self.a_is_discrete = False
+
         if("p" in self.rsa_type):
             self.p_encoder = MLPEncoder(config.prompt_encode)
             self.p_included = True
         else:
             self.p_included = False
+
         if("r" in self.rsa_type):
             mask_embeddings_r = torch.randn(1, 1, self.hidden_size)
             self.mask_query_r = nn.Parameter(mask_embeddings_r, requires_grad=True)
             self.r_encoder = MLPEncoder(config.reward_encode)
+
+            if(self.config.reward_encode.input_type == "Discrete"):
+                default_r = torch.full((1, 1), self.config.reward_encode.input_size - 1, dtype=torch.int64)
+            elif(self.config.reward_encode.input_type == "Continuous"):
+                default_r = torch.zeros((1, 1, self.config.reward_encode.input_size), dtype=torch.float64)
+
             self.r_included = True
         else:
             self.r_included = False
@@ -134,7 +159,7 @@ class RSADecisionModel(nn.Module):
             observations:[B, NT, H], float
             actions:[B, NT, H], float
             prompts: [B, NT, H], float or None
-            rewards:[B, NT, H], float or None
+            rewards:[B, NT, X], float or None
             cache: [B, NC, H]
         """
         B = s_arr.shape[0]
@@ -151,15 +176,17 @@ class RSADecisionModel(nn.Module):
 
         # Add state dropouts
         device = s_arr.device
-        p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-        p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-        eps = torch.randn((B, NT, self.hidden_size)).to(device)
-        dp_eps = torch.bernoulli(p_noise)
-        dp_mask = torch.bernoulli(p_mask)
+        observation_in = self.s_encoder(s_arr)
+        if(state_dropout > 1.0e-6):
+            p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            eps = torch.randn((B, NT, self.hidden_size)).to(device)
+            dp_eps = torch.bernoulli(p_noise)
+            dp_mask = torch.bernoulli(p_mask)
 
-        # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
-        observation_in = self.s_encoder(s_arr) + eps * dp_eps
-        observation_in = observation_in * (1 - dp_mask) + self.mask_query_s * dp_mask
+            # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+            observation_in = observation_in + eps * dp_eps
+            observation_in = observation_in * (1 - dp_mask) + self.mask_query_s * dp_mask
         observation_in = observation_in.view(B, NT, 1, -1)
 
         # Input actions: [B, NT, 1, H]
@@ -172,16 +199,18 @@ class RSADecisionModel(nn.Module):
             inputs.insert(0, prompt_in)
 
         if(self.r_included):
-            # Add reward dropouts
-            pr_noise = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-            pr_mask = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-            eps = torch.randn((B, NT, self.hidden_size)).to(device)
-            dpr_eps = torch.bernoulli(pr_noise)
-            dpr_mask = torch.bernoulli(pr_mask)
+            reward_in = self.r_encoder(r_arr.view(B, NT, 1))
+            if(reward_dropout > 1.0e-6):
+                # Add reward dropouts
+                pr_noise = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+                pr_mask = (0.5 * reward_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+                eps = torch.randn((B, NT, self.hidden_size)).to(device)
+                dpr_eps = torch.bernoulli(pr_noise)
+                dpr_mask = torch.bernoulli(pr_mask)
 
-            # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
-            reward_in = self.r_encoder(r_arr.view(B, NT, 1)) + eps * dpr_eps
-            reward_in = reward_in * (1 - dpr_mask) + self.mask_query_r * dpr_mask
+                # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+                reward_in = reward_in + eps * dpr_eps
+                reward_in = reward_in * (1 - dpr_mask) + self.mask_query_r * dpr_mask
             reward_in = reward_in.view(B, NT, 1, -1)
             inputs.append(reward_in)
 
