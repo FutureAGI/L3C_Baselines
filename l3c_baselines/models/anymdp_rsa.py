@@ -138,72 +138,157 @@ class AnyMDPRSA(RSADecisionModel):
         loss["causal-l2"] = parameters_regularization(self)
 
         return loss
-
+    
     def generate(self, prompts,
                        observation,
-                       action_dim,
                        temp,
-                       device=None,
-                       cache=None,
-                       need_cache=False,
-                       update_memory=False):
+                       action_clip=None,
+                       need_numpy=True,
+                       single_batch=True):
+        """
+        Generating Step By Step Action and Next Frame Prediction
+        Args:
+            prompts:
+            observation: 
+            temp: temperature for sampling
+            single_batch: if true, add additional batch to input tensor
+        Returns:
+            o_pred: predicted states
+            action_out: action decision
+            r_pred: predicted rewards
+        """
+        device = next(self.parameters()).device
+        if(not self.p_included):
+            pro_in = None
+        elif(not isinstance(prompts, torch.Tensor)):
+            pro_in = torch.tensor([prompts], dtype=torch.int64).to(device)
+        else:
+            pro_in = prompts.to(device)
+        if(not isinstance(observation, torch.Tensor)):
+            obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
+        else:
+            obs_in = observation.to(device)
 
-        # s, a, r = obs, 0 , 0; update memory = false
-        valid_obs = torch.tensor([[observation]], dtype=torch.int64).to(device)
-        valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
-        valid_rew = torch.zeros((1, 1), dtype=torch.float32).to(device)
+        if(single_batch):
+            if(pro_in is not None):
+                pro_in = pro_in.unsqueeze(0)
+            obs_in = obs_in.unsqueeze(0)
 
-        o_pred, a_pred, r_pred, new_cache = self.forward(
-            prompts,
-            valid_obs,
-            valid_act,
-            valid_rew,
+        if(self.r_included):
+            default_r = self.default_r.to(device)
+        else:
+            default_r = None
+        default_a = self.default_a.to(device)
+
+        o_pred, a_pred, r_pred, _ = self.forward(
+            pro_in,
+            obs_in,
+            default_a,
+            default_r,
             T=temp,
-            update_memory=False)
-        a_sample = a_pred[ :, :, : action_dim]
-        a_normalized = a_sample / a_sample.sum(dim=-1, keepdim=True)
-        action_out = torch.multinomial(a_normalized.squeeze(1), num_samples=1).squeeze(1)
-        action_out = action_out.squeeze(0).cpu().numpy()
-        action_out = int(action_out.item())
-        # print("current state = ", observation)
-        # print("a_normalized = ",a_normalized)
-        valid_act = torch.tensor([[action_out]], dtype=torch.int64).to(device)
-        # s, a, r = obs, act_pred, 0; update memory = false
-        o_pred, a_pred, r_pred, new_cache = self.forward(
+            update_memory=False,
+            need_cache=False)
+        
+        if(self.a_is_discrete):
+            if(action_clip is not None):
+                a_pred[:, :, action_clip:] = 0.0
+            act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
+            # bsz, 1, nactions
+            act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
+            act_out = act_in.squeeze()
+        else:
+            act_in = a_pred
+            act_out = act_in.squeeze()
+        
+        o_pred, a_pred, r_pred, _ = self.forward(
             prompts,
-            valid_obs,
-            valid_act,
-            valid_rew,
+            obs_in,
+            act_in,
+            default_r,
             T=temp,
-            update_memory=False)
-        return o_pred, action_out, r_pred
+            update_memory=False,
+            need_cache=False)
+        
+        act_out = act_out.detach().cpu().squeeze()
+        state = o_pred.detach().cpu().squeeze()
+        reward = r_pred.detach().cpu().squeeze()
 
-    def learn(self, prompts,
+        if(need_numpy):
+            act_out = act_out.numpy()
+            if(act_out.size < 2):
+                act_out = act_out.item()
+            state = state.numpy()
+            if(state.size < 2):
+                state = state.item()
+            reward = reward.numpy()
+            if(reward.size < 2):
+                reward = reward.item()
+        
+        return state, act_out, reward
+
+    def in_context_learn(self, prompts,
                     observation,
                     action,
                     reward,
-                    temp,
-                    device=None,
                     cache=None,
                     need_cache=False,
-                    update_memory=True):
-        valid_obs = torch.tensor([observation], dtype=torch.int64).to(device)
-        valid_act = torch.tensor([action], dtype=torch.int64).to(device)
-        valid_rew = torch.tensor([reward], dtype=torch.float32).to(device)
-        if valid_obs.dim() > 2:
-            valid_obs = valid_obs.squeeze(dim=2)
-            valid_act = valid_act.squeeze(dim=2)
-            valid_rew = valid_rew.squeeze(dim=2)
+                    single_batch=True,
+                    single_step=True):
+        """
+        In Context Reinforcement Learning Through an Sequence of Steps
+        """
+        device = next(self.parameters()).device
+        pro_in = None
+        obs_in = None
+
+        if(single_batch and single_step):
+            extra_dim = [0, 1]
+        elif(single_batch):
+            extra_dim = 0
+        elif(single_step):
+            extra_dim = 1
+        else:
+            extra_dim = None
+
+        def proc(x):
+            if(x is None):
+                return x
+            if(single_batch and single_step):
+                return x.unsqueeze(0).unsqueeze(0).to(device)
+            elif(single_batch):
+                return x.unsqueeze(0).to(device)
+            elif(single_setep):
+                return x.unsqueeze(1).to(device)
+            return x.to(device)
+
+        pro_in = prompts
+        obs_in = observation
+        act_in = action
+        rew_in = reward
+        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
+            pro_in = torch.tensor(pro_in)
+        pro_in = proc(pro_in)
+        if(not isinstance(obs_in, torch.Tensor)):
+            obs_in = torch.tensor(obs_in)
+        obs_in = proc(obs_in)
+        if(not isinstance(action, torch.Tensor)):
+            act_in = torch.tensor(act_in)
+        act_in = proc(act_in)
+        if(not isinstance(reward, torch.Tensor) and reward is not None):
+            rew_in = torch.tensor(rew_in)
+        rew_in = proc(rew_in)
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
-        o_pred, a_pred, r_pred, new_cache = self.forward(
-            prompts,
-            valid_obs,
-            valid_act,
-            valid_rew,
-            T=temp,
+        _, _, _, new_cache = self.forward(
+            pro_in,
+            obs_in,
+            act_in,
+            rew_in,
+            need_cache=need_cache,
             update_memory=True)
-        return o_pred, a_pred, r_pred
+        
+        return new_cache
+
         
 
 if __name__=="__main__":
