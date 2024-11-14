@@ -16,8 +16,6 @@ from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast, GradScaler
 from collections import defaultdict
 
-package_path = '/home/shaopt/code/test/foundation_model'
-sys.path.insert(0,package_path)
 from l3c_baselines.dataloader import AnyMDPDataSet, PrefetchDataLoader, segment_iterator
 from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
@@ -25,27 +23,28 @@ from l3c_baselines.utils import count_parameters, check_model_validity, model_pa
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go
 from l3c_baselines.models import AnyMDPRSA
 
-import gymnasium as gym
+import gym
+from l3c.anymdp import AnyMDPTaskSampler
+
+# import gymnasium as gym
 from gym.envs.toy_text.frozen_lake import generate_random_map
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 
-def create_env(env_name):
-    if(env_name.lower() == "lake"):
+def create_env(config):
+    if(config.env_config.name.lower() == "lake"):
         #env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
         env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True, max_episode_steps=1000)
         return env
-    # elif(env_name.lower() == "cliff"):
-    #     env = gym.make('CliffWalking-v0')
-    #     return env
-    # elif(env_name.lower() == "taxi"):
-    #     env = gym.make('Taxi-v3')
-    #     return env
-    # elif(env_name.lower() == "blackjack"):
-    #     env = gym.make('Blackjack-v1', natural=False, sab=True)
-    #     return env
+    elif(config.env_config.name.lower() == "anymdp"):
+        # Anymdp env is done only if step num > max_steps, and reset env will randomly chose a state position.
+        # So each trail only export 20 steps.
+        env = gym.make("anymdp-v0", max_steps=20)
+        task = AnyMDPTaskSampler(config.env_config.state_dim, config.env_config.action_dim)
+        env.set_task(task)
+        return env
     else:
-        raise ValueError("Unknown env name: {}".format(env_name))
+        raise ValueError("Unknown env name: {}".format(config.env_config.name))
 def calculate_result_matrix(loss_matrix):
     """
     Calculate and return a new matrix, where the first row is the result of averaging the input matrix along dim 0,
@@ -77,6 +76,26 @@ def string_mean_var(downsample_length, mean, var):
     for i in range(mean.shape[0]):
         string += f'{downsample_length * i}\t{mean[i]}\t{var[i]}\n'
     return string
+
+def learn_from_data(model, temp, device, data_root):
+    for folder in os.listdir(data_root):
+        folder_path = os.path.join(data_root, folder)
+        
+        if os.path.isdir(folder_path):
+            states = numpy.load(os.path.join(folder_path, 'observations.npy'))
+            actions = numpy.load(os.path.join(folder_path, 'actions_behavior.npy'))
+            rewards = numpy.load(os.path.join(folder_path, 'rewards.npy'))
+            for state, action, reward in zip(states, actions, rewards):
+                with torch.no_grad():
+                    state_out, action_out, reward_out = model.module.learn(
+                        None,
+                        state,
+                        action,
+                        reward,
+                        temp = temp,
+                        device=device)
+    print("Finish Learning.")
+                    
 # config = demo_config
 def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length = 10):
     # Example training loop
@@ -90,9 +109,11 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
     
     success_count = 0
     success_rate_list = []
+    average_reward_list = []
     obs_loss_list = []
     rew_loss_list = []
     downsample_scuccess_count = 0
+    downsample_reward_sum = 0
     state_correct_prob = 0.0
     reward_correct_prob = 0.0
     interviel_step_count = 0
@@ -111,6 +132,7 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
               state_out, action_out, reward_out = model.module.generate(
                 None,
                 new_state,
+                action_dim = config.env_config.action_dim,
                 temp = temperature,
                 device=device)
             reward_out_prob_list = reward_out
@@ -140,6 +162,7 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
             act_arr.append(action_out)                     
             obs_arr.append(new_state)   
             rew_arr.append(new_reward)
+            downsample_reward_sum += new_reward
             # world model reward prediction correct count:
             # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
             reward_correct_prob += numpy.abs(reward_out_prob_list[0,0,0].item() - new_reward)
@@ -147,12 +170,12 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
             with torch.no_grad():
               state_out, action_out, reward_out = model.module.learn(
                 None,
-                privous_state,
-                action_out,
-                new_reward,
+                [privous_state],
+                [action_out],
+                [new_reward],
                 temp = temperature,
                 device=device)
-            state_out_prob_list = state_out[0,0,:16] / state_out[0,0,:16].sum(dim=-1,keepdim=True)
+            state_out_prob_list = state_out[0,0,:config.env_config.state_dim] / state_out[0,0,:config.env_config.state_dim].sum(dim=-1,keepdim=True)
             #state_out = torch.multinomial(state_out.squeeze(1), num_samples=1).squeeze(1)
             #state_out = state_out.squeeze(0).cpu().numpy()
             #state_out = int(state_out.item())
@@ -178,15 +201,18 @@ def anymdp_model_epoch(rank, config, env, model, main, device, downsample_length
         # Start statistics
         if task_index > 0 and task_index % downsample_length == 0:
             success_rate_list.append(downsample_scuccess_count/downsample_length)
-            downsample_scuccess_count = 0
+            average_reward_list.append(downsample_reward_sum / interviel_step_count)
             obs_loss_list.append(state_correct_prob/interviel_step_count)
             rew_loss_list.append(reward_correct_prob/interviel_step_count)
+            downsample_scuccess_count = 0
+            downsample_reward_sum = 0
             interviel_step_count = 0
             state_correct_prob = 0.0
             reward_correct_prob = 0.0
             print("trail idx = ", task_index)
             print("contex length = ", len(act_arr))
             print(downsample_length," interval success rate = ", success_rate_list[-1])
+            print(downsample_length," interval average reward = ", average_reward_list[-1])
             print(downsample_length," interval obs loss = ", obs_loss_list[-1])
             print(downsample_length," interval rew loss = ", rew_loss_list[-1])
             print("previous_env_state = ", previous_env_state)
@@ -236,8 +262,12 @@ def anymdp_main_epoch(rank, use_gpu, world_size, config, main_rank, run_name):
         model = custom_load_model(model, f'{demo_config.model_config.load_model_path}/model.pth',  
                                   strict_check=False)
         print("------------Load model success!------------")
-    env = create_env(demo_config.env_config.name)
-    # Perform the first evaluation
+    else:
+        print("------------No model loaded!------------")
+        return
+    env = create_env(demo_config)
+    if (demo_config.learn_from_data):
+        learn_from_data(model, demo_config.model_config.policy.T_ini, device, demo_config.data_root)
     anymdp_model_epoch(rank, demo_config, env, model, main, device, demo_config.downsample_size)
 
     return

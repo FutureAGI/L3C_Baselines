@@ -141,6 +141,7 @@ class AnyMDPRSA(RSADecisionModel):
 
     def generate(self, prompts,
                        observation,
+                       action_dim,
                        temp,
                        device=None,
                        cache=None,
@@ -159,13 +160,13 @@ class AnyMDPRSA(RSADecisionModel):
             valid_rew,
             T=temp,
             update_memory=False)
-        a_sample = a_pred[ :, :, : 4]
+        a_sample = a_pred[ :, :, : action_dim]
         a_normalized = a_sample / a_sample.sum(dim=-1, keepdim=True)
         action_out = torch.multinomial(a_normalized.squeeze(1), num_samples=1).squeeze(1)
         action_out = action_out.squeeze(0).cpu().numpy()
         action_out = int(action_out.item())
-        print("current state = ", observation)
-        print("a_normalized = ",a_normalized)
+        # print("current state = ", observation)
+        # print("a_normalized = ",a_normalized)
         valid_act = torch.tensor([[action_out]], dtype=torch.int64).to(device)
         # s, a, r = obs, act_pred, 0; update memory = false
         o_pred, a_pred, r_pred, new_cache = self.forward(
@@ -186,9 +187,13 @@ class AnyMDPRSA(RSADecisionModel):
                     cache=None,
                     need_cache=False,
                     update_memory=True):
-        valid_obs = torch.tensor([[observation]], dtype=torch.int64).to(device)
-        valid_act = torch.tensor([[action]], dtype=torch.int64).to(device)
-        valid_rew = torch.tensor([[reward]], dtype=torch.float32).to(device)
+        valid_obs = torch.tensor([observation], dtype=torch.int64).to(device)
+        valid_act = torch.tensor([action], dtype=torch.int64).to(device)
+        valid_rew = torch.tensor([reward], dtype=torch.float32).to(device)
+        if valid_obs.dim() > 2:
+            valid_obs = valid_obs.squeeze(dim=2)
+            valid_act = valid_act.squeeze(dim=2)
+            valid_rew = valid_rew.squeeze(dim=2)
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
         o_pred, a_pred, r_pred, new_cache = self.forward(
