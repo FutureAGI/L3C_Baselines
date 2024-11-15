@@ -10,9 +10,10 @@ from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsampl
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
 from l3c_baselines.dataloader import AnyMDPDataSet
 
-import gymnasium as gym
+import gym
 import numpy
 from gym.envs.toy_text.frozen_lake import generate_random_map
+from l3c.anymdp import AnyMDPTaskSampler
 
 
 def string_mean_var(downsample_length, res):
@@ -148,14 +149,38 @@ class AnyMDPGenerator(GeneratorBase):
                 map_name="4x4", 
                 is_slippery=True, 
                 max_episode_steps=1000)
+        elif(self.config.env.lower() == "anymdp"):
+            self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
+            task = AnyMDPTaskSampler(self.config.state_clip, self.config.action_clip)
+            self.env.set_task(task)
         else:
             log_fatal("Unsupported environment:", self.config.env)
-        logger_keys = ["reward", "state_prediction", "reward_prediction"]
+        logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
         self.logger = Logger(*logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
+        
+    def in_context_learn_from_teacher(self):
+        for folder in os.listdir(self.config.data_root):
+            folder_path = os.path.join(self.config.data_root, folder)
+            
+            if os.path.isdir(folder_path):
+                states = numpy.load(os.path.join(folder_path, 'observations.npy'))
+                actions = numpy.load(os.path.join(folder_path, 'actions_behavior.npy'))
+                rewards = numpy.load(os.path.join(folder_path, 'rewards.npy'))
+                states = states.astype(numpy.int32)
+                actions = actions.astype(numpy.int32)
+                rewards = rewards.astype(numpy.float32)
+                self.model.module.in_context_learn(
+                None,
+                states,
+                actions,
+                rewards,
+                single_batch=True,
+                single_step=False)
+        print("Finish Learning.")
 
     def __call__(self):
         obs_arr = []
@@ -164,10 +189,15 @@ class AnyMDPGenerator(GeneratorBase):
         
         reward_error = []
         state_error = []
+        success_list = []
 
         step = 0
+        trail = 0
 
-        while step < self.max_steps:
+        if self.config.learn_from_data:
+            self.in_context_learn_from_teacher()
+
+        while trail < self.max_trails or step < self.max_steps:
             done = False
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
@@ -184,14 +214,25 @@ class AnyMDPGenerator(GeneratorBase):
                 new_state, new_reward, done, *_ = self.env.step(action)
 
                 # collect data
-                act_arr.append(action)                     
-                obs_arr.append(new_state)   
+                act_arr.append(action)
+                if not done:                     
+                    obs_arr.append(new_state)   
                 rew_arr.append(new_reward)
                 # world model reward prediction correct count:
                 # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
 
                 reward_error.append((new_reward - pred_reward) ** 2)
-                state_error.append(-numpy.log(pred_state_dist[new_state]))
+                state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
+
+                # Judge if success
+                if done:
+                    if self.config.env.lower() == "lake4x4" :
+                        if new_reward == 1:
+                            success_list.append(int(1))
+                        else:
+                            success_list.append(int(0))
+                    else:
+                        success_list.append(int(0))
 
                 # start learning
                 self.model.module.in_context_learn(
@@ -200,22 +241,29 @@ class AnyMDPGenerator(GeneratorBase):
                     action,
                     new_reward)
                 
+                previous_state = new_state
+                
                 step += 1
-                if(step > self.max_steps):
+                if(step > self.max_steps and trail >= self.max_trails):
                     break
-
+            trail += 1
             self.logger(numpy.mean(rew_arr[epoch_start_step:]), 
                         numpy.mean(state_error[epoch_start_step:]), 
-                        numpy.mean(reward_error[epoch_start_step:]))
+                        numpy.mean(reward_error[epoch_start_step:]),
+                        success_list[-1])
             
         ds_state_err = downsample(state_error, self.config.downsample_length)
         ds_reward_err = downsample(reward_error, self.config.downsample_length)
         ds_rewards = downsample(rew_arr, self.config.downsample_length)
+        ds_success_rate = downsample(success_list, self.config.downsample_trail)
+
+        print("ds_success_rate = ", ds_success_rate)
 
         self.stat.gather(self.device,
                          reward=ds_rewards,
                          state_prediction=ds_state_err,
-                         reward_prediction=ds_reward_err)
+                         reward_prediction=ds_reward_err,
+                         success_rate = ds_success_rate)
     
     def post_process(self):
         results=self.stat()

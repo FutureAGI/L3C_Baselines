@@ -29,6 +29,7 @@ class AnyMDPRSA(RSADecisionModel):
         self.set_train_config(config)
 
         self.nactions = config.action_dim
+        self.reward_dtype = config.reward_encode.input_type
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
@@ -104,6 +105,7 @@ class AnyMDPRSA(RSADecisionModel):
         # Calculate the loss information
         loss = dict()
 
+        # Mask out the invalid actions
         # Mask out the invalid actions
         loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
         if(use_loss_weight):
@@ -240,15 +242,6 @@ class AnyMDPRSA(RSADecisionModel):
         pro_in = None
         obs_in = None
 
-        if(single_batch and single_step):
-            extra_dim = [0, 1]
-        elif(single_batch):
-            extra_dim = 0
-        elif(single_step):
-            extra_dim = 1
-        else:
-            extra_dim = None
-
         def proc(x):
             if(x is None):
                 return x
@@ -256,7 +249,7 @@ class AnyMDPRSA(RSADecisionModel):
                 return x.unsqueeze(0).unsqueeze(0).to(device)
             elif(single_batch):
                 return x.unsqueeze(0).to(device)
-            elif(single_setep):
+            elif(single_step):
                 return x.unsqueeze(1).to(device)
             return x.to(device)
 
@@ -276,6 +269,11 @@ class AnyMDPRSA(RSADecisionModel):
         if(not isinstance(reward, torch.Tensor) and reward is not None):
             rew_in = torch.tensor(rew_in)
         rew_in = proc(rew_in)
+
+        if self.reward_dtype == "Continous":
+            rew_in = rew_in.to(torch.float32)
+        else:
+            rew_in = rew_in.to(torch.int32)
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
         _, _, _, new_cache = self.forward(

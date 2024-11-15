@@ -164,13 +164,18 @@ test_config:
     seg_len: 4000
 
 generator_config:
-    env: lake4x4
+    env: lake4x4 #lake4x4 / anymdp
+    state_clip: 16 # For anymdp, create a new task base on state_clip & action_clip
     action_clip: 4
     epoch_numbers: 1
-    downsample_length: 100
+    downsample_length: 100 # For world model loss and reward value, position-wise analysis
+    downsample_trail: 10 # For success rate analysis, divide into "n" intervials
     decoding_strategy:
         T_ini: 1.0
         T_fin: 0.1
         decay_type: Linear  # Exponential
-    max_steps: 16000
+    max_trails: 1000 # For anymdp, set max_trails = 1. For lake4x4, set max_trails = 1000 or else.
+    max_steps: 1 # For lake4x4, set max_steps = 1 For anymdp, set max_steps = 16000 or else.
+    learn_from_data: False # For lake4x4, use gen_gym_record.py to dump data
+    data_root: [Path]
     output: "./online_eval/"

@@ -19,6 +19,7 @@ class GeneratorBase(object):
         self.T_fin = self.config.decoding_strategy.T_fin
         self.T_decay_type = self.config.decoding_strategy.decay_type
         self.max_steps = self.config.max_steps
+        self.max_trails = self.config.max_trails
 
         self.dT_linear = (self.T_fin - self.T_ini) / self.max_steps
         self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.max_steps)
