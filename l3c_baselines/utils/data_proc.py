@@ -55,5 +55,5 @@ def downsample(x, downsample_length, axis=-1):
         if(trunc_len < full_len):
             slc[axis] = slice(trunc_len, full_len)
             add_x = numpy.mean(x[tuple(slc)], axis=axis, keepdims=True)
-            ds_x = numpy.concat((ds_x, add_x), axis=axis)
+            ds_x = numpy.concatenate((ds_x, add_x), axis=axis)
     return ds_x
