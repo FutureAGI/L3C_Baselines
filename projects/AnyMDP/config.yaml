@@ -175,7 +175,7 @@ generator_config:
         T_fin: 0.1
         decay_type: Linear  # Exponential
     max_trails: 1000 # For anymdp, set max_trails = 1. For lake4x4, set max_trails = 1000 or else.
-    max_steps: 1 # For lake4x4, set max_steps = 1 For anymdp, set max_steps = 16000 or else.
+    max_steps: 16000 
     learn_from_data: False # For lake4x4, use gen_gym_record.py to dump data
     data_root: [Path]
     output: "./online_eval/"
