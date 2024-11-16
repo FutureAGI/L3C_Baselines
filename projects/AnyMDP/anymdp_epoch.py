@@ -143,22 +143,24 @@ class AnyMDPEpoch:
 
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
-        if(self.config.env.lower() == "lake4x4"):
+        if(self.config.env.lower().find("lake") >= 0):
             self.env = gym.make(
                 'FrozenLake-v1', 
-                map_name="4x4", 
+                map_name=self.config.env.replace("lake", ""), 
                 is_slippery=True, 
                 max_episode_steps=1000)
-        elif(self.config.env.lower() == "anymdp"):
+        elif(self.config.env.lower().find("anymdp") >= 0):
             self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
-            task = AnyMDPTaskSampler(self.config.state_clip, self.config.action_clip)
+            dims = self.config.env.replace("anymdp", "").split("x")
+            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
             self.env.set_task(task)
         else:
             log_fatal("Unsupported environment:", self.config.env)
         logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
-        self.logger = Logger(*logger_keys, 
+        self.logger = Logger("steps"，
+                            *logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
         
@@ -174,12 +176,12 @@ class AnyMDPGenerator(GeneratorBase):
                 actions = actions.astype(numpy.int32)
                 rewards = rewards.astype(numpy.float32)
                 self.model.module.in_context_learn(
-                None,
-                states,
-                actions,
-                rewards,
-                single_batch=True,
-                single_step=False)
+                    None,
+                    states,
+                    actions,
+                    rewards,
+                    single_batch=True,
+                    single_step=False)
         print("Finish Learning.")
 
     def __call__(self):
@@ -247,7 +249,8 @@ class AnyMDPGenerator(GeneratorBase):
                 if(step > self.max_steps and trail >= self.max_trails):
                     break
             trail += 1
-            self.logger(numpy.mean(rew_arr[epoch_start_step:]), 
+            self.logger(step,
+                        numpy.mean(rew_arr[epoch_start_step:]), 
                         numpy.mean(state_error[epoch_start_step:]), 
                         numpy.mean(reward_error[epoch_start_step:]),
                         success_list[-1])
@@ -265,9 +268,12 @@ class AnyMDPGenerator(GeneratorBase):
                          reward_prediction=ds_reward_err,
                          success_rate = ds_success_rate)
     
-    def post_process(self):
+    def postprocess(self):
         results=self.stat()
-        self.logger(results['reward'], results['state_prediction'], results['reward_prediction'])
+        self.logger("Final_Result",
+                    results['reward'], 
+                    results['state_prediction'], 
+                    results['reward_prediction'])
         if(self.config.has_attr("output")):
             if not os.path.exists(self.config.output):
                 os.makedirs(self.config.output)
