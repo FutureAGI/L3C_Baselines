@@ -154,9 +154,10 @@ if __name__ == "__main__":
     parser.add_argument('--n_task', type=int, default=1000, help='Total number of task for generating.')
     parser.add_argument('--n_max_try', type=int, default=100, help='Maximum number of actions per epoch.')
     parser.add_argument('--n_workers', type=int, default=1, help='Number of parallel workers for training.')
-    parser.add_argument('--enable_load_model', type=bool, default=False, help='Whether to load a pre-trained model.')
+    parser.add_argument('--enable_load_model', type=str, default="False", help='Whether to load a pre-trained model.')
 
     args = parser.parse_args()
+    args.enable_load_model = args.enable_load_model.lower() == "true"
 
     env = create_env(args.env_name)
     if not args.enable_load_model:
