@@ -12,7 +12,7 @@ import pickle
 import l3c.mazeworld
 import random as rnd
 from numpy import random
-from l3c.anymdp import AnyMDPTaskSampler, Resampler
+from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS
 from l3c.utils import pseudo_random_seed
 
