@@ -158,7 +158,7 @@ class AnyMDPGenerator(GeneratorBase):
         if(self.config.has_attr("task_file")):
             with open(self.config.task_file, 'rb') as fr:
                 self.tasks = pickle.load(fr)
-            log_debug(f"Read tasks from {self.config.task_file} sucess")
+            log_debug(f"Read tasks from {self.config.task_file} success")
         else:
             self.tasks = None
 
@@ -189,6 +189,14 @@ class AnyMDPGenerator(GeneratorBase):
             is_slippery=True, 
             max_episode_steps=1000)
         return None
+
+    def is_success_fail(self, reward, done):
+        if(reward > 1.0e-3 and done):
+            return 1
+        elif(done):
+            return -1
+        else:
+            return 0
         
     def in_context_learn_from_teacher(self, task_id=None):
         # Task ID: retrieve the correpsonding teacher trajectory with task ID
@@ -218,7 +226,6 @@ class AnyMDPGenerator(GeneratorBase):
         
         reward_error = []
         state_error = []
-        success_list = []
 
         step = 0
         trail = 0
@@ -228,10 +235,17 @@ class AnyMDPGenerator(GeneratorBase):
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher(task_id=task_id)
 
+        pred_state_dist = None
+        is_succ = 0
+        is_fail = 0
+        success_rate = []
+
         while trail < self.max_trails and step < self.max_steps:
             done = False
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
+            if(pred_state_dist is not None):
+                state_error.append(-numpy.log(pred_state_dist[int(previous_state)].item()))
             
             epoch_start_step = step
             while not done:
@@ -244,69 +258,68 @@ class AnyMDPGenerator(GeneratorBase):
                 # interact with env
                 new_state, new_reward, done, *_ = self.env.step(action)
 
-                # collect data
-                act_arr.append(action)
-                if not done:                     
-                    obs_arr.append(new_state)   
-                rew_arr.append(new_reward)
-                # world model reward prediction correct count:
-                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
-
-                reward_error.append((new_reward - pred_reward) ** 2)
-                state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
-
-                # Judge if success
-                if done:
-                    if self.config.env.lower() == "lake4x4" :
-                        if new_reward == 1:
-                            success_list.append(int(1))
-                        else:
-                            success_list.append(int(0))
-                    else:
-                        success_list.append(int(0))
-
                 # start learning
                 self.model.module.in_context_learn(
                     None,
                     previous_state,
                     action,
                     new_reward)
+
+                # collect data
+                act_arr.append(action)
+                if not done: # Terminal state will not be pushed in to the input and list               
+                    obs_arr.append(new_state) 
+                    state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
+                rew_arr.append(new_reward)
+                # world model reward prediction correct count:
+                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
+
+                succ_fail = self.is_success_fail(new_reward, done)
+                is_succ += (succ_fail > 0)
+                is_fail += (succ_fail < 0)
+                success_rate.append(is_succ / (is_succ + is_fail + 1.0e-6))
+
+                reward_error.append((new_reward - pred_reward) ** 2)
+
+                # Judge if success
                 
                 previous_state = new_state
                 
                 step += 1
-                if(step > self.max_steps and trail == self.max_trails - 1):
+                if(step > self.max_steps):
                     break
             trail += 1
             self.logger(step,
                         numpy.mean(rew_arr[epoch_start_step:]), 
                         numpy.mean(state_error[epoch_start_step:]), 
                         numpy.mean(reward_error[epoch_start_step:]),
-                        success_list[-1])
-            
+                        success_rate[-1])
+
+        print("state error", list(map(float,state_error)))
         ds_state_err = downsample(state_error, self.config.downsample_length)
         ds_reward_err = downsample(reward_error, self.config.downsample_length)
         ds_rewards = downsample(rew_arr, self.config.downsample_length)
-        ds_success_rate = downsample(success_list, self.config.downsample_length)
+        ds_success = downsample(success_rate, self.config.downsample_length)
 
         self.stat.gather(self.device,
                          reward=ds_rewards,
                          state_prediction=ds_state_err,
                          reward_prediction=ds_reward_err,
-                         success_rate = ds_success_rate)
+                         success_rate = ds_success)
     
     def postprocess(self):
         results=self.stat()
         self.logger("Final_Result",
-                    results['reward'], 
-                    results['state_prediction'], 
-                    results['reward_prediction'],
-                    results['success_rate'])
+                    results['reward']['mean'], 
+                    results['state_prediction']['mean'], 
+                    results['reward_prediction']['mean'],
+                    results['success_rate']['mean'])
         if(self.config.has_attr("output")):
             if not os.path.exists(self.config.output):
                 os.makedirs(self.config.output)
             for key_name in results:
                 res_text = string_mean_var(self.config.downsample_length, results[key_name])
+
                 file_path = f'{self.config.output}/result_{key_name}.txt'
                 if os.path.exists(file_path):
                     os.remove(file_path)
