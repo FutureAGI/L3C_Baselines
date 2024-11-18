@@ -244,7 +244,7 @@ class AnyMDPGenerator(GeneratorBase):
                 previous_state = new_state
                 
                 step += 1
-                if(step > self.max_steps and trail >= self.max_trails):
+                if(step > self.max_steps and trail == self.max_trails - 1):
                     break
             trail += 1
             self.logger(numpy.mean(rew_arr[epoch_start_step:]), 
