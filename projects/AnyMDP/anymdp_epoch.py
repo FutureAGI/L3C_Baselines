@@ -12,6 +12,7 @@ from l3c_baselines.dataloader import AnyMDPDataSet
 
 import gym
 import numpy
+import pickle
 from gym.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 
@@ -144,18 +145,20 @@ class AnyMDPEpoch:
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
         if(self.config.env.lower().find("lake") >= 0):
-            self.env = gym.make(
-                'FrozenLake-v1', 
-                map_name=self.config.env.replace("lake", ""), 
-                is_slippery=True, 
-                max_episode_steps=1000)
+            self.task_sampler = self.task_sampler_lake
         elif(self.config.env.lower().find("anymdp") >= 0):
             self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
-            dims = self.config.env.replace("anymdp", "").split("x")
-            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
-            self.env.set_task(task)
+            self.task_sampler = self.task_sampler_anymdp
         else:
             log_fatal("Unsupported environment:", self.config.env)
+
+        if(self.config.has_attr("task_file")):
+            with open(self.config.task_file, 'rb') as fr:
+                self.tasks = pickle.load(fr)
+            log_debug(f"Read tasks from {self.config.task_file} sucess")
+        else:
+            self.tasks = None
+
         logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
@@ -163,8 +166,29 @@ class AnyMDPGenerator(GeneratorBase):
                             *logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
+
+    def task_sampler_anymdp(self, epoch_id=0):
+        task_id = None
+        if(self.tasks is None):
+            dims = self.config.env.lower().replace("anymdp", "").split("x")
+            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
+        else:
+            task_num = len(self.tasks)
+            task_id = (epoch_id * self.world_size + self.rank) % task_num
+            task = self.tasks[task_id]
+        self.env.set_task(task)
+        return task_id
+
+    def task_sampler_lake(self, epoch_id=0):
+        self.env = gym.make(
+            'FrozenLake-v1', 
+            map_name=self.config.env.replace("lake", ""), 
+            is_slippery=True, 
+            max_episode_steps=1000)
+        return None
         
-    def in_context_learn_from_teacher(self):
+    def in_context_learn_from_teacher(self, task_id=None):
+        # Task ID: retrieve the correpsonding teacher trajectory with task ID
         for folder in os.listdir(self.config.data_root):
             folder_path = os.path.join(self.config.data_root, folder)
             
@@ -184,7 +208,7 @@ class AnyMDPGenerator(GeneratorBase):
                     single_step=False)
         print("Finish Learning.")
 
-    def __call__(self):
+    def __call__(self, epoch_id):
         obs_arr = []
         act_arr = []
         rew_arr = []
@@ -196,10 +220,12 @@ class AnyMDPGenerator(GeneratorBase):
         step = 0
         trail = 0
 
-        if self.config.learn_from_data:
-            self.in_context_learn_from_teacher()
+        task_id = self.task_sampler(epoch_id=epoch_id)
 
-        while trail < self.max_trails or step < self.max_steps:
+        if self.config.learn_from_data:
+            self.in_context_learn_from_teacher(task_id=task_id)
+
+        while trail < self.max_trails and step < self.max_steps:
             done = False
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
