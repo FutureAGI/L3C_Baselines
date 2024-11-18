@@ -12,7 +12,7 @@ import pickle
 import l3c.mazeworld
 import random as rnd
 from numpy import random
-from l3c.anymdp import AnyMDPTaskSampler, Resampler
+from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS
 from l3c.utils import pseudo_random_seed
 
@@ -23,20 +23,36 @@ class PolicyScheduler:
             q_start_range=[1.0, 1.0],
             q_end_range=[0.0, 0.0],
             eps_start_range=[0.5, 1.0],
-            eps_end_range=[0.0, 0.5]):
+            eps_end_range=[0.0, 0.5],
+            opt_step=1.0e-3,
+            q_step=1.0e-3,
+            eps_step=1.0e-3):
 
         def sample(x):
             return random.uniform(x[0], x[1])
 
         opt_start = sample(opt_start_range)
         opt_end = sample(opt_end_range)
+        if(opt_end < opt_start):
+            opt_step = -opt_step
+
         q_start = sample(q_start_range)
         q_end = sample(q_end_range)
+        if(q_end < q_start):
+            q_step = -q_step
+
         eps_start = sample(eps_start_range)
         eps_end = sample(eps_end_range)
-        opt_arr = numpy.clip(numpy.linspace(opt_start, opt_end, L), 0, None)
-        q_arr = numpy.clip(numpy.linspace(q_start, q_end, L), 0, None)
-        eps_arr = numpy.clip(numpy.linspace(eps_start, eps_end, L), 0, None)
+        if(eps_end < eps_start):
+            eps_step = -eps_step
+
+        opt_arr = numpy.clip(numpy.arange(L) * opt_step + opt_start,
+                             min(opt_start, opt_end), max(opt_start, opt_end))
+        q_arr = numpy.clip(numpy.arange(L) * q_step + q_start,
+                             min(q_start, q_end), max(q_start, q_end))
+        eps_arr = numpy.clip(numpy.arange(L) * eps_step + eps_start,
+                             min(eps_start, eps_end), max(eps_start, eps_end))
+
         prob = numpy.stack([opt_arr, q_arr, eps_arr], axis=0)
         sum_prob = numpy.clip(numpy.sum(prob, axis=0, keepdims=True), 1.0e-6, None)
         self.prob = prob / sum_prob
@@ -55,6 +71,7 @@ def run_epoch(
     steps = 0
     
     # Steps to reset the 
+    nstate = env.observation_space.n
     naction = env.action_space.n
 
     state_list = list()
@@ -70,14 +87,29 @@ def run_epoch(
     ppl_sum = []
     mse_sum = []
 
+    dstep = 0.02 / (nstate * naction)
+
     ps_b = PolicyScheduler(max_steps + 1,
-                            q_end_range=(0.5, 1.0),
-                            opt_end_range=(0.0, 0.5),
+                            opt_start_range=[-2.0, 0.0],
+                            opt_end_range=[-0.5, 0.5],
+                            q_start_range=[0.1, 1.0],
+                            q_end_range=[0.1, 1.0],
+                            eps_start_range=[0.1, 1.0],
+                            eps_end_range=[0.1, 1.0],
+                            opt_step=dstep,
+                            q_step=dstep,
+                            eps_step=dstep
                             )
     ps_l = PolicyScheduler(max_steps + 1, 
-                            eps_start_range=(0.0, 0.0), 
-                            eps_end_range=(0.0, 0.0),
-                            q_end_range=(-1.0, 0.0),
+                            opt_start_range=[-1.0, -1.0],
+                            opt_end_range=[0.5, 0.5],
+                            q_start_range=[1.0, 1.0],
+                            q_end_range=[1.0, 1.0],
+                            eps_start_range=[0.0, 0.0],
+                            eps_end_range=[0.0, 0.0],
+                            opt_step=dstep,
+                            q_step=dstep,
+                            eps_step=dstep
                             )
     ps_b_traj = ps_b()
     ps_l_traj = ps_l()

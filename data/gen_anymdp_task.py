@@ -1,7 +1,7 @@
 import argparse
 import pickle
 import random
-from l3c.anymdp import AnyMDPTaskSampler, Resampler
+from l3c.anymdp import AnyMDPTaskSampler
 
 
 

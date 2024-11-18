@@ -103,8 +103,8 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
                             main=main,
                             extra_info=extra_info)
     generator.preprocess()
-    for key in range(config.generator_config.epoch_numbers):
-        generator()
+    for epoch_id in range(config.generator_config.epoch_numbers):
+        generator(epoch_id)
     generator.postprocess()
 
 class GeneratorRunner(Runner):

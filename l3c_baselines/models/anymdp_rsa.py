@@ -210,8 +210,8 @@ class AnyMDPRSA(RSADecisionModel):
             update_memory=False,
             need_cache=False)
         
-        act_out = act_out.detach().cpu().squeeze()
         state = o_pred.detach().cpu().squeeze()
+        act_out = act_out.detach().cpu().squeeze()
         reward = r_pred.detach().cpu().squeeze()
 
         if(need_numpy):
