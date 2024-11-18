@@ -159,7 +159,7 @@ class AnyMDPGenerator(GeneratorBase):
         logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
-        self.logger = Logger("steps"，
+        self.logger = Logger("steps",
                             *logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
