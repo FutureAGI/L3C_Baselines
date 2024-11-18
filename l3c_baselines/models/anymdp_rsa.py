@@ -270,7 +270,7 @@ class AnyMDPRSA(RSADecisionModel):
             rew_in = torch.tensor(rew_in)
         rew_in = proc(rew_in)
 
-        if self.reward_dtype == "Continous":
+        if self.reward_dtype == "Continuous":
             rew_in = rew_in.to(torch.float32)
         else:
             rew_in = rew_in.to(torch.int32)
