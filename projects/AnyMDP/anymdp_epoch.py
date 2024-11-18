@@ -19,8 +19,11 @@ from l3c.anymdp import AnyMDPTaskSampler
 
 def string_mean_var(downsample_length, res):
     string=""
-    for i, (xm,xb) in enumerate(zip(res["mean"], res["bound"])):
-        string += f'{downsample_length * i}\t{xm}\t{xb}\n'
+    if(numpy.size(res["mean"]) > 1):
+        for i, (xm,xb) in enumerate(zip(res["mean"], res["bound"])):
+            string += f'{downsample_length * i}\t{xm}\t{xb}\n'
+    else:
+        string =  f'{0}\t{res["mean"]}\t{res["bound"]}\n'
     return string
 
 @EpochManager
@@ -284,9 +287,7 @@ class AnyMDPGenerator(GeneratorBase):
         ds_state_err = downsample(state_error, self.config.downsample_length)
         ds_reward_err = downsample(reward_error, self.config.downsample_length)
         ds_rewards = downsample(rew_arr, self.config.downsample_length)
-        ds_success_rate = downsample(success_list, self.config.downsample_trail)
-
-        print("ds_success_rate = ", ds_success_rate)
+        ds_success_rate = downsample(success_list, self.config.downsample_length)
 
         self.stat.gather(self.device,
                          reward=ds_rewards,
@@ -299,7 +300,8 @@ class AnyMDPGenerator(GeneratorBase):
         self.logger("Final_Result",
                     results['reward'], 
                     results['state_prediction'], 
-                    results['reward_prediction'])
+                    results['reward_prediction'],
+                    results['success_rate'])
         if(self.config.has_attr("output")):
             if not os.path.exists(self.config.output):
                 os.makedirs(self.config.output)
