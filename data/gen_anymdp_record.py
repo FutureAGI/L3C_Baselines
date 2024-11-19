@@ -93,10 +93,10 @@ def run_epoch(
     ps_b = PolicyScheduler(max_steps + 1,
                             opt_start_range=[-2.0, 0.0],
                             opt_end_range=[-0.5, 0.1],
-                            q_start_range=[0.1, 1.0],
-                            q_end_range=[0.1, 1.0],
+                            q_start_range=[0.0, 1.0],
+                            q_end_range=[0.0, 1.0],
                             eps_start_range=[1.0, 2.0],
-                            eps_end_range=[0.0, 2.0],
+                            eps_end_range=[0.1, 2.0],
                             opt_step=dstep,
                             q_step=dstep,
                             eps_step=dstep

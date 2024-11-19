@@ -69,12 +69,12 @@ class MambaBlock(nn.Module):
                   layer_idx=self.layer_idx)
         
     def forward(self, x, cache=None, need_cache=False):
-        if(need_cache):
-            if cache is None:
-                cache = MambaCache(x.shape[0], self.hidden_size, self.expand,
-                                      self.d_conv, self.d_state, x.dtype, x.device, self.layer_idx)
-        else:  # only when cache == None and need_cache==False can we neglect inference_params
-            cache=None
+        if(need_cache and cache is None):
+            cache = MambaCache(x.shape[0], self.hidden_size, self.expand,
+                                  self.d_conv, self.d_state, x.dtype, x.device, self.layer_idx)
+        elif(cache is not None):  # only when cache == None and need_cache==False can we neglect inference_params
+            cache = cache.clone()
+
         out = self.encoder(x, inference_params=cache)
 
         if(need_cache):

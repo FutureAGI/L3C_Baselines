@@ -42,10 +42,12 @@ def downsample(x, downsample_length, axis=-1):
     trunc_len = trunc_seg * downsample_length
 
     new_shape = shape[:axis] + (trunc_seg, downsample_length) + shape[axis + 1:]
+    # Only when left elements is large enough we add the last statistics
+    need_addition = (trunc_len + downsample_length // 2 < full_len)
 
     if(isinstance(x, torch.Tensor)):
         ds_x = torch.mean(torch.narrow(x, axis, 0, trunc_len).view(new_shape), dim=axis + 1, keepdim=False)
-        if(trunc_len < full_len):
+        if(need_addition):
             add_x = torch.mean(torch.narrow(x, axis, trunc_len, full_len - trunc_len), dim=axis, keepdim=True)
             ds_x = torch.cat((ds_x, add_x), dim=axis)
     else:
@@ -54,7 +56,7 @@ def downsample(x, downsample_length, axis=-1):
         x = numpy.array(x)
         reshape_x = numpy.reshape(x[tuple(slc)], new_shape)
         ds_x = numpy.mean(reshape_x, axis=axis + 1, keepdims=False)
-        if(trunc_len < full_len):
+        if(need_addition):
             slc[axis] = slice(trunc_len, full_len)
             add_x = numpy.mean(x[tuple(slc)], axis=axis, keepdims=True)
             ds_x = numpy.concatenate((ds_x, add_x), axis=axis)
