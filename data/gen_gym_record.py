@@ -18,19 +18,15 @@ def create_env(env_name):
     if(env_name.lower() == "lake"):
         env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
         return env
-    elif(env_name.lower() == "cliff"):
-        env = gym.make('CliffWalking-v0')
+    elif(env_name.lower() == "lander"):
+        env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
+               enable_wind=False, wind_power=15.0, turbulence_power=1.5)
         return env
-    elif(env_name.lower() == "taxi"):
-        env = gym.make('Taxi-v3')
-        return env
-    # elif(env_name.lower() == "blackjack"):
-    #     env = gym.make('Blackjack-v1', natural=False, sab=True)
-    #     return env
     else:
         raise ValueError("Unknown env name: {}".format(env_name))
         
 def train_model(env, model_name, n_total_timesteps, save_path):
+    # For more RL alg, please refer to https://stable-baselines3.readthedocs.io/en/master/guide/algos.html
     if(model_name.lower() == "dqn"):
         model = DQN('MlpPolicy', env, verbose=1)
         model.learn(total_timesteps=int(n_total_timesteps))
@@ -120,6 +116,11 @@ def produce_data(env_name, model_name, save_path, epoch_ids, max_try=100):
             if total_reward > 0:
                 success_count += 1
                 total_action_count += action_count
+        elif(env_name.lower() == "lander"):
+            if total_reward > 200:
+                success_count += 1
+                total_action_count += action_count
+
         # Create save directory
         file_path = f'{save_path}/data/record-{idx:06d}'
         create_directory(file_path)
@@ -135,7 +136,7 @@ def produce_data(env_name, model_name, save_path, epoch_ids, max_try=100):
         np.save(f"{file_path}/actions_behavior.npy", results["actions"])  # Save action data
         np.save(f"{file_path}/rewards.npy", results["rewards"])  # Save reward data
     
-    if(env_name.lower() == "lake"):
+    if(env_name.lower() == "lake" or env_name.lower() == "lander"):
       print(f"Epoch {idx}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
     
     env.close()
@@ -147,7 +148,7 @@ def worker(worker_id, env_name, model_name, save_path, epoch_ids, max_try):
 if __name__ == "__main__":
     # Use argparse to parse command line arguments
     parser = argparse.ArgumentParser(description="Train a Q-learning agent in a gym environment.")
-    parser.add_argument('--env_name', choices=['LAKE', 'CLIFF', 'TAXI'], default='LAKE', help="The name of the gym environment")
+    parser.add_argument('--env_name', choices=['LAKE', 'LANDER'], default='LAKE', help="The name of the gym environment")
     parser.add_argument('--save_path', type=str, required=True, help='The path to save the training data (without file extension).')
     parser.add_argument('--policy_name', choices=['DQN', 'A2C', 'TD3', 'PPO'], default='DQN', help="Policy Type")
     parser.add_argument('--n_total_timesteps', type=int, default=200000, help='Total number of epochs for training.')

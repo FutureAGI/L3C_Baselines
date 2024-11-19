@@ -106,7 +106,6 @@ class AnyMDPRSA(RSADecisionModel):
         loss = dict()
 
         # Mask out the invalid actions
-        # Mask out the invalid actions
         loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
         if(use_loss_weight):
             loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
