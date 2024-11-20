@@ -96,9 +96,9 @@ def produce_data(worker_id, shared_list, env_name, random_env, model_name, save_
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
     result = {
-        "states": np.array(state_list, dtype=np.uint32),
-        "actions": np.array(act_list, dtype=np.uint32),
-        "rewards": np.array(reward_list, dtype=np.float32)
+        "states": np.squeeze(np.array(state_list)),
+        "actions": np.squeeze(np.array(act_list)),
+        "rewards": np.squeeze(np.array(reward_list))
     }
     env.close()
     shared_list.append(result)
@@ -126,15 +126,16 @@ def generate_records(args, task_id):
         process.join()
     
     results = list(shared_list)
-    merged_result = {
-        "states": np.array([], dtype=np.uint32),
-        "actions": np.array([], dtype=np.uint32),
-        "rewards": np.array([], dtype=np.float32)
-    }
+    merged_result = {}
     for result in results:
-        merged_result["states"] = np.concatenate((merged_result["states"], result["states"][:,0]))
-        merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"][:,0]))
-        merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"][:,0]))
+        if "states" not in merged_result:
+            merged_result["states"] = result["states"]
+            merged_result["actions"] = result["actions"]
+            merged_result["rewards"] = result["rewards"]
+            continue            
+        merged_result["states"] = np.concatenate((merged_result["states"], result["states"]))
+        merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"]))
+        merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
     merged_result["states"] = merged_result["states"][:args.n_seq_len]
     merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
     merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
