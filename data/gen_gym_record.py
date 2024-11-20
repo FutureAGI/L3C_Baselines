@@ -29,7 +29,7 @@ def create_env(env_name, randon_env):
     else:
         raise ValueError("Unknown env name: {}".format(env_name))
 
-def train_model(env, model_name, n_total_timesteps, save_path, task_idx):
+def train_model(env, model_name, n_total_timesteps, save_path):
     # For more RL alg, please refer to https://stable-baselines3.readthedocs.io/en/master/guide/algos.html
     model_classes = {'dqn': DQN, 'a2c': A2C, 'td3': TD3, 'ppo': PPO}
     if model_name.lower() not in model_classes:
@@ -37,7 +37,7 @@ def train_model(env, model_name, n_total_timesteps, save_path, task_idx):
     
     model = model_classes[model_name.lower()]('MlpPolicy', env, verbose=1)
     model.learn(total_timesteps=int(n_total_timesteps))
-    file_path = f'{save_path}/model/{model_name.lower()}_{task_idx}'
+    file_path = f'{save_path}/model/{model_name.lower()}'
     create_directory(file_path)
     model.save(file_path)
     
@@ -50,9 +50,9 @@ def load_model(model_name, save_path, env):
     
     return model_classes[model_name.lower()].load(f'{save_path}/model/{model_name.lower()}.zip', env=env)
 
-def produce_data(worker_id, queue, env_name, model_name, save_path, seg_len):
+def produce_data(worker_id, shared_list, env_name, random_env, model_name, save_path, seg_len):
     # Create environment
-    env = create_env(env_name)
+    env = create_env(env_name, random_env)
     env = DummyVecEnv([lambda: env])  # Wrap the environment as a vectorized environment
 
     model = load_model(model_name, save_path, env)
@@ -86,11 +86,11 @@ def produce_data(worker_id, queue, env_name, model_name, save_path, seg_len):
         if(env_name.lower() == "lake"):
             if trail_reward > 0:
                 success_count += 1
-                total_action_count += step_trail_start - step
+                total_action_count += step - step_trail_start
         elif(env_name.lower() == "lander"):
             if trail_reward > 200:
                 success_count += 1
-                total_action_count += step_trail_start - step
+                total_action_count += step - step_trail_start
 
     if(env_name.lower() == "lake" or env_name.lower() == "lander"):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
@@ -101,7 +101,7 @@ def produce_data(worker_id, queue, env_name, model_name, save_path, seg_len):
         "rewards": np.array(reward_list, dtype=np.float32)
     }
     env.close()
-    queue.put(result)
+    shared_list.append(result)
     return
 
 def generate_records(args, task_id):
@@ -110,32 +110,31 @@ def generate_records(args, task_id):
         train_model(env, args.policy_name, args.n_total_timesteps, args.save_path)
 
     worker_splits = args.n_seq_len / args.n_workers + 1.0e-6
-    queue = multiprocessing.Queue()
+    manager = multiprocessing.Manager()
+    shared_list = manager.list()
     processes = []
 
     for worker_id in range(args.n_workers):
 
         multiprocessing.set_start_method('spawn', force=True)
         process = multiprocessing.Process(target=produce_data, 
-                                          args=(worker_id, queue, args.env_name, args.policy_name, args.save_path,  worker_splits))
+                                          args=(worker_id, shared_list, args.env_name, args.random_env, args.policy_name, args.save_path,  worker_splits))
         processes.append(process)
         process.start()
 
     for process in processes:
         process.join()
     
-    results = []
-    for _ in range(args.n_workers):
-        results.append(queue.get())
+    results = list(shared_list)
     merged_result = {
         "states": np.array([], dtype=np.uint32),
         "actions": np.array([], dtype=np.uint32),
         "rewards": np.array([], dtype=np.float32)
     }
     for result in results:
-        merged_result["states"] = np.concatenate((merged_result["states"], result["states"]))
-        merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"]))
-        merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
+        merged_result["states"] = np.concatenate((merged_result["states"], result["states"][:,0]))
+        merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"][:,0]))
+        merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"][:,0]))
     merged_result["states"] = merged_result["states"][:args.n_seq_len]
     merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
     merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
