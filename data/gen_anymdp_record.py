@@ -47,11 +47,11 @@ class PolicyScheduler:
             eps_step = -eps_step
 
         opt_arr = numpy.clip(numpy.arange(L) * opt_step + opt_start,
-                             min(opt_start, opt_end), max(opt_start, opt_end))
+                             max(min(opt_start, opt_end), 0), max(opt_start, opt_end, 0))
         q_arr = numpy.clip(numpy.arange(L) * q_step + q_start,
-                             min(q_start, q_end), max(q_start, q_end))
+                             max(min(q_start, q_end), 0), max(q_start, q_end, 0))
         eps_arr = numpy.clip(numpy.arange(L) * eps_step + eps_start,
-                             min(eps_start, eps_end), max(eps_start, eps_end))
+                             max(min(eps_start, eps_end), 0), max(eps_start, eps_end, 0))
 
         prob = numpy.stack([opt_arr, q_arr, eps_arr], axis=0)
         sum_prob = numpy.clip(numpy.sum(prob, axis=0, keepdims=True), 1.0e-6, None)
@@ -63,6 +63,7 @@ class PolicyScheduler:
         return selection
 
 def run_epoch(
+        epoch_id,
         env,
         max_steps,
         offpolicy_labeling = True,
@@ -87,24 +88,24 @@ def run_epoch(
     ppl_sum = []
     mse_sum = []
 
-    dstep = 0.02 / (nstate * naction)
+    dstep = 0.05 / (nstate * naction)
 
     ps_b = PolicyScheduler(max_steps + 1,
                             opt_start_range=[-2.0, 0.0],
-                            opt_end_range=[-0.5, 0.5],
-                            q_start_range=[0.1, 1.0],
-                            q_end_range=[0.1, 1.0],
-                            eps_start_range=[0.1, 1.0],
-                            eps_end_range=[0.1, 1.0],
+                            opt_end_range=[-0.5, 0.1],
+                            q_start_range=[0.0, 1.0],
+                            q_end_range=[0.0, 1.0],
+                            eps_start_range=[1.0, 2.0],
+                            eps_end_range=[0.1, 2.0],
                             opt_step=dstep,
                             q_step=dstep,
                             eps_step=dstep
                             )
     ps_l = PolicyScheduler(max_steps + 1, 
-                            opt_start_range=[-1.0, -1.0],
-                            opt_end_range=[0.5, 0.5],
-                            q_start_range=[1.0, 1.0],
-                            q_end_range=[1.0, 1.0],
+                            opt_start_range=[1.0, 1.0],
+                            opt_end_range=[1.0, 1.0],
+                            q_start_range=[0.0, 0.0],
+                            q_end_range=[0.0, 0.0],
                             eps_start_range=[0.0, 0.0],
                             eps_end_range=[0.0, 0.0],
                             opt_step=dstep,
@@ -113,8 +114,6 @@ def run_epoch(
                             )
     ps_b_traj = ps_b()
     ps_l_traj = ps_l()
-
-    _act_type = ['OPT', 'VI', 'Random']
 
     def gen_act(state, act_type):
         if(act_type == 0):
@@ -134,8 +133,8 @@ def run_epoch(
 
         next_state, reward, done, info = env.step(bact)
 
-        ppl = -numpy.log(env.transition_matrix[state, bact, next_state])
-        mse = (reward - env.reward_matrix[state, bact]) ** 2
+        ppl = -numpy.log(info["transition_gt"][next_state])
+        mse = (reward - info["reward_gt"]) ** 2
         ppl_sum.append(ppl)
         mse_sum.append(mse)
 
@@ -152,8 +151,8 @@ def run_epoch(
         state = next_state
         steps += 1
 
-    print("Finish running, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f\n"%(
-             numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
+    print("Finish running %06d, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f"%(
+            epoch_id, numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
 
     return {
             "states": numpy.array(state_list, dtype=numpy.uint32),
@@ -184,7 +183,7 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
             task = AnyMDPTaskSampler(nstates, nactions)
 
         env.set_task(task)
-        results = run_epoch(env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
+        results = run_epoch(idx, env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
 
         file_path = f'{path_name}/record-{idx:06d}'
         create_directory(file_path)

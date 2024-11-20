@@ -21,14 +21,16 @@ class GLABlock(nn.Module):
     def forward(self, x, cache=None, need_cache=False):
         if(need_cache and cache is None):
             cache = Cache.from_legacy_cache(None)
+        elif(cache is not None):
+            # avoid in-place modification of the cache
+            cache = Cache.from_legacy_cache([memory_cpy(cache)])
     
         use_cache = (cache is not None)
+
+        # Notice that cache is changed in-place
         out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
 
-        if(new_cache is not None):
-            new_cache.states = memory_cpy(new_cache.states)
-
-        return out, new_cache
+        return out, new_cache.states[0]
     
 class GSABlock(GLABlock):
     def __init__(self,
