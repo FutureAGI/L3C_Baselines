@@ -50,6 +50,14 @@ class AnyMDPEpoch:
                 self.downsample_length = self.config.downsample_length
             else:
                 self.downsample_length = 100
+        if(self.config.has_attr('state_dropout')):
+            self.state_dropout = self.config.state_dropout
+        else:
+            self.state_dropout = 0.20
+        if(self.config.has_attr('reward_dropout')):
+            self.reward_dropout = self.config.reward_dropout
+        else:
+            self.state_dropout = 0.20
 
     def compute(self, sarr, baarr, laarr, rarr, 
                         epoch_id=-1, 
@@ -57,8 +65,15 @@ class AnyMDPEpoch:
         """
         Defining the computation function for each batch
         """
+        state_dropout = 0.0
+        reward_dropout = 0.0
         if(self.is_training):
             assert self.optimizer is not None, "optimizer is required for training"
+            state_dropout = self.state_dropout
+            reward_dropout = self.reward_dropout
+        else:
+            state_dropout = 0.0
+            reward_dropout = 0.0
 
         losses = []
         r2goarr = rewards2go(rarr)
@@ -71,8 +86,8 @@ class AnyMDPEpoch:
                     rewards, # Rewards 
                     bactions, 
                     lactions, 
-                    state_dropout=0.20, 
-                    reward_dropout=0.20,
+                    state_dropout=state_dropout, 
+                    reward_dropout=reward_dropout,
                     use_loss_weight=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
@@ -109,13 +124,11 @@ class AnyMDPEpoch:
             counts = torch.cat([loss["count"] for loss in losses], dim=1)
 
             bsz = loss_wm_s.shape[0]
-            seg_num = loss_wm_s.shape[1] // self.downsample_length
-            valid_seq_len = seg_num * self.downsample_length
 
-            loss_wm_s = torch.mean(loss_wm_s[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
-            loss_wm_r = torch.mean(loss_wm_r[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
-            loss_pm = torch.mean(loss_pm[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
-            counts = torch.mean(counts[:, :valid_seq_len].view(bsz, seg_num, -1), dim=-1)
+            loss_wm_s = downsample(loss_wm_s, self.downsample_length)
+            loss_wm_r = downsample(loss_wm_r, self.downsample_length)
+            loss_pm = downsample(loss_pm, self.downsample_length)
+            counts = downsample(counts, self.downsample_length)
 
             for i in range(bsz):
                 self.stat.gather(self.device,
@@ -235,6 +248,8 @@ class AnyMDPGenerator(GeneratorBase):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
 
+        self.model.eval()
+
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher(task_id=task_id)
 
@@ -261,6 +276,12 @@ class AnyMDPGenerator(GeneratorBase):
                 # interact with env
                 new_state, new_reward, done, *_ = self.env.step(action)
 
+                # collect data
+                act_arr.append(action)
+                rew_arr.append(new_reward)
+                # world model reward prediction correct count:
+                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
+
                 # start learning
                 self.model.module.in_context_learn(
                     None,
@@ -268,14 +289,9 @@ class AnyMDPGenerator(GeneratorBase):
                     action,
                     new_reward)
 
-                # collect data
-                act_arr.append(action)
                 if not done: # Terminal state will not be pushed in to the input and list               
                     obs_arr.append(new_state) 
                     state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
-                rew_arr.append(new_reward)
-                # world model reward prediction correct count:
-                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
 
                 succ_fail = self.is_success_fail(new_reward, done)
                 is_succ += (succ_fail > 0)
@@ -298,7 +314,6 @@ class AnyMDPGenerator(GeneratorBase):
                         numpy.mean(reward_error[epoch_start_step:]),
                         success_rate[-1])
 
-        print("state error", list(map(float,state_error)))
         ds_state_err = downsample(state_error, self.config.downsample_length)
         ds_reward_err = downsample(reward_error, self.config.downsample_length)
         ds_rewards = downsample(rew_arr, self.config.downsample_length)
