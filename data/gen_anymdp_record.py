@@ -165,7 +165,7 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
+def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions, min_state_space,
         is_offpolicy_labeling,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
@@ -180,7 +180,7 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
             task_id = (work_id + idx * world_work) % tasks_num
             task = tasks_from_file[task_id]
         else:
-            task = AnyMDPTaskSampler(nstates, nactions)
+            task = AnyMDPTaskSampler(nstates, nactions, min_state_space)
 
         env.set_task(task)
         results = run_epoch(idx, env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
@@ -201,6 +201,7 @@ if __name__=="__main__":
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--state_num", type=int, default=128, help="state num, default:128")
     parser.add_argument("--action_num", type=int, default=5, help="action num, default:5")
+    parser.add_argument("--min_state_space", type=int, default=8, help="minimum state dim in task, default:8")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
     parser.add_argument("--offpolicy_labeling", type=int, default=0, help="enable offpolicy labeling (DAgger), default:False")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
@@ -230,7 +231,7 @@ if __name__=="__main__":
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_anymdp, 
                 args=(worker_id, args.workers, args.output_path, range(n_b, n_e), 
-                        args.state_num, args.action_num, 
+                        args.state_num, args.action_num, args.min_state_space,
                         (args.offpolicy_labeling>0), args.max_steps, tasks_from_file))
         processes.append(process)
         process.start()

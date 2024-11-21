@@ -223,13 +223,16 @@ class AnyMDPGenerator(GeneratorBase):
                 states = states.astype(numpy.int32)
                 actions = actions.astype(numpy.int32)
                 rewards = rewards.astype(numpy.float32)
-                self.model.module.in_context_learn(
-                    None,
-                    states,
-                    actions,
-                    rewards,
-                    single_batch=True,
-                    single_step=False)
+                segment_len = 1000
+                for start in range(0, len(states), segment_len):
+                    end = min(start + segment_len, len(states))
+                    self.model.module.in_context_learn(
+                        None,
+                        states[start:end],
+                        actions[start:end],
+                        rewards[start:end],
+                        single_batch=True,
+                        single_step=False)
         print("Finish Learning.")
 
     def __call__(self, epoch_id):

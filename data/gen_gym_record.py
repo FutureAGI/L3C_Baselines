@@ -14,93 +14,63 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def create_env(env_name):
+def create_env(env_name, randon_env):
     if(env_name.lower() == "lake"):
-        env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
+        if randon_env:
+            env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
+            return env
+        else:
+            env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
+            return env
+    elif(env_name.lower() == "lander"):
+        env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
+               enable_wind=False, wind_power=15.0, turbulence_power=1.5)
         return env
-    elif(env_name.lower() == "cliff"):
-        env = gym.make('CliffWalking-v0')
-        return env
-    elif(env_name.lower() == "taxi"):
-        env = gym.make('Taxi-v3')
-        return env
-    # elif(env_name.lower() == "blackjack"):
-    #     env = gym.make('Blackjack-v1', natural=False, sab=True)
-    #     return env
     else:
         raise ValueError("Unknown env name: {}".format(env_name))
-        
+
 def train_model(env, model_name, n_total_timesteps, save_path):
-    if(model_name.lower() == "dqn"):
-        model = DQN('MlpPolicy', env, verbose=1)
-        model.learn(total_timesteps=int(n_total_timesteps))
-        file_path = f'{save_path}/model/dqn'
-        create_directory(file_path)
-        model.save(file_path)
-        return model
-    elif(model_name.lower() == "a2c"):
-        model = A2C('MlpPolicy', env, verbose=1)
-        model.learn(total_timesteps=int(n_total_timesteps))
-        file_path = f'{save_path}/model/a2c'
-        create_directory(file_path)
-        model.save(file_path)
-        return model
-    elif(model_name.lower() == "td3"):
-        model = TD3('MlpPolicy', env, verbose=1)
-        model.learn(total_timesteps=int(n_total_timesteps))
-        file_path = f'{save_path}/model/td3'
-        create_directory(file_path)
-        model.save(file_path)
-        return model
-    elif(model_name.lower() == "ppo"):
-        model = PPO('MlpPolicy', env, verbose=1)
-        model.learn(total_timesteps=int(n_total_timesteps))
-        file_path = f'{save_path}/model/ppo'
-        create_directory(file_path)
-        model.save(file_path)
-        return model
-    else:
+    # For more RL alg, please refer to https://stable-baselines3.readthedocs.io/en/master/guide/algos.html
+    model_classes = {'dqn': DQN, 'a2c': A2C, 'td3': TD3, 'ppo': PPO}
+    if model_name.lower() not in model_classes:
         raise ValueError("Unknown policy type: {}".format(model_name))
+    
+    model = model_classes[model_name.lower()]('MlpPolicy', env, verbose=1)
+    model.learn(total_timesteps=int(n_total_timesteps))
+    file_path = f'{save_path}/model/{model_name.lower()}'
+    create_directory(file_path)
+    model.save(file_path)
+    
+    return model
 
 def load_model(model_name, save_path, env):
-    if(model_name.lower() == "dqn"):
-        model = DQN.load(f'{save_path}/model/dqn.zip', env=env)
-        return model
-    elif(model_name.lower() == "a2c"):
-        model = A2C.load(f'{save_path}/model/a2c.zip', env=env)
-        return model
-    elif(model_name.lower() == "td3"):
-        model = TD3.load(f'{save_path}/model/td3.zip', env=env)
-        return model
-    elif(model_name.lower() == "ppo"):
-        model = PPO.load(f'{save_path}/model/ppo.zip', env=env)
-        return model
-    else:
+    model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+    if model_name.lower() not in model_classes:
         raise ValueError("Unknown policy type: {}".format(model_name))
+    
+    return model_classes[model_name.lower()].load(f'{save_path}/model/{model_name.lower()}.zip', env=env)
 
-def produce_data(env_name, model_name, save_path, epoch_ids, max_try=100):
+def produce_data(worker_id, shared_list, env_name, random_env, model_name, save_path, seg_len):
     # Create environment
-    env = create_env(env_name)
+    env = create_env(env_name, random_env)
     env = DummyVecEnv([lambda: env])  # Wrap the environment as a vectorized environment
 
     model = load_model(model_name, save_path, env)
 
+    state_list = []
+    act_list = []
+    reward_list = []
+
     task_count = 0
     success_count = 0
     total_action_count = 0
-
-    for idx in epoch_ids:
+    step = 0
+    while step < seg_len:
+        trail_reward = 0
         state = env.reset()
         done = False
-        action_count = 0
-        total_reward = 0
-        
-        # Initialize lists to store states, actions, and rewards
-        state_list = []
-        act_list = []
-        reward_list = []
-
-        while not done and action_count < max_try:
+        step_trail_start = step
+        while not done:
             action, _ = model.predict(state)  # Select action
             next_state, reward, done, _ = env.step(action)  # Execute action
             
@@ -109,81 +79,93 @@ def produce_data(env_name, model_name, save_path, epoch_ids, max_try=100):
             act_list.append(action)    # Append action taken
             reward_list.append(reward) # Append reward received
             
-            total_reward += reward
+            trail_reward += reward
             state = next_state
-            action_count += 1
-
-        # Print action count and total reward
-        print(f"Epoch {idx}: Action count = {action_count}, Total reward = {total_reward}")
-        task_count += 1 
+            step += 1
+        task_count += 1
         if(env_name.lower() == "lake"):
-            if total_reward > 0:
+            if trail_reward > 0:
                 success_count += 1
-                total_action_count += action_count
-        # Create save directory
-        file_path = f'{save_path}/data/record-{idx:06d}'
-        create_directory(file_path)
+                total_action_count += step - step_trail_start
+        elif(env_name.lower() == "lander"):
+            if trail_reward > 200:
+                success_count += 1
+                total_action_count += step - step_trail_start
 
-        # Save data
-        results = {
-            "states": np.array(state_list, dtype=np.uint32),
-            "actions": np.array(act_list, dtype=np.uint32),
-            "rewards": np.array(reward_list, dtype=np.float32)
-        }
-        
-        np.save(f"{file_path}/observations.npy", results["states"])  # Save state data
-        np.save(f"{file_path}/actions_behavior.npy", results["actions"])  # Save action data
-        np.save(f"{file_path}/rewards.npy", results["rewards"])  # Save reward data
-    
-    if(env_name.lower() == "lake"):
-      print(f"Epoch {idx}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
-    
+    if(env_name.lower() == "lake" or env_name.lower() == "lander"):
+      print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
+
+    result = {
+        "states": np.squeeze(np.array(state_list)),
+        "actions": np.squeeze(np.array(act_list)),
+        "rewards": np.squeeze(np.array(reward_list))
+    }
     env.close()
+    shared_list.append(result)
+    return
 
-def worker(worker_id, env_name, model_name, save_path, epoch_ids, max_try):
-    # Call produce_data function
-    produce_data(env_name, model_name, save_path, epoch_ids, max_try)
+def generate_records(args, task_id):
+    env = create_env(args.env_name, args.random_env)
+    if not args.enable_load_model or args.random_env:
+        train_model(env, args.policy_name, args.n_total_timesteps, args.save_path)
+
+    worker_splits = args.n_seq_len / args.n_workers + 1.0e-6
+    manager = multiprocessing.Manager()
+    shared_list = manager.list()
+    processes = []
+
+    for worker_id in range(args.n_workers):
+
+        multiprocessing.set_start_method('spawn', force=True)
+        process = multiprocessing.Process(target=produce_data, 
+                                          args=(worker_id, shared_list, args.env_name, args.random_env, args.policy_name, args.save_path,  worker_splits))
+        processes.append(process)
+        process.start()
+
+    for process in processes:
+        process.join()
+    
+    results = list(shared_list)
+    merged_result = {}
+    for result in results:
+        if "states" not in merged_result:
+            merged_result["states"] = result["states"]
+            merged_result["actions"] = result["actions"]
+            merged_result["rewards"] = result["rewards"]
+            continue            
+        merged_result["states"] = np.concatenate((merged_result["states"], result["states"]))
+        merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"]))
+        merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
+    merged_result["states"] = merged_result["states"][:args.n_seq_len]
+    merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
+    merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
+
+    file_path = f'{args.save_path}/data/record-{task_id:06d}'
+    create_directory(file_path)
+    np.save(f"{file_path}/observations.npy", merged_result["states"])  # Save state data
+    np.save(f"{file_path}/actions_behavior.npy", merged_result["actions"])  # Save action data
+    np.save(f"{file_path}/rewards.npy", merged_result["rewards"])  # Save reward data
+
+
 
 if __name__ == "__main__":
     # Use argparse to parse command line arguments
     parser = argparse.ArgumentParser(description="Train a Q-learning agent in a gym environment.")
-    parser.add_argument('--env_name', choices=['LAKE', 'CLIFF', 'TAXI'], default='LAKE', help="The name of the gym environment")
+    parser.add_argument('--env_name', choices=['LAKE', 'LANDER'], default='LAKE', help="The name of the gym environment")
     parser.add_argument('--save_path', type=str, required=True, help='The path to save the training data (without file extension).')
     parser.add_argument('--policy_name', choices=['DQN', 'A2C', 'TD3', 'PPO'], default='DQN', help="Policy Type")
     parser.add_argument('--n_total_timesteps', type=int, default=200000, help='Total number of epochs for training.')
     parser.add_argument('--n_task', type=int, default=1000, help='Total number of task for generating.')
-    parser.add_argument('--n_max_try', type=int, default=100, help='Maximum number of actions per epoch.')
+    parser.add_argument('--n_seq_len', type=int, default=100, help='Maximum number of actions per epoch.')
     parser.add_argument('--n_workers', type=int, default=1, help='Number of parallel workers for training.')
     parser.add_argument('--enable_load_model', type=str, default="False", help='Whether to load a pre-trained model.')
+    parser.add_argument('--random_env', type=str, default="False", help='Random env.')
 
     args = parser.parse_args()
     args.enable_load_model = args.enable_load_model.lower() == "true"
+    args.random_env = args.random_env.lower() == "true"
 
-    env = create_env(args.env_name)
-    if not args.enable_load_model:
-      model = train_model(env, args.policy_name, args.n_total_timesteps, args.save_path)
+    for task_id in range(args.n_task):
+        generate_records(args, task_id)
 
-    # Calculate the number of tasks for each worker process
-    worker_splits = args.n_task / args.n_workers + 1.0e-6
-    processes = []
-    n_b_t = 0
-
-    for worker_id in range(args.n_workers):
-        n_e_t = n_b_t + worker_splits
-        n_b = int(n_b_t)
-        n_e = int(n_e_t)
-        print("Start processes generating %04d to %04d" % (n_b, n_e))
-        
-        # Create epoch_ids
-        epoch_ids = range(n_b, n_e)
-        multiprocessing.set_start_method('spawn', force=True)
-        process = multiprocessing.Process(target=worker, 
-                                          args=(worker_id, args.env_name, args.policy_name, args.save_path, epoch_ids, args.n_max_try))
-        processes.append(process)
-        process.start()
-        n_b_t = n_e_t
-
-    for process in processes:
-        process.join()
-
-    print("Training completed, data has been saved.")
+    print("Finish generation.")
