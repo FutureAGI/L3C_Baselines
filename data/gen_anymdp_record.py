@@ -13,7 +13,7 @@ import l3c.mazeworld
 import random as rnd
 from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler
-from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS
+from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.utils import pseudo_random_seed
 
 
@@ -26,16 +26,17 @@ class AnyPolicySolver(object):
             raise Exception("AnyMDPEnv is not initialized by 'set_task', must call set_task first")
         self.n_actions = env.action_space.n
         self.n_states = env.observation_space.n
-        ent_1 = numpy.random.exponential(1.0)
-        ent_2 = numpy.random.exponential(1.0e-4)
+        ent_1 = numpy.random.exponential(5.0)
+        ent_2 = numpy.random.exponential(1.0e-5)
         self.policy_matrix = numpy.random.normal(size=(self.n_states, self.n_actions), scale=ent_1)
         self.policy_matrix = numpy.exp(self.policy_matrix)
         self.policy_matrix /= numpy.sum(self.policy_matrix, axis=1, keepdims=True)
         self.policy_transfer = numpy.eye(self.n_actions, self.n_actions) + numpy.random.normal(scale=ent_2, size=(self.n_actions, self.n_actions))
+        self.policy_transfer = numpy.clip(self.policy_transfer, 0, 1)
         self.policy_transfer = self.policy_transfer / numpy.sum(self.policy_transfer, axis=1, keepdims=True)
 
     def learner(self, *args, **kwargs):
-        self.policy_matrix = (self.policy_matrix * self.policy_transfer)
+        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer)
 
     def policy(self, state):
         return numpy.random.choice(self.n_actions, size=1, p=self.policy_matrix[state])[0]
@@ -60,39 +61,61 @@ def run_epoch(
     reward_list = list()
     
     solveropt = AnyMDPSolverOpt(env)
-    solverots = AnyMDPSolverOTS(env, 
-                                gamma=random.uniform(0.90, 0.99),
-                                c=random.uniform(0.0, 0.01),
-                                alpha=random.uniform(0.01, 0.50))
     solverneg = AnyPolicySolver(env)
+
+    gamma = random.uniform(0.90, 0.99)
+    c = 0.001 * random.exponential(1.0)
+    alpha = 0.01 * random.exponential(1.0)
+    max_steps_q = random.uniform(100, max_steps)
+    solverots = AnyMDPSolverOTS(env, 
+                                gamma=gamma,
+                                c=c,
+                                alpha=alpha,
+                                max_steps=max_steps_q)
+
+    gamma = random.uniform(0.90, 0.99)
+    c = 0.001 * random.exponential(1.0)
+    alpha = 0.01 * random.exponential(1.0)
+    max_steps_q = random.uniform(100, max_steps)
+    solverq = AnyMDPSolverQ(env, 
+                                gamma=gamma,
+                                c=c,
+                                alpha=alpha,
+                                max_steps=max_steps_q)
 
     state, info = env.reset()
 
     ppl_sum = []
     mse_sum = []
 
-    dstep = 0.05 / (nstate * naction) * random.random()
-    start = random.random()
+    dstep = 0.05 / (nstate * naction) * (random.random() + 0.01)
+    start = min(random.exponential(1.0), 1.0)
     end = random.uniform(0, start)
     
     # Noise Distilling
     random_scheduler = numpy.clip(start - numpy.arange(max_steps + 1) * dstep,
                                  end, 1.0)
-    if(random.random() < 0.6):
-        solver = solverots
-    else:
-        solver = solverneg
 
-    def gen_act(state, i):
-        if(random.random() < random_scheduler[i]):
-            act = random.choice(range(naction))
+    def resample_solver():
+        sel = random.random()
+        if(sel < 0.02):
+            return solveropt
+        elif(sel < 0.25):
+            return solverots
+        elif(sel < 0.50):
+            return solverq
         else:
-            act = solver.policy(state)
-        return act
+            return solverneg
+
+    solver = resample_solver()
+    need_resample = (random.random() > 0.5)
 
     while steps <= max_steps:
         if(offpolicy_labeling):
-            bact = gen_act(state, steps) 
+            if(random.random() < random_scheduler[steps]):
+                bact = random.choice(range(naction))
+            else:
+                bact = solver.policy(state)
             lact = solveropt.policy(state)
         else:
             bact = solverots.policy(state)
@@ -106,6 +129,7 @@ def run_epoch(
         mse_sum.append(mse)
 
         solverots.learner(state, bact, next_state, reward, done)
+        solverq.learner(state, bact, next_state, reward, done)
         solverneg.learner()
 
         state_list.append(state)
@@ -118,7 +142,10 @@ def run_epoch(
             bact_list.append(naction)
             lact_list.append(naction)
             reward_list.append(0.0)
+            steps += 1
             next_state, info = env.reset()
+            if(random.random() < 0.05 and need_resample):
+                solver = resample_solver()
 
         state = next_state
         steps += 1
