@@ -289,9 +289,11 @@ class AnyMDPGenerator(GeneratorBase):
                     action,
                     new_reward)
 
-                if not done: # Terminal state will not be pushed in to the input and list               
-                    obs_arr.append(new_state) 
-                    state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
+                obs_arr.append(new_state) 
+                state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
+                if(done):
+                    act_arr.append(self.env.action_space.n)
+                    rew_arr.append(0)
 
                 succ_fail = self.is_success_fail(new_reward, done)
                 is_succ += (succ_fail > 0)
