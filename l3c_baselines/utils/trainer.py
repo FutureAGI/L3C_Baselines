@@ -42,7 +42,8 @@ def EpochManager(cls):
                 DataType = self.get('DataType')
                 assert DataType is not None, f"either dataloader or DataType must be specified."
                 dataset = DataType(self.config.data_path, 
-                                    self.config.seq_len, 
+                                    self.config.seq_len,
+                                    self.model_config, 
                                     verbose=self.main)
                 self.dataloader = PrefetchDataLoader(dataset, batch_size=self.config.batch_size, 
                                             rank=self.rank, world_size=self.world_size)
@@ -245,6 +246,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                         model=model, 
                                         config=config.train_config,
                                         log_config=config.log_config,
+                                        model_config=config.model_config,
                                         rank=rank,
                                         world_size=world_size,
                                         device_type=device_type,
@@ -259,6 +261,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                         model=model, 
                                         config=config.test_config,
                                         log_config=config.log_config,
+                                        model_config=config.model_config,
                                         rank=rank,
                                         world_size=world_size,
                                         device_type=device_type,

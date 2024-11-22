@@ -8,7 +8,7 @@ from l3c_baselines.utils import rewards2go
 
 
 class AnyMDPDataSet(Dataset):
-    def __init__(self, directory, time_step, verbose=False):
+    def __init__(self, directory, time_step, model_config, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
@@ -22,6 +22,7 @@ class AnyMDPDataSet(Dataset):
             self.file_list.extend([os.path.join(d, file) for file in file_list])
             
         self.time_step = time_step
+        self.model_config = model_config
         self.reset()
 
         if(verbose):
@@ -52,10 +53,23 @@ class AnyMDPDataSet(Dataset):
             else:
                 n_b = 0
                 n_e = self.time_step
-            obs_arr = torch.from_numpy(observations[n_b:n_e].astype("int32")).long() 
-            bact_arr = torch.from_numpy(actions_behavior[n_b:n_e].astype("int32")).long() 
-            lact_arr = torch.from_numpy(actions_label[n_b:n_e].astype("int32")).long() 
-            reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
+
+            if self.model_config.state_encode.input_type == "Discrete":
+                obs_arr = torch.from_numpy(observations[n_b:n_e].astype("int32")).long()
+            else:
+                obs_arr = torch.from_numpy(observations[n_b:n_e]).float()
+
+            if self.model_config.action_encode.input_type == "Discrete":
+                bact_arr = torch.from_numpy(actions_behavior[n_b:n_e].astype("int32")).long() 
+                lact_arr = torch.from_numpy(actions_label[n_b:n_e].astype("int32")).long()
+            else:
+                bact_arr = torch.from_numpy(actions_behavior[n_b:n_e]).float()
+                lact_arr = torch.from_numpy(actions_label[n_b:n_e]).float()
+
+            if self.model_config.reward_encode.input_type == "Discrete":
+                reward_arr = torch.from_numpy(rewards[n_b:n_e].astype("int32")).long()
+            else:
+                reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
 
             return obs_arr, bact_arr, lact_arr, reward_arr
         except Exception as e:

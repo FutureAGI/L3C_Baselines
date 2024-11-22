@@ -138,13 +138,18 @@ def generate_records(args, task_id):
         merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
     merged_result["states"] = merged_result["states"][:args.n_seq_len]
     merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
-    merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
+    if args.env_name.lower() == "lander":
+        merged_result["rewards"] = np.multiply(merged_result["rewards"][:args.n_seq_len], 0.01)
+    else:
+        merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
 
     file_path = f'{args.save_path}/data/record-{task_id:06d}'
     create_directory(file_path)
     np.save(f"{file_path}/observations.npy", merged_result["states"])  # Save state data
     np.save(f"{file_path}/actions_behavior.npy", merged_result["actions"])  # Save action data
     np.save(f"{file_path}/rewards.npy", merged_result["rewards"])  # Save reward data
+    np.save(f"{file_path}/actions_label.npy", merged_result["actions"])  # Save fake label data.
+
 
 
 

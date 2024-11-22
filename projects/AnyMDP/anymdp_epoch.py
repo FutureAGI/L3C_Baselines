@@ -57,7 +57,7 @@ class AnyMDPEpoch:
         if(self.config.has_attr('reward_dropout')):
             self.reward_dropout = self.config.reward_dropout
         else:
-            self.state_dropout = 0.20
+            self.reward_dropout = 0.20
 
     def compute(self, sarr, baarr, laarr, rarr, 
                         epoch_id=-1, 

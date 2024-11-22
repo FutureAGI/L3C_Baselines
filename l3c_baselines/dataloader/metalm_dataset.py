@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class LMDataSet(Dataset):
-    def __init__(self, directory, file_size, verbose=False):
+    def __init__(self, directory, file_size, config_model, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
@@ -46,7 +46,7 @@ class LMDataSet(Dataset):
 # Test Maze Data Set
 if __name__=="__main__":
     data_path = sys.argv[1]
-    dataset = MazeDataSet(data_path, 1280)
+    dataset = MazeDataSet(data_path, 1280, None)
     print("The number of data is: %s" % len(dataset))
     fea, lab = dataset[0]
     print(fea.shape, lab.shape)
