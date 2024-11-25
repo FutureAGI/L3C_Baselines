@@ -1,6 +1,7 @@
 import sys
 import torch
 import torch.distributed as dist
+import torch.nn.utils.rnn as rnn_utils
 from types import SimpleNamespace
 from copy import deepcopy
 from dateutil.parser import parse
@@ -76,8 +77,20 @@ class DistStatistics(object):
             self._count[key].extend(gathered_counts)
 
     def _stat(self, key):
-        value = torch.stack(self._data[key], dim=0)
-        counts = torch.stack(self._count[key], dim=0)
+        # Check if the data needs padding
+        need_padding = False
+        length = self._data[key][0].numel()
+        for i in range(1, len(self._data[key])):
+            if(self._data[key][i].numel() != length):
+                need_padding = True
+
+        # Pad if the sequences are not uniform, otherwise stack them
+        if(self._need_padding[key]):
+            value = rnn_utils.pad_sequence(self._data[key], batch_first=True, padding_value=0)
+            count = rnn_utils.pad_sequence(self._count[key], batch_first=True, padding_value=0)
+        else:
+            value = torch.stack(self._data[key], dim=0)
+            counts = torch.stack(self._count[key], dim=0)
 
         sum_cnt = torch.clip(torch.sum(counts, dim=0), min=1.0e-6)
         x_mean = torch.sum(value * counts, dim=0, keepdim=False) / sum_cnt
