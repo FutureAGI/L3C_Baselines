@@ -110,7 +110,7 @@ class AnyMDPRSA(RSADecisionModel):
         loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
                     self.loss_weight.dtype)
         if(use_loss_weight):
-            loss_weight_s = self.loss_weight[ps:pe].unsqueeze(0)
+            loss_weight_s = self.loss_weight[ps:pe]
             loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
 
         # World Model Loss - States and Rewards
