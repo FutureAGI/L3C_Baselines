@@ -100,9 +100,9 @@ def run_epoch(
         sel = random.random()
         if(sel < 0.02):
             return solveropt
-        elif(sel < 0.25):
+        elif(sel < 0.35):
             return solverots
-        elif(sel < 0.50):
+        elif(sel < 0.65):
             return solverq
         else:
             return solverneg
@@ -200,7 +200,7 @@ if __name__=="__main__":
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--state_num", type=int, default=128, help="state num, default:128")
     parser.add_argument("--action_num", type=int, default=5, help="action num, default:5")
-    parser.add_argument("--min_state_space", type=int, default=8, help="minimum state dim in task, default:8")
+    parser.add_argument("--min_state_space", type=int, default=32, help="minimum state dim in task, default:8")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
     parser.add_argument("--offpolicy_labeling", type=int, default=0, help="enable offpolicy labeling (DAgger), default:False")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")

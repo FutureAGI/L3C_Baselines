@@ -85,7 +85,11 @@ class DistStatistics(object):
                 need_padding = True
 
         # Pad if the sequences are not uniform, otherwise stack them
-        if(self._need_padding[key]):
+        if(need_padding):
+            for i in range(len(self._data[key])):
+                print(self._data[key][i])
+                if(self._data[key][i].ndim < 1):
+                    self._data[key][i] = self._data[key][i].unsqueeze(0)
             value = rnn_utils.pad_sequence(self._data[key], batch_first=True, padding_value=0)
             count = rnn_utils.pad_sequence(self._count[key], batch_first=True, padding_value=0)
         else:

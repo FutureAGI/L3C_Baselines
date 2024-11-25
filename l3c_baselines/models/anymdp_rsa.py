@@ -106,33 +106,37 @@ class AnyMDPRSA(RSADecisionModel):
         loss = dict()
 
         # Mask out the invalid actions
-        loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
+        loss_weight_s = None
+        loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
+                    self.loss_weight.dtype)
         if(use_loss_weight):
-            loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
+            loss_weight_s = self.loss_weight[ps:pe].unsqueeze(0)
+            loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
 
         # World Model Loss - States and Rewards
-        loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
+        loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
                                      gt=observations[:, 1:], 
                                      loss_type="ce",
-                                     loss_wht=loss_weight, 
+                                     loss_wht=loss_weight_s, 
                                      reduce_dim=reduce_dim,
                                      need_cnt=True)
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
                                      loss_type="mse",
-                                     loss_wht=loss_weight, 
+                                     loss_wht=loss_weight_a,
                                      reduce_dim=reduce_dim)
 
         # Policy Model
-        loss["pm"] = weighted_loss(a_pred, 
+        loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
                                    gt=label_actions, 
                                    loss_type="ce",
-                                   loss_wht=loss_weight, 
-                                   reduce_dim=reduce_dim)
+                                   loss_wht=loss_weight_a, 
+                                   reduce_dim=reduce_dim,
+                                   need_cnt=True)
         # Entropy Loss
         loss["ent"] = weighted_loss(a_pred, 
                                     loss_type="ent", 
-                                    loss_wht=loss_weight,
+                                    loss_wht=loss_weight_a,
                                     reduce_dim=reduce_dim)
 
         loss["causal-l2"] = parameters_regularization(self)
