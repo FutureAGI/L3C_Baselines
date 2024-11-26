@@ -106,11 +106,11 @@ class AnyMDPEpoch:
                 else:
                     syn_loss.backward()
                 self.stat.gather(self.device,
-                    loss_worldmodel_state = loss["wm-s"] / loss["count"],
-                    loss_worldmodel_reward = loss["wm-r"] / loss["count"],
-                    loss_policymodel = loss["pm"] / loss["count"],
-                    entropy = -loss["ent"] / loss["count"],
-                    count = loss["count"])
+                    loss_worldmodel_state = loss["wm-s"] / loss["count_s"],
+                    loss_worldmodel_reward = loss["wm-r"] / loss["count_s"],
+                    loss_policymodel = loss["pm"] / loss["count_a"],
+                    entropy = -loss["ent"] / loss["count_a"],
+                    count = loss["count_a"])
         if(self.is_training):
             stat_res = self.stat()
             if(self.logger is not None):
@@ -122,10 +122,13 @@ class AnyMDPEpoch:
                         epoch=epoch_id,
                         iteration=batch_id)
         else:
-            loss_wm_s = torch.cat([loss["wm-s"] / loss["count"] for loss in losses], dim=1)
-            loss_wm_r = torch.cat([loss["wm-r"] / loss["count"] for loss in losses], dim=1)
-            loss_pm = torch.cat([loss["pm"] / loss["count"] for loss in losses], dim=1)
-            counts = torch.cat([loss["count"] for loss in losses], dim=1)
+            loss_wm_s = torch.cat([loss["wm-s"] / torch.clamp_min(loss["count_s"], 1.0e-3) 
+                    for loss in losses], dim=1)
+            loss_wm_r = torch.cat([loss["wm-r"] / torch.clamp_min(loss["count_s"], 1.0e-3) 
+                    for loss in losses], dim=1)
+            loss_pm = torch.cat([loss["pm"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
+                    for loss in losses], dim=1)
+            counts = torch.cat([loss["count_a"] for loss in losses], dim=1)
 
             bsz = loss_wm_s.shape[0]
 
