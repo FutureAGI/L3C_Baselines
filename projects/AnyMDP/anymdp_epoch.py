@@ -13,8 +13,12 @@ from l3c_baselines.dataloader import AnyMDPDataSet
 import gym
 import numpy
 import pickle
+import random
 from gym.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
+from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
+from stable_baselines3 import DQN, A2C, TD3, PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 def string_mean_var(downsample_length, res):
@@ -34,7 +38,7 @@ class AnyMDPEpoch:
         self.DataType=AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
-                        "loss_worldmodel_state", 
+                        "loss_worldmodel_states", 
                         "loss_worldmodel_reward", 
                         "loss_policymodel",
                         "entropy"]
@@ -176,10 +180,21 @@ class AnyMDPGenerator(GeneratorBase):
             self.tasks = None
 
         logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
+        benchmark_logger_keys = ["reward", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
+        self.stat_benchmark = DistStatistics(*benchmark_logger_keys)
+        self.stat_random = DistStatistics(*benchmark_logger_keys)
         self.logger = Logger("steps",
                             *logger_keys, 
+                            on=self.main, 
+                            use_tensorboard=False)
+        self.logger_benchmark = Logger("steps",
+                            *benchmark_logger_keys, 
+                            on=self.main, 
+                            use_tensorboard=False)
+        self.logger_random = Logger("steps",
+                            *benchmark_logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
 
@@ -211,7 +226,7 @@ class AnyMDPGenerator(GeneratorBase):
         else:
             return 0
         
-    def in_context_learn_from_teacher(self, task_id=None):
+    def in_context_learn_from_teacher(self):
         # Task ID: retrieve the correpsonding teacher trajectory with task ID
         for folder in os.listdir(self.config.data_root):
             folder_path = os.path.join(self.config.data_root, folder)
@@ -235,6 +250,75 @@ class AnyMDPGenerator(GeneratorBase):
                         single_step=False)
         print("Finish Learning.")
 
+    def benchmark(self):
+        if self.config.env.lower().find("anymdp") >= 0:
+            self.env_benchmark  = self.env
+            model = AnyMDPSolverOpt(self.env_benchmark)
+            def benchmark_model(state):
+                return model.policy(state)
+            self.benchmark_model = benchmark_model
+        elif self.config.env.lower().find("lake") >= 0 or self.config.env.lower().find("lander") >= 0:
+            model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+            model_name = self.config.benchmark_model_name.lower()
+            if model_name not in model_classes:
+                raise ValueError("Unknown policy type: {}".format())
+            self.env_benchmark = DummyVecEnv([lambda: self.env])
+            model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env_benchmark)
+            def benchmark_model(state):
+                return model.predict(state)
+            self.benchmark_model = benchmark_model
+        else:
+            raise ValueError("Unsupported environment:", self.config.env)
+        
+        def run_benchmark(self, benchmark_model, logger_benchmark, stat_benchmark):
+            rew_arr = []
+            success_rate = []
+            step = 0
+            trail = 0
+            
+            is_succ = 0
+            is_fail = 0
+            
+            while trail < self.max_trails and step < self.max_steps:
+                done = False
+                new_state, _ = self.env_benchmark.reset()
+                epoch_start_step = step
+                
+                while not done:
+                    action = benchmark_model(new_state)
+                    new_state, new_reward, done, *_ = self.env_benchmark.step(action)
+                    
+                    rew_arr.append(new_reward)
+                    if done:
+                        rew_arr.append(0)
+                    
+                    succ_fail = self.is_success_fail(new_reward, done)
+                    is_succ += (succ_fail > 0)
+                    is_fail += (succ_fail < 0)
+                    
+                    success_rate.append(is_succ / (is_succ + is_fail + 1.0e-6))
+                    step += 1
+                    
+                    if step > self.max_steps:
+                        break
+                
+                trail += 1
+                logger_benchmark(step,
+                                numpy.mean(rew_arr[epoch_start_step:]),
+                                success_rate[-1])
+            
+            ds_rewards = downsample(rew_arr, self.config.downsample_length)
+            ds_success = downsample(success_rate, self.config.downsample_length)
+            
+            stat_benchmark.gather(self.device,
+                                reward=ds_rewards,
+                                success_rate=ds_success)
+        
+        run_benchmark(self.benchmark_model, self.logger_benchmark, self.stat_benchmark)
+        def random_model(state):
+            return random.randint(0,self.config.action_clip - 1)
+        run_benchmark(random_model, self.logger_random, self.stat_random)
+
     def __call__(self, epoch_id):
         obs_arr = []
         act_arr = []
@@ -251,7 +335,7 @@ class AnyMDPGenerator(GeneratorBase):
         self.model.eval()
 
         if self.config.learn_from_data:
-            self.in_context_learn_from_teacher(task_id=task_id)
+            self.in_context_learn_from_teacher(task_id)
 
         pred_state_dist = None
         is_succ = 0
@@ -302,8 +386,6 @@ class AnyMDPGenerator(GeneratorBase):
 
                 reward_error.append((new_reward - pred_reward) ** 2)
 
-                # Judge if success
-                
                 previous_state = new_state
                 
                 step += 1
@@ -326,22 +408,46 @@ class AnyMDPGenerator(GeneratorBase):
                          state_prediction=ds_state_err,
                          reward_prediction=ds_reward_err,
                          success_rate = ds_success)
+        if self.config.run_benchmark:
+            self.benchmark()
     
     def postprocess(self):
-        results=self.stat()
-        self.logger("Final_Result",
-                    results['reward']['mean'], 
-                    results['state_prediction']['mean'], 
-                    results['reward_prediction']['mean'],
-                    results['success_rate']['mean'])
-        if(self.config.has_attr("output")):
-            if not os.path.exists(self.config.output):
-                os.makedirs(self.config.output)
-            for key_name in results:
-                res_text = string_mean_var(self.config.downsample_length, results[key_name])
+        def save_results(results, prefix):
+            if self.config.has_attr("output"):
+                if not os.path.exists(self.config.output):
+                    os.makedirs(self.config.output)
+                
+                for key_name in results:
+                    res_text = string_mean_var(self.config.downsample_length, results[key_name])
+                    file_path = f'{self.config.output}/{prefix}_{key_name}.txt'
+                    
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    
+                    with open(file_path, 'w') as f_model:
+                        f_model.write(res_text)
 
-                file_path = f'{self.config.output}/result_{key_name}.txt'
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                with open(file_path, 'w') as f_model:
-                    f_model.write(res_text)
+        # Final Result
+        final_results = self.stat()
+        self.logger("Final_Result",
+                    final_results['reward']['mean'],
+                    final_results['state_prediction']['mean'],
+                    final_results['reward_prediction']['mean'],
+                    final_results['success_rate']['mean'])
+        save_results(final_results, "result")
+
+        # Benchmark Result
+        if self.config.run_benchmark:
+            benchmark_results = self.stat_benchmark()
+            self.logger("Benchmark_Result",
+                        benchmark_results['reward']['mean'],
+                        benchmark_results['success_rate']['mean'])
+            save_results(benchmark_results, "benchmark_result")
+
+            # Random Result
+            random_results = self.stat_random()
+            self.logger("Random_Result",
+                        random_results['reward']['mean'],
+                        random_results['success_rate']['mean'])
+            save_results(random_results, "random_result")
+                        

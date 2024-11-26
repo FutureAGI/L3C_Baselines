@@ -8,5 +8,4 @@
 	 --max_steps 16000 \
 	 --epochs 256 \
 	 --workers 64 \
-	 --offpolicy_labeling 1 \
-	 --min_state_space 8
+	 --offpolicy_labeling 1
