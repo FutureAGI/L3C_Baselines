@@ -63,13 +63,16 @@ class DistStatistics(object):
             while(fcount.ndim < fvalue.ndim):
                 fcount = fcount.unsqueeze(-1)
             
-            #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
-            gathered_tensors = [torch.zeros_like(fvalue) for _ in range(dist.get_world_size())]
-            gathered_counts = [torch.zeros_like(fcount) for _ in range(dist.get_world_size())]
+            with torch.no_grad():
+                #loss matrix dim is [2,T//downsample_length], first row is position_wise mean, second row is variance.
+                gathered_tensors = [torch.zeros_like(fvalue) for _ in range(dist.get_world_size())]
+                gathered_counts = [torch.zeros_like(fcount) for _ in range(dist.get_world_size())]
 
-            # gather values from all devices
-            dist.all_gather(gathered_tensors, fvalue.data)
-            dist.all_gather(gathered_counts, fcount.data)
+                #dist.barrier()
+
+                # gather values from all devices
+                dist.all_gather(gathered_tensors, fvalue.data)
+                dist.all_gather(gathered_counts, fcount.data)
 
             #If device num is 8, self._data[key] has 8 elements, each element is a tensor with shape [2,T//downsample_length]
             #Each element can be a length-1, length-2 tensors
@@ -87,11 +90,10 @@ class DistStatistics(object):
         # Pad if the sequences are not uniform, otherwise stack them
         if(need_padding):
             for i in range(len(self._data[key])):
-                print(self._data[key][i])
                 if(self._data[key][i].ndim < 1):
                     self._data[key][i] = self._data[key][i].unsqueeze(0)
             value = rnn_utils.pad_sequence(self._data[key], batch_first=True, padding_value=0)
-            count = rnn_utils.pad_sequence(self._count[key], batch_first=True, padding_value=0)
+            counts = rnn_utils.pad_sequence(self._count[key], batch_first=True, padding_value=0)
         else:
             value = torch.stack(self._data[key], dim=0)
             counts = torch.stack(self._count[key], dim=0)

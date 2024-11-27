@@ -67,7 +67,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
         main = False
 
     if(main):
-        log_debug("Main gpu", use_gpu, "rank:", rank, device)
+        log_debug("Main gpu", rank, device)
 
     # Create model and move it to GPU with id `gpu`
     model = model_type(config.model_config, verbose=main)
@@ -104,7 +104,9 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
                             extra_info=extra_info)
     generator.preprocess()
     for epoch_id in range(config.generator_config.epoch_numbers):
+        log_debug(f"GPU {rank} start processing epoch {epoch_id} ...")
         generator(epoch_id)
+        log_debug(f"... GPU {rank} finishes processing epoch {epoch_id}")
     generator.postprocess()
 
 class GeneratorRunner(Runner):
@@ -116,7 +118,7 @@ class GeneratorRunner(Runner):
                 args=(self.use_gpu, 
                       self.world_size, 
                       self.config, 
-                      0, # always use #0 as the main GPU
+                      'all', # always use #0 as the main GPU
                       model_type,
                       generator_class,
                       extra_info),
