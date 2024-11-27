@@ -170,7 +170,7 @@ generator_config:
     action_clip: 4
     epoch_numbers: 1
     downsample_length: 100 # For world model loss and reward value, position-wise analysis
-    downsample_trail: 10 # For success rate analysis, divide into "n" intervials
+    downsample_trail: 30 # For success rate analysis, window length.
     decoding_strategy:
         T_ini: 1.0
         T_fin: 0.1

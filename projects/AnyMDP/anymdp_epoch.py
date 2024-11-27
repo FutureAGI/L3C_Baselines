@@ -221,11 +221,17 @@ class AnyMDPGenerator(GeneratorBase):
             max_episode_steps=1000)
         return None
 
-    def is_success_fail(self, reward, done):
-        if(reward > 1.0e-3 and done):
-            return 1
-        elif(done):
-            return -1
+    def is_success_fail(self, reward):
+        if(self.config.env.lower().find("lake") >= 0):
+            if reward > 1.0e-3:
+                return 1
+            else:
+                return 0
+        elif(self.config.env.lower().find("lander") >= 0):
+            if reward >= 200:
+                return 1
+            else:
+                return 0
         else:
             return 0
         
@@ -343,6 +349,7 @@ class AnyMDPGenerator(GeneratorBase):
         pred_state_dist = None
         is_succ = 0
         is_fail = 0
+        success_rate_f = 0.0
         success_rate = []
 
         while trail < self.max_trails and step < self.max_steps:
@@ -386,12 +393,14 @@ class AnyMDPGenerator(GeneratorBase):
                         new_state,
                         self.env.action_space.n,
                         0)
-
-                succ_fail = self.is_success_fail(new_reward, done)
-                is_succ += (succ_fail > 0)
-                is_fail += (succ_fail < 0)
-                success_rate.append(is_succ / (is_succ + is_fail + 1.0e-6))
-
+                    # success rate
+                    succ_fail = self.is_success_fail(new_reward)
+                    if trail + 1 < self.config.downsample_trail:
+                        success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
+                    else:
+                        success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
+                
+                success_rate.append(success_rate_f)
                 reward_error.append((new_reward - pred_reward) ** 2)
 
                 previous_state = new_state
