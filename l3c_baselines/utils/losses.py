@@ -49,8 +49,19 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
     loss_array = metrics(out, **kwargs)
 
     if(reduce_dim is None): # if not reduced at all, then just return the 2-D loss array
-        mean_loss = loss_array
-        counts = torch.ones_like(loss_array)
+        if(loss_wht is None):
+            mean_loss = loss_array
+            counts = torch.ones_like(loss_array)
+        else:
+            if(loss_wht.ndim == 1):
+                assert loss_wht.shape[0] == loss_array.shape[1]
+                loss_wht = loss_wht.unsqueeze(0).repeat(loss_array.shape[0])
+                mean_loss = loss_array * loss_wht
+                counts = loss_wht.unsqueeze(0).repeat(loss_array.shape[0])
+            else:
+                assert loss_wht.ndim == 2 and loss_wht.shape == loss_array.shape
+                mean_loss = loss_array * loss_wht
+                counts = loss_wht
     else:
         assert reduce_dim in [0, 1], "reduce_dim should be either None, 0 or 1."
         if(loss_wht is None): # if loss_wht is None, then all samples are AVERAGED
