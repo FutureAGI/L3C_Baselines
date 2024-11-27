@@ -35,7 +35,7 @@ class DistStatistics(object):
                 fcount = count.clone().to(device)
             else:
                 fcount = torch.Tensor([count]).to(device)
-            assert fcount.ndim == 1，f"count must be float/int or a list"
+            assert fcount.ndim == 1, f"count must be float/int or a list"
             
             for key, value in kwargs.items():
                 # Reshape value to 1-dimensional tensor
@@ -53,9 +53,11 @@ class DistStatistics(object):
                 c_dim = fcount.numel()
                 v_dim = fvalue.numel()
                 if(c_dim == 1 and c_dim < v_dim):
-                    fcount = fcount.expand(v_dim).to(device)
+                    fcount_e = fcount.expand(v_dim).clone().to(device)
                 elif(c_dim > 1 and c_dim != v_dim):
                     log_fatal(f"dimension mismatch between statistic count {fcount.shape} and value {fvalue.shape}")
+                else:
+                    fcount_e = fcount.clone()
 
                 illegal = torch.isinf(fvalue) | torch.isnan(fvalue)
                 if illegal.any():
@@ -63,22 +65,22 @@ class DistStatistics(object):
                     fvalue = torch.where(illegal, fvalue, torch.zeros_like(fvalue))
                 
                 if(key not in self._count):
-                    self._sum[key] = fvalue * fcount
-                    self._sum2[key] = fvalue ** 2 * fcount
-                    self._count[key] = fcount
+                    self._sum[key] = fvalue * fcount_e
+                    self._sum2[key] = fvalue ** 2 * fcount_e
+                    self._count[key] = fcount_e
                 else:
                     if(self._count[key].shape[0] < v_dim):
                         expand_l = v_dim - self._count[key].shape[0]
                         self._count[key] = torch.cat((self._count[key], torch.zeros((expand_l,), device=device)), dim=0)
                         self._sum[key] = torch.cat((self._sum[key], torch.zeros((expand_l,), device=device)), dim=0)
                         self._sum2[key] = torch.cat((self._sum2[key], torch.zeros((expand_l,), device=device)), dim=0)
-                    self._sum[key][:v_dim] += fvalue * fcount
-                    self._sum2[key][:v_dim] += fvalue ** 2 * fcount
-                    self._count[key][:v_dim] += fcount
+                    self._sum[key][:v_dim] += fvalue * fcount_e
+                    self._sum2[key][:v_dim] += fvalue ** 2 * fcount_e
+                    self._count[key][:v_dim] += fcount_e
 
     def _stat(self, key):
         # Gather the statistics from different cards
-        max_length = torch.tensor([self._count[key].shape[0]], dtype=torch.int64)
+        max_length = torch.tensor([self._count[key].shape[0]], dtype=torch.int64, device=self._count[key].device)
         dist.all_reduce(max_length, op=dist.ReduceOp.MAX)
         max_length = max_length.item()
 
@@ -90,9 +92,9 @@ class DistStatistics(object):
             self._sum2[key] = torch.cat((self._sum2[key], torch.zeros((expand_l,), device=self._sum2[key].device)), dim=0)
         
         # Gather the statistics from different cards
-        sum_cnt = self._count[key].clone()
-        sum_mean = self._sum[key].clone()
-        sum_mean2 = self._sum2[key].clone()
+        sum_cnt = self._count[key].clone().to(self._count[key].device)
+        sum_mean = self._sum[key].clone().to(self._count[key].device)
+        sum_mean2 = self._sum2[key].clone().to(self._count[key].device)
 
         dist.all_reduce(sum_cnt, dist.ReduceOp.SUM)
         dist.all_reduce(sum_mean, dist.ReduceOp.SUM)

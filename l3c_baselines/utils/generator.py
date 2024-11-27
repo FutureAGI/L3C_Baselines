@@ -118,7 +118,7 @@ class GeneratorRunner(Runner):
                 args=(self.use_gpu, 
                       self.world_size, 
                       self.config, 
-                      'all', # always use #0 as the main GPU
+                      0, # always use #0 as the main GPU
                       model_type,
                       generator_class,
                       extra_info),
