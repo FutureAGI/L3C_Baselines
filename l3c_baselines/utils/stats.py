@@ -35,7 +35,9 @@ class DistStatistics(object):
                 fcount = count.clone().to(device)
             else:
                 fcount = torch.Tensor([count]).to(device)
-            assert fcount.ndim == 1, f"count must be float/int or a list"
+            assert fcount.ndim < 2, f"count must be float/int or a list"
+            if(fcount.ndim < 1):
+                fcount = fcount.unsqueeze(0)
             
             for key, value in kwargs.items():
                 # Reshape value to 1-dimensional tensor
