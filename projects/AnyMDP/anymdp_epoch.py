@@ -38,13 +38,13 @@ class AnyMDPEpoch:
                         "loss_worldmodel_reward", 
                         "loss_policymodel",
                         "entropy"]
-            self.stat = DistStatistics(*self.logger_keys[1:])
+            self.stat = DistStatistics()
             self.reduce = 1
         else:
             self.logger_keys = ["validation_state_pred", 
                         "validation_reward_pred", 
                         "validation_policy"]
-            self.stat = DistStatistics(*self.logger_keys)
+            self.stat = DistStatistics()
             self.reduce = None
             if(self.config.has_attr("downsample_length")):
                 self.downsample_length = self.config.downsample_length
@@ -180,7 +180,7 @@ class AnyMDPGenerator(GeneratorBase):
 
         logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
 
-        self.stat = DistStatistics(*logger_keys)
+        self.stat = DistStatistics()
         self.logger = Logger("steps",
                             *logger_keys, 
                             on=self.main, 

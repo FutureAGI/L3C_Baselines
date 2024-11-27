@@ -119,7 +119,7 @@ def run_epoch(
             lact = solveropt.policy(state)
         else:
             bact = solverots.policy(state)
-            lact = solverots.policy(state)
+            lact = bact
 
         next_state, reward, done, info = env.step(bact)
 
