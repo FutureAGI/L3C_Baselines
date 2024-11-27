@@ -38,7 +38,7 @@ class AnyMDPEpoch:
         self.DataType=AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
-                        "loss_worldmodel_states", 
+                        "loss_worldmodel_state", 
                         "loss_worldmodel_reward", 
                         "loss_policymodel",
                         "entropy"]
@@ -273,7 +273,7 @@ class AnyMDPGenerator(GeneratorBase):
         else:
             raise ValueError("Unsupported environment:", self.config.env)
         
-        def run_benchmark(self, benchmark_model, logger_benchmark, stat_benchmark):
+        def run_benchmark(benchmark_model, logger_benchmark, stat_benchmark):
             rew_arr = []
             success_rate = []
             step = 0
@@ -381,6 +381,11 @@ class AnyMDPGenerator(GeneratorBase):
                 if(done):
                     act_arr.append(self.env.action_space.n)
                     rew_arr.append(0)
+                    self.model.module.in_context_learn(
+                        None,
+                        new_state,
+                        self.env.action_space.n,
+                        0)
 
                 succ_fail = self.is_success_fail(new_reward, done)
                 is_succ += (succ_fail > 0)
@@ -442,14 +447,14 @@ class AnyMDPGenerator(GeneratorBase):
         # Benchmark Result
         if self.config.run_benchmark:
             benchmark_results = self.stat_benchmark()
-            self.logger("Benchmark_Result",
+            self.logger_benchmark("Benchmark_Result",
                         benchmark_results['reward']['mean'],
                         benchmark_results['success_rate']['mean'])
             save_results(benchmark_results, "benchmark_result")
 
             # Random Result
             random_results = self.stat_random()
-            self.logger("Random_Result",
+            self.logger_random("Random_Result",
                         random_results['reward']['mean'],
                         random_results['success_rate']['mean'])
             save_results(random_results, "random_result")

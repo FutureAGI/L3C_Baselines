@@ -179,4 +179,7 @@ generator_config:
     max_steps: 16000 # 
     learn_from_data: False # For lake4x4, use gen_gym_record.py to dump data
     data_root: [Path]
+    run_benchmark: False
+    benchmark_model_name: "ppo" # For gym
+    benchmark_model_save_path: [PATH] # For gym
     output: "./online_eval/"
