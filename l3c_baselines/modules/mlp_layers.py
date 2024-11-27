@@ -54,7 +54,10 @@ class ResidualMLPDecoder(nn.Module):
 
         output_type = config.output_type.lower()
         input_size = config.input_size
-        hidden_size = config.hidden_size
+        if(config.has_attr('hidden_size')):
+            hidden_size = config.hidden_size
+        else:
+            hidden_size = None
         dropout = config.dropout
         layer_norm = config.layer_norm
         residual_connect = config.residual_connect
