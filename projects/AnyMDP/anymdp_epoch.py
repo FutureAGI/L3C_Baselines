@@ -11,6 +11,7 @@ from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
 from l3c_baselines.dataloader import AnyMDPDataSet
 
 import gym
+import gymnasium
 import numpy
 import pickle
 import random
@@ -214,7 +215,7 @@ class AnyMDPGenerator(GeneratorBase):
         return task_id
 
     def task_sampler_lake(self, epoch_id=0):
-        self.env = gym.make(
+        self.env = gymnasium.make(
             'FrozenLake-v1', 
             map_name=self.config.env.replace("lake", ""), 
             is_slippery=True, 
@@ -290,11 +291,11 @@ class AnyMDPGenerator(GeneratorBase):
             
             while trail < self.max_trails and step < self.max_steps:
                 done = False
-                new_state, _ = self.env_benchmark.reset()
+                new_state, *_ = self.env_benchmark.reset()
                 epoch_start_step = step
                 
                 while not done:
-                    action = benchmark_model(new_state)
+                    action, *_ = benchmark_model(new_state)
                     new_state, new_reward, done, *_ = self.env_benchmark.step(action)
                     
                     rew_arr.append(new_reward)
@@ -347,8 +348,6 @@ class AnyMDPGenerator(GeneratorBase):
             self.in_context_learn_from_teacher(task_id)
 
         pred_state_dist = None
-        is_succ = 0
-        is_fail = 0
         success_rate_f = 0.0
         success_rate = []
 

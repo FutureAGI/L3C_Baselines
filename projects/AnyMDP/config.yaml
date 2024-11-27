@@ -138,6 +138,11 @@ train_config:
 
     seq_len: 16000
     seg_len: 4000
+    data_type:
+        prompt: Continuous
+        state: Discrete
+        action: Discrete
+        reward: Continuous
 
     lr: 2.0e-4
     lr_decay_interval: 2000
@@ -162,6 +167,11 @@ test_config:
     output: "./offline_eval/"
     seq_len: 16000
     seg_len: 4000
+    data_type:
+        prompt: Continuous
+        state: Discrete
+        action: Discrete
+        reward: Continuous
 
 generator_config:
     env: lake4x4 #lake4x4 / anymdp32x5
