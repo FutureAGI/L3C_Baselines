@@ -9,7 +9,10 @@ class MLPEncoder(nn.Module):
         super().__init__()
 
         input_size = config.input_size
-        hidden_size = config.hidden_size # Can be int or a list of ints
+        if(config.has_attr('hidden_size')):
+            hidden_size = config.hidden_size # Can be int or a list of ints
+        else:
+            hidden_size = None
         dropout = config.dropout
         input_type = config.input_type.lower()
 
@@ -22,7 +25,10 @@ class MLPEncoder(nn.Module):
             self.output_size = hidden_size
         elif(input_type.startswith("continuous")):
             self.is_continuous = True
-            if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
+            if(hidden_size is None):
+                self.output_size = input_size
+                self.encoder_layer = nn.Identity()
+            elif(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 layers = []
                 ph = input_size
                 for h in hidden_size[:-1]:
@@ -75,7 +81,11 @@ class ResidualMLPDecoder(nn.Module):
                 return nn.Sequential(*layers)
 
         self.residual_connect = residual_connect
-        if(residual_connect):
+        if(hidden_size is None):
+            self.decoder_pre = nn.Identity()
+            self.residual_connect = False
+            self.output_size = input_size
+        elif(residual_connect):
             if(isinstance(hidden_size, tuple) or isinstance(hidden_size, list)):
                 self.decoder_pre = get_layers([input_size] + list(hidden_size[:-1]) + [input_size], dropout)
                 self.decoder_post = get_layers([input_size, hidden_size[-1]], dropout)
@@ -105,4 +115,7 @@ class ResidualMLPDecoder(nn.Module):
         out = self.decoder_pre(src)
         if(self.residual_connect):
             out = self.decoder_post(out + src)
-        return self.decoder_output(out / T)
+        if(not self.is_continuous):
+            return self.decoder_output(out / T)
+        else:
+            return self.decoder_output(out)
