@@ -50,12 +50,12 @@ def load_model(model_name, save_path, env):
     
     return model_classes[model_name.lower()].load(f'{save_path}/model/{model_name.lower()}.zip', env=env)
 
-def produce_data(worker_id, shared_list, env_name, random_env, model_name, save_path, seg_len):
+def produce_data(args, worker_id, shared_list, seg_len):
     # Create environment
-    env = create_env(env_name, random_env)
+    env = create_env(args.env_name, args.random_env)
     env = DummyVecEnv([lambda: env])  # Wrap the environment as a vectorized environment
 
-    model = load_model(model_name, save_path, env)
+    model = load_model(args.model_name, args.save_path, env)
 
     state_list = []
     act_list = []
@@ -79,20 +79,25 @@ def produce_data(worker_id, shared_list, env_name, random_env, model_name, save_
             act_list.append(action)    # Append action taken
             reward_list.append(reward) # Append reward received
             
+            if done:
+                state_list.append(next_state)  # Append next state
+                act_list.append(args.action_done)    # Append action flag
+                reward_list.append(args.reward_done) # Append reward zero
+
             trail_reward += reward
             state = next_state
             step += 1
         task_count += 1
-        if(env_name.lower() == "lake"):
+        if(args.env_name.lower() == "lake"):
             if trail_reward > 0:
                 success_count += 1
                 total_action_count += step - step_trail_start
-        elif(env_name.lower() == "lander"):
+        elif(args.env_name.lower() == "lander"):
             if trail_reward > 200:
                 success_count += 1
                 total_action_count += step - step_trail_start
 
-    if(env_name.lower() == "lake" or env_name.lower() == "lander"):
+    if(args.env_name.lower() == "lake" or args.env_name.lower() == "lander"):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
     result = {
@@ -118,7 +123,7 @@ def generate_records(args, task_id):
 
         multiprocessing.set_start_method('spawn', force=True)
         process = multiprocessing.Process(target=produce_data, 
-                                          args=(worker_id, shared_list, args.env_name, args.random_env, args.policy_name, args.save_path,  worker_splits))
+                                          args=(args, worker_id, shared_list, worker_splits))
         processes.append(process)
         process.start()
 
@@ -138,13 +143,18 @@ def generate_records(args, task_id):
         merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
     merged_result["states"] = merged_result["states"][:args.n_seq_len]
     merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
-    merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
+    if args.env_name.lower() == "lander":
+        merged_result["rewards"] = np.multiply(merged_result["rewards"][:args.n_seq_len], 0.01)
+    else:
+        merged_result["rewards"] = merged_result["rewards"][:args.n_seq_len]
 
     file_path = f'{args.save_path}/data/record-{task_id:06d}'
     create_directory(file_path)
     np.save(f"{file_path}/observations.npy", merged_result["states"])  # Save state data
     np.save(f"{file_path}/actions_behavior.npy", merged_result["actions"])  # Save action data
     np.save(f"{file_path}/rewards.npy", merged_result["rewards"])  # Save reward data
+    np.save(f"{file_path}/actions_label.npy", merged_result["actions"])  # Save fake label data.
+
 
 
 
@@ -160,6 +170,9 @@ if __name__ == "__main__":
     parser.add_argument('--n_workers', type=int, default=1, help='Number of parallel workers for training.')
     parser.add_argument('--enable_load_model', type=str, default="False", help='Whether to load a pre-trained model.')
     parser.add_argument('--random_env', type=str, default="False", help='Random env.')
+    parser.add_argument('--action_done', type=int, default=4, help='Action when done.')
+    parser.add_argument('--reward_done', type=float, default=0.0, help='Reward when left.')
+
 
     args = parser.parse_args()
     args.enable_load_model = args.enable_load_model.lower() == "true"

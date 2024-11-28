@@ -11,6 +11,8 @@ N_SEQ_LEN=4000 # Maximum number of actions per sequence, default is 4000.
 N_WORKERS=10 # Number of parallel workers for segment data generation, default is 10
 ENABLE_LOAD_MODEL="False" # Whether to load a pre-trained model, default is False
 RANDOM_ENV="False" # Whether to use random environment, default is False
+ACTION_DONE=4 # Action when env return done, default is action_dim of env.
+REWARD_DONE=0.0 # Reward when env return done, default is 0.0
 
 # Run the gen_gym_record.py script
 python gen_gym_record.py \
@@ -23,3 +25,5 @@ python gen_gym_record.py \
     --n_workers $N_WORKERS \
     --enable_load_model $ENABLE_LOAD_MODEL \
     --random_env $RANDOM_ENV
+    --action_done $ACTION_DONE \
+    --reward_done $REWARD_DONE
