@@ -64,7 +64,7 @@ def run_epoch(
     solverneg = AnyPolicySolver(env)
 
     gamma = random.uniform(0.90, 0.99)
-    c = 0.001 * random.exponential(1.0)
+    c = 0.005 * random.exponential(1.0)
     alpha = 0.01 * random.exponential(1.0)
     max_steps_q = random.uniform(100, max_steps)
     solverots = AnyMDPSolverOTS(env, 
@@ -74,7 +74,7 @@ def run_epoch(
                                 max_steps=max_steps_q)
 
     gamma = random.uniform(0.90, 0.99)
-    c = 0.001 * random.exponential(1.0)
+    c = 0.005 * random.exponential(1.0)
     alpha = 0.01 * random.exponential(1.0)
     max_steps_q = random.uniform(100, max_steps)
     solverq = AnyMDPSolverQ(env, 
@@ -98,17 +98,18 @@ def run_epoch(
 
     def resample_solver():
         sel = random.random()
-        if(sel < 0.02):
+        if(sel < 0.05):
             return solveropt
-        elif(sel < 0.35):
+        elif(sel < 0.45):
             return solverots
-        elif(sel < 0.65):
+        elif(sel < 0.75):
             return solverq
         else:
             return solverneg
 
     solver = resample_solver()
     need_resample = (random.random() > 0.5)
+    resample_freq = random.random() * 0.05
 
     while steps <= max_steps:
         if(offpolicy_labeling):
@@ -144,7 +145,7 @@ def run_epoch(
             reward_list.append(0.0)
             steps += 1
             next_state, info = env.reset()
-            if(random.random() < 0.05 and need_resample):
+            if(random.random() < resample_freq and need_resample):
                 solver = resample_solver()
 
         state = next_state
