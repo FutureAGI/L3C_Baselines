@@ -78,7 +78,7 @@ class MazeDataSet(Dataset):
 # Test Maze Data Set
 if __name__=="__main__":
     data_path = sys.argv[1]
-    dataset = MazeDataSet(data_path, 1280, None, verbose=True)
+    dataset = MazeDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
     obs, bact, lact, bactv, lactv, rewards, bevs = dataset[0]
     print(obs.shape, bact.shape, lact.shape, bactv.shape, lactv.shape, rewards.shape, bevs.shape)

@@ -46,7 +46,7 @@ class LMDataSet(Dataset):
 # Test Maze Data Set
 if __name__=="__main__":
     data_path = sys.argv[1]
-    dataset = LMDataSet(data_path, 1280, None)
+    dataset = LMDataSet(data_path, 1280)
     print("The number of data is: %s" % len(dataset))
     fea, lab = dataset[0]
     print(fea.shape, lab.shape)
