@@ -15,6 +15,7 @@ model_config:
   action_dim: 5
   policy_loss_type: CrossEntropy
   rsa_type: sar  #psa/sar/psar/sa
+  frozen_modules: None #causal_model/s_encoder/s_decoder/a_encoder/a_decoder/r_encoder/r_decoder/p_encoder/p_decoder
 
   state_encode:
       input_type: Discrete
@@ -146,6 +147,9 @@ train_config:
     data_path: [Path]
     save_model_path: [Path]
     max_save_iterations: 1000
+
+    state_dropout: 0.0
+    reward_dropout: 0.0
 
     lossweight_policymodel: 0.2
     lossweight_worldmodel_states: 0.4
