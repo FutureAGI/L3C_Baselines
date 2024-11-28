@@ -8,13 +8,17 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.dataloader import AnyMDPDataSet
+from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
 import numpy
 import pickle
+import random
 from gym.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
+from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
+from stable_baselines3 import DQN, A2C, TD3, PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 def string_mean_var(downsample_length, res):
@@ -178,11 +182,25 @@ class AnyMDPGenerator(GeneratorBase):
         else:
             self.tasks = None
 
-        logger_keys = ["reward", "state_prediction", "reward_prediction", "success_rate"]
+        logger_keys = ["step", "reward", "state_prediction", "reward_prediction", "success_rate"]
+        benchmark_logger_keys = ["step", "reward", "success_rate"]
 
-        self.stat = DistStatistics()
-        self.logger = Logger("steps",
+        self.stat = DistStatistics(*logger_keys)
+        self.stat_benchmark = DistStatistics(*benchmark_logger_keys)
+        self.stat_random = DistStatistics(*benchmark_logger_keys)
+        self.logger = Logger("trail_idx",
+                            "total_steps",
                             *logger_keys, 
+                            on=self.main, 
+                            use_tensorboard=False)
+        self.logger_benchmark = Logger("trail_idx",
+                            "total_steps",
+                            *benchmark_logger_keys, 
+                            on=self.main, 
+                            use_tensorboard=False)
+        self.logger_random = Logger("trail_idx",
+                            "total_steps",
+                            *benchmark_logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
 
@@ -206,15 +224,21 @@ class AnyMDPGenerator(GeneratorBase):
             max_episode_steps=1000)
         return None
 
-    def is_success_fail(self, reward, done):
-        if(reward > 1.0e-3 and done):
-            return 1
-        elif(done):
-            return -1
+    def is_success_fail(self, reward):
+        if(self.config.env.lower().find("lake") >= 0):
+            if reward > 1.0e-3:
+                return 1
+            else:
+                return 0
+        elif(self.config.env.lower().find("lander") >= 0):
+            if reward >= 200:
+                return 1
+            else:
+                return 0
         else:
             return 0
         
-    def in_context_learn_from_teacher(self, task_id=None):
+    def in_context_learn_from_teacher(self):
         # Task ID: retrieve the correpsonding teacher trajectory with task ID
         for folder in os.listdir(self.config.data_root):
             folder_path = os.path.join(self.config.data_root, folder)
@@ -238,46 +262,143 @@ class AnyMDPGenerator(GeneratorBase):
                         single_step=False)
         print("Finish Learning.")
 
+    def benchmark(self):
+        if self.config.env.lower().find("anymdp") >= 0:
+            self.env_benchmark  = self.env
+            model = AnyMDPSolverOpt(self.env_benchmark)
+            def benchmark_model(state):
+                return model.policy(state)
+            self.benchmark_model = benchmark_model
+        elif self.config.env.lower().find("lake") >= 0 or self.config.env.lower().find("lander") >= 0:
+            self.env_benchmark  = self.env
+            model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+            model_name = self.config.benchmark_model_name.lower()
+            if model_name not in model_classes:
+                raise ValueError("Unknown policy type: {}".format())
+            model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env_benchmark)
+            def benchmark_model(state):
+                action, _ = model.predict(state)
+                return int(action)
+            self.benchmark_model = benchmark_model
+        else:
+            raise ValueError("Unsupported environment:", self.config.env)
+        
+        def run_benchmark(benchmark_model, logger_benchmark, stat_benchmark):
+            rew_stat = []
+            success_rate = []
+            step_trail = []
+            trail = 0
+            total_steps = 0
+            success_rate_f = 0.0
+            
+            while trail < self.max_trails:
+                step = 0
+                trail_reward = 0.0
+                done = False
+                new_state, *_ = self.env_benchmark.reset()
+                
+                while not done:
+                    action= benchmark_model(new_state)
+                    new_state, new_reward, done, *_ = self.env_benchmark.step(action)
+                    trail_reward += new_reward
+
+                    step += 1
+
+                    if done:
+                        # success rate
+                        succ_fail = self.is_success_fail(new_reward)
+                        if trail + 1 < self.config.downsample_trail:
+                            success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
+                        else:
+                            success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
+                        rew_stat.append(trail_reward / step)
+                        success_rate.append(success_rate_f)
+                        step_trail.append(step)
+                    
+                    if step > self.max_steps:
+                        print("Reach max_steps, break trail.")
+                        break
+                
+                trail += 1
+                total_steps += step
+                logger_benchmark(trail,
+                                total_steps,
+                                step_trail[-1],
+                                rew_stat[-1],
+                                success_rate[-1])
+            
+            ds_step_trail = downsample(step_trail, self.config.downsample_trail)
+            ds_rewards = downsample(rew_stat, self.config.downsample_trail)
+            ds_success = downsample(success_rate, self.config.downsample_trail)
+
+            stat_benchmark.gather(self.device,
+                                step=ds_step_trail,
+                                reward=ds_rewards,
+                                success_rate=ds_success)
+        
+        run_benchmark(self.benchmark_model, self.logger_benchmark, self.stat_benchmark)
+        def random_model(state):
+            return random.randint(0,self.config.action_clip - 1)
+        run_benchmark(random_model, self.logger_random, self.stat_random)
+
     def __call__(self, epoch_id):
+
+        task_id = self.task_sampler(epoch_id=epoch_id)
+
+        if not self.config.run_icl:
+            if self.config.run_benchmark:
+                print("Run Benchmark Only.")
+                self.benchmark()
+                return
+            else:
+                print("run_icl & run_benchmark both False, please check config.")
+                return
+        else:
+            if self.config.run_benchmark:
+                print("Run Benchmark & ICL")
+                self.benchmark()
+            else:
+                print("Run ICL Only.")
+        # Start ICL
         obs_arr = []
         act_arr = []
         rew_arr = []
         
         reward_error = []
         state_error = []
+        rew_stat = []
+        success_rate = []
+        step_trail = []
+        success_rate_f = 0.0
 
-        step = 0
         trail = 0
-
-        task_id = self.task_sampler(epoch_id=epoch_id)
+        total_step = 0
+        pred_state_dist = None
 
         self.model.eval()
 
         if self.config.learn_from_data:
-            self.in_context_learn_from_teacher(task_id=task_id)
+            self.in_context_learn_from_teacher()
 
-        pred_state_dist = None
-        is_succ = 0
-        is_fail = 0
-        success_rate = []
-
-        while trail < self.max_trails and step < self.max_steps:
+        while trail < self.max_trails:
+            step = 0
             done = False
+            trail_reward = 0.0
+            trail_obs_loss = 0.0
+            trail_reward_loss = 0.0
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
             if(pred_state_dist is not None):
-                state_error.append(-numpy.log(pred_state_dist[int(previous_state)].item()))
+                trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             
-            epoch_start_step = step
             while not done:
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     None,
                     previous_state,
-                    action_clip=self.config.action_clip,
                     temp=self._scheduler(step))
-                                
+                env_action = action % self.config.action_clip          
                 # interact with env
-                new_state, new_reward, done, *_ = self.env.step(action)
+                new_state, new_reward, done, *_ = self.env.step(env_action)
 
                 # collect data
                 act_arr.append(action)
@@ -293,58 +414,103 @@ class AnyMDPGenerator(GeneratorBase):
                     new_reward)
 
                 obs_arr.append(new_state) 
-                state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
-                if(done):
-                    act_arr.append(self.env.action_space.n)
-                    rew_arr.append(0)
-
-                succ_fail = self.is_success_fail(new_reward, done)
-                is_succ += (succ_fail > 0)
-                is_fail += (succ_fail < 0)
-                success_rate.append(is_succ / (is_succ + is_fail + 1.0e-6))
-
-                reward_error.append((new_reward - pred_reward) ** 2)
-
-                # Judge if success
-                
                 previous_state = new_state
-                
+
+                trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
+                trail_reward += new_reward
+                trail_reward_loss += (new_reward - pred_reward) ** 2
+
                 step += 1
+                if(done):
+                    act_arr.append(self.action_dim)
+                    rew_arr.append(0)
+                    self.model.module.in_context_learn(
+                        None,
+                        new_state,
+                        self.action_dim,
+                        0)
+                    # success rate
+                    succ_fail = self.is_success_fail(new_reward)
+                    if trail + 1 < self.config.downsample_trail:
+                        success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
+                    else:
+                        success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
+                    
+                    rew_stat.append(trail_reward / step)
+                    state_error.append(trail_obs_loss / step)
+                    reward_error.append(trail_reward / step)
+                    success_rate.append(success_rate_f)
+                    step_trail.append(step)
+
                 if(step > self.max_steps):
+                    print("Reach max steps, break trial.")
                     break
             trail += 1
-            self.logger(step,
-                        numpy.mean(rew_arr[epoch_start_step:]), 
-                        numpy.mean(state_error[epoch_start_step:]), 
-                        numpy.mean(reward_error[epoch_start_step:]),
+            total_step += step
+            self.logger(trail,
+                        total_step,
+                        step_trail[-1],
+                        rew_stat[-1], 
+                        state_error[-1], 
+                        reward_error[-1],
                         success_rate[-1])
 
-        ds_state_err = downsample(state_error, self.config.downsample_length)
-        ds_reward_err = downsample(reward_error, self.config.downsample_length)
-        ds_rewards = downsample(rew_arr, self.config.downsample_length)
-        ds_success = downsample(success_rate, self.config.downsample_length)
+        ds_state_err = downsample(state_error, self.config.downsample_trail)
+        ds_reward_err = downsample(reward_error, self.config.downsample_trail)
+        ds_rewards = downsample(rew_stat, self.config.downsample_trail)
+        ds_success = downsample(success_rate, self.config.downsample_trail)
+        ds_step_trail = downsample(step_trail, self.config.downsample_trail)
 
         self.stat.gather(self.device,
+                         step=ds_step_trail,
                          reward=ds_rewards,
                          state_prediction=ds_state_err,
                          reward_prediction=ds_reward_err,
                          success_rate = ds_success)
     
     def postprocess(self):
-        results=self.stat()
-        self.logger("Final_Result",
-                    results['reward']['mean'], 
-                    results['state_prediction']['mean'], 
-                    results['reward_prediction']['mean'],
-                    results['success_rate']['mean'])
-        if(self.config.has_attr("output")):
-            if not os.path.exists(self.config.output):
-                os.makedirs(self.config.output)
-            for key_name in results:
-                res_text = string_mean_var(self.config.downsample_length, results[key_name])
+        def save_results(results, prefix):
+            if self.config.has_attr("output"):
+                if not os.path.exists(self.config.output):
+                    os.makedirs(self.config.output)
+                
+                for key_name in results:
+                    res_text = string_mean_var(self.config.downsample_trail, results[key_name])
+                    file_path = f'{self.config.output}/{prefix}_{key_name}.txt'
+                    
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    
+                    with open(file_path, 'w') as f_model:
+                        f_model.write(res_text)
 
-                file_path = f'{self.config.output}/result_{key_name}.txt'
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                with open(file_path, 'w') as f_model:
-                    f_model.write(res_text)
+        # Final Result
+        final_results = self.stat()
+        self.logger("Final_Result",
+                    self.config.max_trails,
+                    final_results['step']['mean'],
+                    final_results['reward']['mean'],
+                    final_results['state_prediction']['mean'],
+                    final_results['reward_prediction']['mean'],
+                    final_results['success_rate']['mean'])
+        save_results(final_results, "result")
+
+        # Benchmark Result
+        if self.config.run_benchmark:
+            benchmark_results = self.stat_benchmark()
+            self.logger_benchmark("Benchmark_Result",
+                                self.config.max_trails,
+                                benchmark_results['step']['mean'],
+                                benchmark_results['reward']['mean'],
+                                benchmark_results['success_rate']['mean'])
+            save_results(benchmark_results, "benchmark_result")
+
+            # Random Result
+            random_results = self.stat_random()
+            self.logger_random("Random_Result",
+                                self.config.max_trails,
+                                random_results['step']['mean'],
+                                random_results['reward']['mean'],
+                                random_results['success_rate']['mean'])
+            save_results(random_results, "random_result")
+                        
