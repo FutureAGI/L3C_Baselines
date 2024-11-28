@@ -43,7 +43,6 @@ def EpochManager(cls):
                 assert DataType is not None, f"either dataloader or DataType must be specified."
                 dataset = DataType(self.config.data_path, 
                                     self.config.seq_len,
-                                    self.config.data_type, 
                                     verbose=self.main)
                 self.dataloader = PrefetchDataLoader(dataset, batch_size=self.config.batch_size, 
                                             rank=self.rank, world_size=self.world_size)

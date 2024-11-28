@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class MazeDataSet(Dataset):
-    def __init__(self, directory, time_step, data_type, verbose=False):
+    def __init__(self, directory, time_step, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
