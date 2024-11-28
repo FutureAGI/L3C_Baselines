@@ -26,7 +26,7 @@ class AnyPolicySolver(object):
             raise Exception("AnyMDPEnv is not initialized by 'set_task', must call set_task first")
         self.n_actions = env.action_space.n
         self.n_states = env.observation_space.n
-        ent_1 = numpy.random.exponential(5.0)
+        ent_1 = numpy.random.exponential(2.0)
         ent_2 = numpy.random.exponential(1.0e-5)
         self.policy_matrix = numpy.random.normal(size=(self.n_states, self.n_actions), scale=ent_1)
         self.policy_matrix = numpy.exp(self.policy_matrix)
