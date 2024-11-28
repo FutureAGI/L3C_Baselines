@@ -18,11 +18,12 @@ class GeneratorBase(object):
         self.T_ini = self.config.decoding_strategy.T_ini
         self.T_fin = self.config.decoding_strategy.T_fin
         self.T_decay_type = self.config.decoding_strategy.decay_type
+        self.T_step = self.config.decoding_strategy.T_step
         self.max_steps = self.config.max_steps
         self.max_trails = self.config.max_trails
 
-        self.dT_linear = (self.T_fin - self.T_ini) / self.max_steps
-        self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.max_steps)
+        self.dT_linear = (self.T_fin - self.T_ini) / self.T_step
+        self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.T_step)
 
     def _scheduler(self, step, type=None):
         # A inner built scheduler for decoding strategy
@@ -96,6 +97,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
     generator=generator_class(run_name=config.run_name, 
                             model=model, 
                             config=config.generator_config,
+                            action_dim=config.model_config.action_dim,
                             rank=rank,
                             world_size=world_size,
                             device_type=device_type,

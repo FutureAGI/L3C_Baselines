@@ -8,7 +8,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.dataloader import AnyMDPDataSet
+from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
 import gymnasium
@@ -289,7 +289,7 @@ class AnyMDPGenerator(GeneratorBase):
             is_succ = 0
             is_fail = 0
             
-            while trail < self.max_trails and step < self.max_steps:
+            while trail < self.max_trails:
                 done = False
                 new_state, *_ = self.env_benchmark.reset()
                 epoch_start_step = step
@@ -310,6 +310,7 @@ class AnyMDPGenerator(GeneratorBase):
                     step += 1
                     
                     if step > self.max_steps:
+                        print("Reach max_steps, break trail.")
                         break
                 
                 trail += 1
@@ -330,6 +331,24 @@ class AnyMDPGenerator(GeneratorBase):
         run_benchmark(random_model, self.logger_random, self.stat_random)
 
     def __call__(self, epoch_id):
+
+        task_id = self.task_sampler(epoch_id=epoch_id)
+
+        if not self.config.run_icl:
+            if self.config.run_benchmark:
+                print("Run Benchmark Only.")
+                self.benchmark()
+                return
+            else:
+                print("run_icl & run_benchmark both False, please check config.")
+                return
+        else:
+            if self.config.run_benchmark:
+                print("Run Benchmark & ICL")
+                self.benchmark()
+            else:
+                print("Run ICL Only.")
+        # Start ICL
         obs_arr = []
         act_arr = []
         rew_arr = []
@@ -340,18 +359,16 @@ class AnyMDPGenerator(GeneratorBase):
         step = 0
         trail = 0
 
-        task_id = self.task_sampler(epoch_id=epoch_id)
-
         self.model.eval()
 
         if self.config.learn_from_data:
-            self.in_context_learn_from_teacher(task_id)
+            self.in_context_learn_from_teacher()
 
         pred_state_dist = None
         success_rate_f = 0.0
         success_rate = []
 
-        while trail < self.max_trails and step < self.max_steps:
+        while trail < self.max_trails:
             done = False
             previous_state, _ = self.env.reset()
             obs_arr.append(previous_state)
@@ -359,15 +376,17 @@ class AnyMDPGenerator(GeneratorBase):
                 state_error.append(-numpy.log(pred_state_dist[int(previous_state)].item()))
             
             epoch_start_step = step
+            trail_reward = 0.0
+            trail_obs_loss = 0.0
+            trail_reward_loss = 0.0
             while not done:
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     None,
                     previous_state,
-                    action_clip=self.config.action_clip,
                     temp=self._scheduler(step))
-                                
+                env_action = action % self.config.action_clip          
                 # interact with env
-                new_state, new_reward, done, *_ = self.env.step(action)
+                new_state, new_reward, done, *_ = self.env.step(env_action)
 
                 # collect data
                 act_arr.append(action)
@@ -383,14 +402,20 @@ class AnyMDPGenerator(GeneratorBase):
                     new_reward)
 
                 obs_arr.append(new_state) 
-                state_error.append(-numpy.log(pred_state_dist[int(new_state)].item()))
+                previous_state = new_state
+
+                trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
+                trail_reward += new_reward
+                trail_reward_loss += (new_reward - pred_reward) ** 2
+
+                step += 1
                 if(done):
-                    act_arr.append(self.env.action_space.n)
+                    act_arr.append(self.action_dim)
                     rew_arr.append(0)
                     self.model.module.in_context_learn(
                         None,
                         new_state,
-                        self.env.action_space.n,
+                        self.action_dim,
                         0)
                     # success rate
                     succ_fail = self.is_success_fail(new_reward)
@@ -398,34 +423,32 @@ class AnyMDPGenerator(GeneratorBase):
                         success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                     else:
                         success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
-                
-                success_rate.append(success_rate_f)
-                reward_error.append((new_reward - pred_reward) ** 2)
+                    
+                    rew_arr.append(trail_reward / (step - epoch_start_step))
+                    state_error.append(trail_obs_loss / (step - epoch_start_step))
+                    reward_error.append(trail_reward / (step - epoch_start_step))
+                    success_rate.append(success_rate_f)
 
-                previous_state = new_state
-                
-                step += 1
                 if(step > self.max_steps):
+                    print("Reach max steps, break trial.")
                     break
             trail += 1
             self.logger(step,
-                        numpy.mean(rew_arr[epoch_start_step:]), 
-                        numpy.mean(state_error[epoch_start_step:]), 
-                        numpy.mean(reward_error[epoch_start_step:]),
+                        rew_arr[-1], 
+                        state_error[-1], 
+                        reward_error[-1],
                         success_rate[-1])
 
-        ds_state_err = downsample(state_error, self.config.downsample_length)
-        ds_reward_err = downsample(reward_error, self.config.downsample_length)
-        ds_rewards = downsample(rew_arr, self.config.downsample_length)
-        ds_success = downsample(success_rate, self.config.downsample_length)
+        # ds_state_err = downsample(state_error, self.config.downsample_trail)
+        # ds_reward_err = downsample(reward_error, self.config.downsample_trail)
+        # ds_rewards = downsample(rew_arr, self.config.downsample_trail)
+        # ds_success = downsample(success_rate, self.config.downsample_trail)
 
         self.stat.gather(self.device,
-                         reward=ds_rewards,
-                         state_prediction=ds_state_err,
-                         reward_prediction=ds_reward_err,
-                         success_rate = ds_success)
-        if self.config.run_benchmark:
-            self.benchmark()
+                         reward=rew_arr,
+                         state_prediction=state_error,
+                         reward_prediction=reward_error,
+                         success_rate = success_rate)
     
     def postprocess(self):
         def save_results(results, prefix):

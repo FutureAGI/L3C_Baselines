@@ -138,11 +138,6 @@ train_config:
 
     seq_len: 16000
     seg_len: 4000
-    data_type:
-        prompt: Continuous
-        state: Discrete
-        action: Discrete
-        reward: Continuous
 
     lr: 2.0e-4
     lr_decay_interval: 2000
@@ -167,11 +162,6 @@ test_config:
     output: "./offline_eval/"
     seq_len: 16000
     seg_len: 4000
-    data_type:
-        prompt: Continuous
-        state: Discrete
-        action: Discrete
-        reward: Continuous
 
 generator_config:
     env: lake4x4 #lake4x4 / anymdp32x5
@@ -184,11 +174,13 @@ generator_config:
     decoding_strategy:
         T_ini: 1.0
         T_fin: 0.1
+        T_step: 16000
         decay_type: Linear  # Exponential
     max_trails: 1000 # will top either with max_trails or max_steps
-    max_steps: 16000 # 
+    max_steps: 200 # max steps for each trails
     learn_from_data: False # For lake4x4, use gen_gym_record.py to dump data
     data_root: [Path]
+    run_icl: True
     run_benchmark: False
     benchmark_model_name: "ppo" # For gym
     benchmark_model_save_path: [PATH] # For gym
