@@ -45,7 +45,7 @@ class MazeEpochVAE:
                                                     self.config.lambda_value)
         # use customized dataloader
         self.dataloader = PrefetchDataLoader(
-            MazeDataSet(self.config.data_path, self.config.seq_len_vae, None, verbose=self.main),
+            MazeDataSet(self.config.data_path, self.config.seq_len_vae, verbose=self.main),
             batch_size=self.config.batch_size_vae,
             rank=self.rank,
             world_size=self.world_size
@@ -157,7 +157,7 @@ class MazeEpochCausal:
     def preprocess(self):
         # use customized dataloader
         self.dataloader = PrefetchDataLoader(
-            MazeDataSet(self.config.data_path, self.config.seq_len_causal, None, verbose=self.main),
+            MazeDataSet(self.config.data_path, self.config.seq_len_causal, verbose=self.main),
             batch_size=self.config.batch_size_causal,
             rank=self.rank,
             world_size=self.world_size
