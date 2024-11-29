@@ -26,7 +26,7 @@ class AnyPolicySolver(object):
             raise Exception("AnyMDPEnv is not initialized by 'set_task', must call set_task first")
         self.n_actions = env.action_space.n
         self.n_states = env.observation_space.n
-        ent_1 = numpy.random.exponential(5.0)
+        ent_1 = numpy.random.exponential(2.0)
         ent_2 = numpy.random.exponential(1.0e-5)
         self.policy_matrix = numpy.random.normal(size=(self.n_states, self.n_actions), scale=ent_1)
         self.policy_matrix = numpy.exp(self.policy_matrix)
@@ -64,9 +64,14 @@ def run_epoch(
     solverneg = AnyPolicySolver(env)
 
     gamma = random.uniform(0.90, 0.99)
-    c = 0.005 * random.exponential(1.0)
-    alpha = 0.01 * random.exponential(1.0)
-    max_steps_q = random.uniform(100, max_steps)
+    if(random.random() < 0.3):
+        c = 0.005
+        alpha = 0.01
+        max_steps_q = max_steps
+    else:
+        c = 0.005 * random.exponential(1.0)
+        alpha = 0.01 * random.exponential(1.0)
+        max_steps_q = random.uniform(100, max_steps)
     solverots = AnyMDPSolverOTS(env, 
                                 gamma=gamma,
                                 c=c,
@@ -74,9 +79,14 @@ def run_epoch(
                                 max_steps=max_steps_q)
 
     gamma = random.uniform(0.90, 0.99)
-    c = 0.005 * random.exponential(1.0)
-    alpha = 0.01 * random.exponential(1.0)
-    max_steps_q = random.uniform(100, max_steps)
+    if(random.random() < 0.3):
+        c = 0.005
+        alpha = 0.01
+        max_steps_q = max_steps
+    else:
+        c = 0.005 * random.exponential(1.0)
+        alpha = 0.01 * random.exponential(1.0)
+        max_steps_q = random.uniform(100, max_steps)
     solverq = AnyMDPSolverQ(env, 
                                 gamma=gamma,
                                 c=c,
@@ -98,9 +108,9 @@ def run_epoch(
 
     def resample_solver():
         sel = random.random()
-        if(sel < 0.05):
+        if(sel < 0.10):
             return solveropt
-        elif(sel < 0.45):
+        elif(sel < 0.50):
             return solverots
         elif(sel < 0.75):
             return solverq

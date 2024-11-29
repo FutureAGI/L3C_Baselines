@@ -400,6 +400,10 @@ class AnyMDPGenerator(GeneratorBase):
                 # interact with env
                 new_state, new_reward, done, *_ = self.env.step(env_action)
 
+                # Reward Shaping
+                if(done and new_reward < 0.5):
+                    new_reward = -0.2
+
                 # collect data
                 act_arr.append(action)
                 rew_arr.append(new_reward)
@@ -423,12 +427,12 @@ class AnyMDPGenerator(GeneratorBase):
                 step += 1
                 if(done):
                     act_arr.append(self.action_dim)
-                    rew_arr.append(0)
+                    rew_arr.append(0.0)
                     self.model.module.in_context_learn(
                         None,
                         new_state,
                         self.action_dim,
-                        0)
+                        0.0)
                     # success rate
                     succ_fail = self.is_success_fail(new_reward)
                     if trail + 1 < self.config.downsample_trail:
