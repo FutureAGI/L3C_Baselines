@@ -14,7 +14,11 @@ from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt
 from l3c.utils import pseudo_random_seed
-from data.anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
+
+current_folder = os.path.dirname(os.path.abspath(__file__))
+if current_folder not in sys.path:
+    sys.path.append(current_folder)
+from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
 
 
 def run_epoch(
