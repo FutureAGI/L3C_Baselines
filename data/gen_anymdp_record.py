@@ -12,9 +12,13 @@ import pickle
 import random as rnd
 from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler
+from l3c.anymdp import AnyMDPSolverOpt
 from l3c.utils import pseudo_random_seed
-from l3c.anymdp_solver import AnyMDPSolverOpt
-from .anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
+
+current_folder = os.path.dirname(os.path.abspath(__file__))
+if current_folder not in sys.path:
+    sys.path.append(current_folder)
+from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
 
 
 def run_epoch(
@@ -44,7 +48,7 @@ def run_epoch(
     solverots = AnyMDPOTSNoiseDistiller(env, max_steps=max_steps)
     solverq = AnyMDPQNoiseDistiller(env, max_steps=max_steps)
     solverotsopt = AnyMDPOTSOpter(env, solver_opt=solveropt, max_steps=max_steps)
-    solveroptnoise = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt, max_steps=max_steps)
+    solveroptnoise = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt)
     behavior_list = [solverneg, solverots, solverq, solverotsopt, solveroptnoise]
 
     state, info = env.reset()
