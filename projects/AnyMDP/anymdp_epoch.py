@@ -390,12 +390,13 @@ class AnyMDPGenerator(GeneratorBase):
             obs_arr.append(previous_state)
             if(pred_state_dist is not None):
                 trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
+            temp = self._scheduler(trail)
             
             while not done:
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     None,
                     previous_state,
-                    temp=self._scheduler(step))
+                    temp=temp)
                 env_action = action % self.config.action_clip          
                 # interact with env
                 new_state, new_reward, done, *_ = self.env.step(env_action)
