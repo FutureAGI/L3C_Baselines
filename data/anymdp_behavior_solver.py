@@ -41,11 +41,11 @@ class AnyPolicySolver(object):
     
 class AnyMDPOptNoiseDistiller(object):
     def __init__(self, env, opt_solver=None, noise_start=1.0, noise_decay=None):
-        super().__init__(env)
         self.noise = noise_start
         self.nstate = env.observation_space.n
         self.naction = env.action_space.n
         self.opt_solver = opt_solver
+        self.noise_decay = random.uniform(0.0, 1.0 / (self.nstate * self.naction))
     
     def learner(self, *args, **kwargs):
         self.noise -= self.noise_decay
