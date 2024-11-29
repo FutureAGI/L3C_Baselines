@@ -61,3 +61,117 @@ def downsample(x, downsample_length, axis=-1):
             add_x = numpy.mean(x[tuple(slc)], axis=axis, keepdims=True)
             ds_x = numpy.concatenate((ds_x, add_x), axis=axis)
     return ds_x
+
+class MapStateToDiscrete:
+    def __init__(self, env_name):
+        self.env_name = env_name.lower()
+        
+        if self.env_name.find("pendulum") >= 0:
+            self.map_state_to_discrete_func = self._map_state_to_discrete_pendulum
+        elif self.env_name.find("mountaincar") >= 0:
+            self.map_state_to_discrete_func = self._map_state_to_discrete_mountaincar
+        else:
+            raise ValueError(f"Unsupported environment: {env_name}")
+    
+    def map_to_discrete(self, value, min_val, max_val, n_interval):
+        """
+        Maps a continuous value to a discrete integer.
+
+        Parameters:
+        value (float): The continuous value to be mapped.
+        min_val (float): The minimum value of the continuous range.
+        max_val (float): The maximum value of the continuous range.
+        n_interval (int): The number of intervals.
+
+        Returns:
+        int: The mapped discrete integer [0, n_interval - 1].
+        """
+        # Create bin edges
+        bins = numpy.linspace(min_val, max_val, n_interval + 1)
+        
+        # Clip the value within the range [min_val, max_val]
+        clipped_value = numpy.clip(value, min_val, max_val)
+        
+        # Digitize the clipped value to get the discrete integer
+        discrete_value = numpy.digitize(clipped_value, bins) - 1
+        
+        # Ensure the discrete value is within the range [0, num_bins-1]
+        return numpy.clip(discrete_value, 0, n_interval - 1)
+    
+    def _map_state_to_discrete_pendulum(self, state):
+        """
+        Maps a state array to a discrete integer for Pendulum-v1.
+
+        Parameters:
+        state (numpy.ndarray): An array containing cos(theta), sin(theta), and speed.
+
+        Returns:
+        int: The discretized state integer.
+        """
+        # Extract cos_theta and sin_theta
+        cos_theta = state[0]
+        sin_theta = state[1]
+        
+        # Calculate theta using atan2 to get the correct quadrant
+        theta = numpy.arctan2(sin_theta, cos_theta)
+        
+        # Map theta from [-pi, pi] to [0, 2*pi]
+        if theta < 0:
+            theta += 2 * numpy.pi
+        
+        # Define the range and number of intervals for theta
+        theta_min, theta_max = 0, 2 * numpy.pi
+        n_interval_theta = 8
+        
+        # Use the helper function to map theta
+        theta_discrete = self.map_to_discrete(theta, theta_min, theta_max, n_interval_theta)
+        
+        # Define the range and number of intervals for speed
+        speed_min, speed_max = -8.0, 8.0
+        n_interval_speed = 8
+        
+        # Use the helper function to map speed
+        speed_discrete = self.map_to_discrete(state[2], speed_min, speed_max, n_interval_speed)
+        
+        # Calculate the discretized state
+        state_discrete = n_interval_theta * theta_discrete + speed_discrete
+        
+        return state_discrete
+    
+    def _map_state_to_discrete_mountaincar(self, state):
+        """
+        Maps a state array to a discrete integer for MountainCar-v0.
+
+        Parameters:
+        state (numpy.ndarray): An array containing position and velocity.
+
+        Returns:
+        int: The discretized state integer.
+        """
+        # Define the ranges and number of intervals for position and velocity
+        position_min, position_max = -1.2, 0.6
+        n_interval_position = 8
+        
+        velocity_min, velocity_max = -0.07, 0.07
+        n_interval_velocity = 8
+        
+        # Use the helper function to map position and velocity
+        position_discrete = self.map_to_discrete(state[0], position_min, position_max, n_interval_position)
+        velocity_discrete = self.map_to_discrete(state[1], velocity_min, velocity_max, n_interval_velocity)
+        
+        # Calculate the discretized state
+        state_discrete = 8 * position_discrete + velocity_discrete
+        
+        return state_discrete
+    
+    def map_state_to_discrete(self, state):
+        """
+        Maps a state array to a discrete integer based on the environment.
+
+        Parameters:
+        state (numpy.ndarray): An array containing the state variables of the environment.
+
+        Returns:
+        int: The discretized state integer.
+        """
+        return self.map_state_to_discrete_func(state)
