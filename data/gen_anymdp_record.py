@@ -9,37 +9,12 @@ import numpy
 import argparse
 import multiprocessing
 import pickle
-import l3c.mazeworld
 import random as rnd
 from numpy import random
 from l3c.anymdp import AnyMDPTaskSampler
-from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.utils import pseudo_random_seed
-
-
-class AnyPolicySolver(object):
-    """
-    Sample Any Policy for AnyMDP
-    """
-    def __init__(self, env):
-        if(not env.task_set):
-            raise Exception("AnyMDPEnv is not initialized by 'set_task', must call set_task first")
-        self.n_actions = env.action_space.n
-        self.n_states = env.observation_space.n
-        ent_1 = numpy.random.exponential(2.0)
-        ent_2 = numpy.random.exponential(1.0e-5)
-        self.policy_matrix = numpy.random.normal(size=(self.n_states, self.n_actions), scale=ent_1)
-        self.policy_matrix = numpy.exp(self.policy_matrix)
-        self.policy_matrix /= numpy.sum(self.policy_matrix, axis=1, keepdims=True)
-        self.policy_transfer = numpy.eye(self.n_actions, self.n_actions) + numpy.random.normal(scale=ent_2, size=(self.n_actions, self.n_actions))
-        self.policy_transfer = numpy.clip(self.policy_transfer, 0, 1)
-        self.policy_transfer = self.policy_transfer / numpy.sum(self.policy_transfer, axis=1, keepdims=True)
-
-    def learner(self, *args, **kwargs):
-        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer)
-
-    def policy(self, state):
-        return numpy.random.choice(self.n_actions, size=1, p=self.policy_matrix[state])[0]
+from l3c.anymdp_solver import AnyMDPSolverOpt
+from .anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
 
 
 def run_epoch(
@@ -55,81 +30,48 @@ def run_epoch(
     nstate = env.observation_space.n
     naction = env.action_space.n
 
+    # Data Storage
     state_list = list()
     lact_list = list()
     bact_list = list()
     reward_list = list()
     
+    # Referrence Policies
     solveropt = AnyMDPSolverOpt(env)
+
+    # List of Behavior Policies
     solverneg = AnyPolicySolver(env)
-
-    gamma = random.uniform(0.90, 0.99)
-    if(random.random() < 0.3):
-        c = 0.005
-        alpha = 0.01
-        max_steps_q = max_steps
-    else:
-        c = 0.005 * random.exponential(1.0)
-        alpha = 0.01 * random.exponential(1.0)
-        max_steps_q = random.uniform(100, max_steps)
-    solverots = AnyMDPSolverOTS(env, 
-                                gamma=gamma,
-                                c=c,
-                                alpha=alpha,
-                                max_steps=max_steps_q)
-
-    gamma = random.uniform(0.90, 0.99)
-    if(random.random() < 0.3):
-        c = 0.005
-        alpha = 0.01
-        max_steps_q = max_steps
-    else:
-        c = 0.005 * random.exponential(1.0)
-        alpha = 0.01 * random.exponential(1.0)
-        max_steps_q = random.uniform(100, max_steps)
-    solverq = AnyMDPSolverQ(env, 
-                                gamma=gamma,
-                                c=c,
-                                alpha=alpha,
-                                max_steps=max_steps_q)
+    solverots = AnyMDPOTSNoiseDistiller(env, max_steps=max_steps)
+    solverq = AnyMDPQNoiseDistiller(env, max_steps=max_steps)
+    solverotsopt = AnyMDPOTSOpter(env, solver_opt=solveropt, max_steps=max_steps)
+    solveroptnoise = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt, max_steps=max_steps)
+    behavior_list = [solverneg, solverots, solverq, solverotsopt, solveroptnoise]
 
     state, info = env.reset()
 
     ppl_sum = []
     mse_sum = []
 
-    dstep = 0.05 / (nstate * naction) * (random.random() + 0.01)
-    start = min(random.exponential(1.0), 1.0)
-    end = random.uniform(0, start)
-    
-    # Noise Distilling
-    random_scheduler = numpy.clip(start - numpy.arange(max_steps + 1) * dstep,
-                                 end, 1.0)
+    solver = random.choice(behavior_list)
+    need_resample = (random.random() > 0.60)
+    resample_freq = random.random() * 0.05
+
+    def learn(state, bact, next_state, reward, done):
+        for solver in behavior_list:
+            solver.learner(state, bact, next_state, reward, done)
 
     def resample_solver():
-        sel = random.random()
-        if(sel < 0.10):
-            return solveropt
-        elif(sel < 0.50):
-            return solverots
-        elif(sel < 0.75):
-            return solverq
+        if(need_resample and random.random() < resample_freq):
+            return random.choice(behavior_list)
         else:
-            return solverneg
-
-    solver = resample_solver()
-    need_resample = (random.random() > 0.5)
-    resample_freq = random.random() * 0.05
+            return solver
 
     while steps <= max_steps:
         if(offpolicy_labeling):
-            if(random.random() < random_scheduler[steps]):
-                bact = random.choice(range(naction))
-            else:
-                bact = solver.policy(state)
+            bact = solver.policy(state)
             lact = solveropt.policy(state)
         else:
-            bact = solverots.policy(state)
+            bact = solverotsopt.policy(state)
             lact = bact
 
         next_state, reward, done, info = env.step(bact)
@@ -139,9 +81,7 @@ def run_epoch(
         ppl_sum.append(ppl)
         mse_sum.append(mse)
 
-        solverots.learner(state, bact, next_state, reward, done)
-        solverq.learner(state, bact, next_state, reward, done)
-        solverneg.learner()
+        learn(state, bact, next_state, reward, done)
 
         state_list.append(state)
         bact_list.append(bact)
@@ -155,8 +95,7 @@ def run_epoch(
             reward_list.append(0.0)
             steps += 1
             next_state, info = env.reset()
-            if(random.random() < resample_freq and need_resample):
-                solver = resample_solver()
+            solver = resample_solver()
 
         state = next_state
         steps += 1
