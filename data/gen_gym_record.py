@@ -57,6 +57,14 @@ def load_model(model_name, save_path, env):
     
     return model_classes[model_name.lower()].load(f'{save_path}/model/{model_name.lower()}.zip', env=env)
 
+def reset_env(env, args):
+    if args.env_name.lower().find("pendulum") >= 0:
+        state, *_ = env.reset(seed=123, options={"low": -0.7, "high": 0.5})
+    elif args.env_name.lower().find("mountaincar") >= 0:
+        state, *_ = env.reset(seed=123, options={"x_init": np.pi/2, "y_init": 0.5})
+    else:
+        state, *_ = env.reset()
+    return state
 def produce_data(args, worker_id, shared_list, seg_len):
     # Create environment
     env = create_env(args.env_name, args.random_env)
@@ -81,12 +89,7 @@ def produce_data(args, worker_id, shared_list, seg_len):
     step = 0
     while step < seg_len:
         trail_reward = 0
-        if args.env_name.lower().find("pendulum") >= 0:
-            state, *_ = env.reset(seed=123, options={"low": -0.7, "high": 0.5})
-        elif args.env_name.lower().find("mountaincar") >= 0:
-            state, *_ = env.reset(seed=123, options={"x_init": np.pi/2, "y_init": 0.5})
-        else:
-            state, *_ = env.reset()
+        reset_env(env, args)  # Reset environment
         done = False
         step_trail_start = step
         while not done:
@@ -113,7 +116,7 @@ def produce_data(args, worker_id, shared_list, seg_len):
                 done = True
             elif args.env_name.lower().find("mountaincar") >=0 and next_state[0]>=0.5:
                 done = True
-                
+
             if done:
                 if args.save_state_discrete:
                     state_list.append(map_state_to_discrete(next_state))  # Append next state
