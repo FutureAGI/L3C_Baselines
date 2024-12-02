@@ -31,7 +31,7 @@ def create_env(env_name, randon_env):
         env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
         return env
     elif(env_name.lower() == "mountaincar"):
-        env = gym.make("MountainCar-v0", render_mode="rgb_array", goal_velocity=0.1)
+        env = gym.make("MountainCar-v0", render_mode="rgb_array")
         return env
     else:
         raise ValueError("Unknown env name: {}".format(env_name))

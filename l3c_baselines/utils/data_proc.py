@@ -71,6 +71,7 @@ class MapStateToDiscrete:
         elif self.env_name.find("mountaincar") >= 0:
             self.map_state_to_discrete_func = self._map_state_to_discrete_mountaincar
         else:
+            self.map_state_to_discrete_func = self._map_state_to_discrete_default # return origin state
             raise ValueError(f"Unsupported environment: {env_name}")
     
     def map_to_discrete(self, value, min_val, max_val, n_interval):
@@ -164,6 +165,9 @@ class MapStateToDiscrete:
         
         return state_discrete
     
+    def _map_state_to_discrete_default(self, state):
+        return state
+    
     def map_state_to_discrete(self, state):
         """
         Maps a state array to a discrete integer based on the environment.
@@ -175,3 +179,77 @@ class MapStateToDiscrete:
         int: The discretized state integer.
         """
         return self.map_state_to_discrete_func(state)
+    
+class MapActionToContinuous:
+    def __init__(self, env_name, distribution_type='linear'):
+        self.env_name = env_name.lower()
+        self.distribution_type = distribution_type
+        
+        if self.env_name.find("pendulum") >= 0:
+            self.map_action_to_continuous_func = self._map_action_to_continous_pendulum
+        else:
+            self.map_action_to_continuous_func = self._map_action_to_continous_default # return origin action
+            raise ValueError(f"Unsupported environment: {env_name}")
+    
+    def map_to_continuous(self, value, min_val, max_val, n_action):
+        """
+        Maps a discrete integer to a continuous value.
+
+        Parameters:
+        value (int): The discrete integer to be mapped.
+        min_val (float): The minimum value of the continuous range.
+        max_val (float): The maximum value of the continuous range.
+        n_interval (int): The number of intervals.
+
+        Returns:
+        float: The mapped continuous value within the range [min_val, max_val].
+        """
+        # Calculate the step size for each interval
+        if n_action < 2:
+            raise ValueError(f"Invalid number of actions: {n_action}")
+        
+        if self.distribution_type == 'linear':
+            step_size = (max_val - min_val) / (n_action - 1)
+            continuous_value = min_val + value * step_size
+        elif self.distribution_type == 'sin':
+            # Map the discrete value to a normalized range [0, pi]
+            normalized_value = (value / (n_action - 1)) * numpy.pi
+            # Apply sine function and scale it to the desired range
+            continuous_value = min_val + ((numpy.sin(normalized_value) + 1) / 2) * (max_val - min_val)
+        else:
+            raise ValueError(f"Unsupported distribution type: {self.distribution_type}")
+        
+        return continuous_value
+    
+    def _map_action_to_continous_pendulum(self, action):
+        """
+        Maps a discrete action integer to a continuous action for Pendulum-v1.
+
+        Parameters:
+        action (int): A discrete action integer from 0 to n_action-1.
+
+        Returns:
+        float: The mapped continuous action value.
+        """
+        min_val, max_val = -2.0, 2.0
+        n_action = 5
+        
+        # Use the helper function to map action
+        continuous_action = self.map_to_continuous(action, min_val, max_val, n_action)
+        
+        return continuous_action  
+    
+    def _map_action_to_continous_default(self, action):
+        return action
+    
+    def map_action_to_continuous(self, action):
+        """
+        Maps a discrete action integer to a continuous action based on the environment.
+
+        Parameters:
+        action (int): A discrete action integer from 0 to n_action-1.
+
+        Returns:
+        float: The mapped continuous action value.
+        """
+        return self.map_action_to_continuous_func(action)

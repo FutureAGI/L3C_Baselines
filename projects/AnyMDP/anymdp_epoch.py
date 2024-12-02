@@ -8,6 +8,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
+from l3c_baselines.utils import MapStateToDiscrete , MapActionToContinuous
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
@@ -167,11 +168,23 @@ class AnyMDPEpoch:
 
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
+        self.need_map_state_to_discrete = False
+        self.need_map_action_to_continuous = False
         if(self.config.env.lower().find("lake") >= 0):
             self.task_sampler = self.task_sampler_lake
         elif(self.config.env.lower().find("anymdp") >= 0):
             self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
             self.task_sampler = self.task_sampler_anymdp
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            self.task_sampler = self.task_sampler_mountain_car
+            self.map_state_to_discrete = MapStateToDiscrete("mountaincar").map_state_to_discrete
+            self.need_map_state_to_discrete = True
+        elif(self.config.env.lower().find("pendulum") >= 0):
+            self.task_sampler = self.task_sampler_pendulum
+            self.map_state_to_discrete = MapStateToDiscrete("pendulum").map_state_to_discrete
+            self.map_action_to_continuous = MapActionToContinuous("pendulum").map_action_to_continuous
+            self.need_map_action_to_continuous = True
+            self.need_map_state_to_discrete = True
         else:
             log_fatal("Unsupported environment:", self.config.env)
 
@@ -223,6 +236,26 @@ class AnyMDPGenerator(GeneratorBase):
             is_slippery=True, 
             max_episode_steps=1000)
         return None
+    def task_sampler_mountain_car(self):
+        self.env = gym.make("MountainCar-v0", render_mode="rgb_array")
+        return None
+    
+    def task_sampler_pendulum(self):
+        self.env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
+        return None
+
+    def reward_shaping(self, done, state, reward):
+        if(self.config.env.lower().find("lake") >= 0):
+            if done and reward < 0.5:
+                reward = -1.0
+                return reward, done
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            if state[0] > 0.5:
+                reward = 1.0
+                done = True
+                return reward, done
+        return reward, done
+            
 
     def is_success_fail(self, reward):
         if(self.config.env.lower().find("lake") >= 0):
@@ -235,9 +268,23 @@ class AnyMDPGenerator(GeneratorBase):
                 return 1
             else:
                 return 0
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            if reward >= 0.0:
+                return 1
+            else:
+                return 0
         else:
             return 0
-        
+    
+    def reset_env(self):
+        if self.config.env.lower().find("pendulum") >= 0:
+            state, *_ = self.env.reset(seed=123, options={"low": -0.7, "high": 0.5})
+        elif self.config.env.lower().find("mountaincar") >= 0:
+            state, *_ = self.env.reset(seed=123, options={"x_init": numpy.pi/2, "y_init": 0.5})
+        else:
+            state, *_ = self.env.reset()
+        return state
+
     def in_context_learn_from_teacher(self):
         # Task ID: retrieve the correpsonding teacher trajectory with task ID
         for folder in os.listdir(self.config.data_root):
@@ -264,18 +311,16 @@ class AnyMDPGenerator(GeneratorBase):
 
     def benchmark(self):
         if self.config.env.lower().find("anymdp") >= 0:
-            self.env_benchmark  = self.env
-            model = AnyMDPSolverOpt(self.env_benchmark)
+            model = AnyMDPSolverOpt(self.env)
             def benchmark_model(state):
                 return model.policy(state)
             self.benchmark_model = benchmark_model
         elif self.config.env.lower().find("lake") >= 0 or self.config.env.lower().find("lander") >= 0:
-            self.env_benchmark  = self.env
             model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
             model_name = self.config.benchmark_model_name.lower()
             if model_name not in model_classes:
                 raise ValueError("Unknown policy type: {}".format())
-            model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env_benchmark)
+            model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
             def benchmark_model(state):
                 action, _ = model.predict(state)
                 return int(action)
@@ -295,15 +340,18 @@ class AnyMDPGenerator(GeneratorBase):
                 step = 0
                 trail_reward = 0.0
                 done = False
-                new_state, *_ = self.env_benchmark.reset()
+                new_state = self.reset_env()
                 
                 while not done:
                     action= benchmark_model(new_state)
-                    new_state, new_reward, done, *_ = self.env_benchmark.step(action)
+                    new_state, new_reward, done, *_ = self.env.step(action)
+                    new_reward, done = self.reward_shaping(new_state, new_reward, done)
                     trail_reward += new_reward
 
                     step += 1
-
+                    if step > self.max_steps:
+                        print("Reach max_steps, break trail.")
+                        done = True
                     if done:
                         # success rate
                         succ_fail = self.is_success_fail(new_reward)
@@ -314,10 +362,6 @@ class AnyMDPGenerator(GeneratorBase):
                         rew_stat.append(trail_reward / step)
                         success_rate.append(success_rate_f)
                         step_trail.append(step)
-                    
-                    if step > self.max_steps:
-                        print("Reach max_steps, break trail.")
-                        break
                 
                 trail += 1
                 total_steps += step
@@ -375,8 +419,6 @@ class AnyMDPGenerator(GeneratorBase):
         total_step = 0
         pred_state_dist = None
 
-        self.model.eval()
-
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher()
 
@@ -386,24 +428,30 @@ class AnyMDPGenerator(GeneratorBase):
             trail_reward = 0.0
             trail_obs_loss = 0.0
             trail_reward_loss = 0.0
-            previous_state, _ = self.env.reset()
+            previous_state = self.reset_env()
+            if self.need_map_state_to_discrete:
+                previous_state = self.map_state_to_discrete(previous_state)
             obs_arr.append(previous_state)
             if(pred_state_dist is not None):
                 trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             temp = self._scheduler(trail)
             
             while not done:
+                # Generate action, world model prediction
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     None,
                     previous_state,
                     temp=temp)
                 env_action = action % self.config.action_clip          
-                # interact with env
+                # Interact with env
+                if self.need_map_action_to_continuous:
+                    env_action = self.map_action_to_continuous(env_action)
                 new_state, new_reward, done, *_ = self.env.step(env_action)
-
-                # Reward Shaping
-                if(done and new_reward < 0.5):
-                    new_reward = -0.2
+                # Reward shaping
+                new_reward, done = self.reward_shaping(done, new_state, new_reward)
+                # Map state to discrete
+                if self.need_map_state_to_discrete:
+                    new_state = self.map_state_to_discrete(new_state)
 
                 # collect data
                 act_arr.append(action)
@@ -426,6 +474,9 @@ class AnyMDPGenerator(GeneratorBase):
                 trail_reward_loss += (new_reward - pred_reward) ** 2
 
                 step += 1
+                if(step > self.max_steps):
+                    print("Reach max_steps, break trail.")
+                    done = True
                 if(done):
                     act_arr.append(self.action_dim)
                     rew_arr.append(0.0)
@@ -447,9 +498,6 @@ class AnyMDPGenerator(GeneratorBase):
                     success_rate.append(success_rate_f)
                     step_trail.append(step)
 
-                if(step > self.max_steps):
-                    print("Reach max steps, break trial.")
-                    break
             trail += 1
             total_step += step
             self.logger(trail,
