@@ -42,7 +42,7 @@ def EpochManager(cls):
                 DataType = self.get('DataType')
                 assert DataType is not None, f"either dataloader or DataType must be specified."
                 dataset = DataType(self.config.data_path, 
-                                    self.config.seq_len, 
+                                    self.config.seq_len,
                                     verbose=self.main)
                 self.dataloader = PrefetchDataLoader(dataset, batch_size=self.config.batch_size, 
                                             rank=self.rank, world_size=self.world_size)
@@ -146,6 +146,7 @@ def EpochManager(cls):
                 # Important: Must reset the model before segment iteration
                 self.model.module.reset()
                 if(self.is_training):
+                    self.model.train()
                     self.optimizer.zero_grad()
                     with autocast(dtype=torch.bfloat16, enabled=self.config.use_amp, device_type=device_type):
                         self.computer.compute(
@@ -155,6 +156,7 @@ def EpochManager(cls):
                     apply_gradient_safely(self.model, self.optimizer, scaler=self.scaler)
                     self.lr_scheduler.step()
                 else:
+                    self.model.eval()
                     with torch.no_grad():
                         self.computer.compute(
                                   *batch_data, 

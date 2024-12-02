@@ -18,10 +18,12 @@ class GeneratorBase(object):
         self.T_ini = self.config.decoding_strategy.T_ini
         self.T_fin = self.config.decoding_strategy.T_fin
         self.T_decay_type = self.config.decoding_strategy.decay_type
+        self.T_step = self.config.decoding_strategy.T_step
         self.max_steps = self.config.max_steps
+        self.max_trails = self.config.max_trails
 
-        self.dT_linear = (self.T_fin - self.T_ini) / self.max_steps
-        self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.max_steps)
+        self.dT_linear = (self.T_fin - self.T_ini) / self.T_step
+        self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.T_step)
 
     def _scheduler(self, step, type=None):
         # A inner built scheduler for decoding strategy
@@ -66,7 +68,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
         main = False
 
     if(main):
-        log_debug("Main gpu", use_gpu, "rank:", rank, device)
+        log_debug("Main gpu", rank, device)
 
     # Create model and move it to GPU with id `gpu`
     model = model_type(config.model_config, verbose=main)
@@ -95,6 +97,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
     generator=generator_class(run_name=config.run_name, 
                             model=model, 
                             config=config.generator_config,
+                            action_dim=config.model_config.action_dim,
                             rank=rank,
                             world_size=world_size,
                             device_type=device_type,
@@ -102,8 +105,10 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
                             main=main,
                             extra_info=extra_info)
     generator.preprocess()
-    for key in range(config.generator_config.epoch_numbers):
-        generator()
+    for epoch_id in range(config.generator_config.epoch_numbers):
+        log_debug(f"GPU {rank} start processing epoch {epoch_id} ...")
+        generator(epoch_id)
+        log_debug(f"... GPU {rank} finishes processing epoch {epoch_id}")
     generator.postprocess()
 
 class GeneratorRunner(Runner):

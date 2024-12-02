@@ -29,6 +29,9 @@ class AnyMDPRSA(RSADecisionModel):
         self.set_train_config(config)
 
         self.nactions = config.action_dim
+        self.state_dtype = config.state_encode.input_type
+        self.reward_dtype = config.reward_encode.input_type
+        self.action_dtype = config.action_encode.input_type
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
@@ -105,33 +108,61 @@ class AnyMDPRSA(RSADecisionModel):
         loss = dict()
 
         # Mask out the invalid actions
-        loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
+        loss_weight_s = None
+        loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
+                    self.loss_weight.dtype)
         if(use_loss_weight):
-            loss_weight = loss_weight * self.loss_weight[ps:pe].unsqueeze(0)
+            loss_weight_s = self.loss_weight[ps:pe]
+            loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
 
         # World Model Loss - States and Rewards
-        loss["wm-s"], loss["count"] = weighted_loss(s_pred, 
-                                     gt=observations[:, 1:], 
-                                     loss_type="ce",
-                                     loss_wht=loss_weight, 
-                                     reduce_dim=reduce_dim,
-                                     need_cnt=True)
+        if self.state_dtype == "Continuous":
+            if observations.dim() == 2:
+                gt = observations[:, 1:].view(*observations.shape, -1)
+            else:
+                gt = observations[:, 1:]
+            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                        gt=gt, 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_s, 
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
+        else:
+            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                        gt=observations[:, 1:], 
+                                        loss_type="ce",
+                                        loss_wht=loss_weight_s, 
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
                                      loss_type="mse",
-                                     loss_wht=loss_weight, 
+                                     loss_wht=loss_weight_a,
                                      reduce_dim=reduce_dim)
 
         # Policy Model
-        loss["pm"] = weighted_loss(a_pred, 
-                                   gt=label_actions, 
-                                   loss_type="ce",
-                                   loss_wht=loss_weight, 
-                                   reduce_dim=reduce_dim)
+        if self.action_dtype == "Continuous":
+            if label_actions.dim() == 2:
+                gt = label_actions.view(*rewards.shape, 1)
+            else:
+                gt = label_actions
+            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                       gt=gt, 
+                                       loss_type="mse",
+                                       loss_wht=loss_weight_a, 
+                                       reduce_dim=reduce_dim,
+                                       need_cnt=True)
+        else:
+            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                    gt=label_actions, 
+                                    loss_type="ce",
+                                    loss_wht=loss_weight_a, 
+                                    reduce_dim=reduce_dim,
+                                    need_cnt=True)
         # Entropy Loss
         loss["ent"] = weighted_loss(a_pred, 
                                     loss_type="ent", 
-                                    loss_wht=loss_weight,
+                                    loss_wht=loss_weight_a,
                                     reduce_dim=reduce_dim)
 
         loss["causal-l2"] = parameters_regularization(self)
@@ -208,8 +239,8 @@ class AnyMDPRSA(RSADecisionModel):
             update_memory=False,
             need_cache=False)
         
-        act_out = act_out.detach().cpu().squeeze()
         state = o_pred.detach().cpu().squeeze()
+        act_out = act_out.detach().cpu().squeeze()
         reward = r_pred.detach().cpu().squeeze()
 
         if(need_numpy):
@@ -240,15 +271,6 @@ class AnyMDPRSA(RSADecisionModel):
         pro_in = None
         obs_in = None
 
-        if(single_batch and single_step):
-            extra_dim = [0, 1]
-        elif(single_batch):
-            extra_dim = 0
-        elif(single_step):
-            extra_dim = 1
-        else:
-            extra_dim = None
-
         def proc(x):
             if(x is None):
                 return x
@@ -256,7 +278,7 @@ class AnyMDPRSA(RSADecisionModel):
                 return x.unsqueeze(0).unsqueeze(0).to(device)
             elif(single_batch):
                 return x.unsqueeze(0).to(device)
-            elif(single_setep):
+            elif(single_step):
                 return x.unsqueeze(1).to(device)
             return x.to(device)
 
@@ -276,6 +298,11 @@ class AnyMDPRSA(RSADecisionModel):
         if(not isinstance(reward, torch.Tensor) and reward is not None):
             rew_in = torch.tensor(rew_in)
         rew_in = proc(rew_in)
+
+        if self.reward_dtype == "Continuous":
+            rew_in = rew_in.to(torch.float32)
+        else:
+            rew_in = rew_in.to(torch.int32)
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
         _, _, _, new_cache = self.forward(

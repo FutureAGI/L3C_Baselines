@@ -9,44 +9,20 @@ import numpy
 import argparse
 import multiprocessing
 import pickle
-import l3c.mazeworld
 import random as rnd
 from numpy import random
-from l3c.anymdp import AnyMDPTaskSampler, Resampler
-from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS
+from l3c.anymdp import AnyMDPTaskSampler
+from l3c.anymdp import AnyMDPSolverOpt
 from l3c.utils import pseudo_random_seed
 
-class PolicyScheduler:
-    def __init__(self, L,
-            opt_start_range=[0.0, 0.0],
-            opt_end_range=[1.0, 1.0],
-            q_start_range=[1.0, 1.0],
-            q_end_range=[0.0, 0.0],
-            eps_start_range=[0.5, 1.0],
-            eps_end_range=[0.0, 0.5]):
+current_folder = os.path.dirname(os.path.abspath(__file__))
+if current_folder not in sys.path:
+    sys.path.append(current_folder)
+from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
 
-        def sample(x):
-            return random.uniform(x[0], x[1])
-
-        opt_start = sample(opt_start_range)
-        opt_end = sample(opt_end_range)
-        q_start = sample(q_start_range)
-        q_end = sample(q_end_range)
-        eps_start = sample(eps_start_range)
-        eps_end = sample(eps_end_range)
-        opt_arr = numpy.clip(numpy.linspace(opt_start, opt_end, L), 0, None)
-        q_arr = numpy.clip(numpy.linspace(q_start, q_end, L), 0, None)
-        eps_arr = numpy.clip(numpy.linspace(eps_start, eps_end, L), 0, None)
-        prob = numpy.stack([opt_arr, q_arr, eps_arr], axis=0)
-        sum_prob = numpy.clip(numpy.sum(prob, axis=0, keepdims=True), 1.0e-6, None)
-        self.prob = prob / sum_prob
-        self.prob[2] += 1.0 - numpy.sum(self.prob, axis=0)
-
-    def __call__(self):
-        selection = (self.prob.cumsum(0) > numpy.random.rand(self.prob.shape[1])[None, :]).argmax(0)
-        return selection
 
 def run_epoch(
+        epoch_id,
         env,
         max_steps,
         offpolicy_labeling = True,
@@ -55,73 +31,81 @@ def run_epoch(
     steps = 0
     
     # Steps to reset the 
+    nstate = env.observation_space.n
     naction = env.action_space.n
 
+    # Data Storage
     state_list = list()
     lact_list = list()
     bact_list = list()
     reward_list = list()
     
-    solver1 = AnyMDPSolverOpt(env)
-    solver2 = AnyMDPSolverOTS(env)
+    # Referrence Policies
+    solveropt = AnyMDPSolverOpt(env)
+
+    # List of Behavior Policies
+    solverneg = AnyPolicySolver(env)
+    solverots = AnyMDPOTSNoiseDistiller(env, max_steps=max_steps)
+    solverq = AnyMDPQNoiseDistiller(env, max_steps=max_steps)
+    solverotsopt = AnyMDPOTSOpter(env, solver_opt=solveropt, max_steps=max_steps)
+    solveroptnoise = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt)
+    behavior_list = [solverneg, solverots, solverq, solverotsopt, solveroptnoise]
 
     state, info = env.reset()
 
     ppl_sum = []
     mse_sum = []
 
-    ps_b = PolicyScheduler(max_steps + 1,
-                            q_end_range=(0.5, 1.0),
-                            opt_end_range=(0.0, 0.5),
-                            )
-    ps_l = PolicyScheduler(max_steps + 1, 
-                            eps_start_range=(0.0, 0.0), 
-                            eps_end_range=(0.0, 0.0),
-                            q_end_range=(-1.0, 0.0),
-                            )
-    ps_b_traj = ps_b()
-    ps_l_traj = ps_l()
+    solver = random.choice(behavior_list)
+    need_resample = (random.random() > 0.60)
+    resample_freq = random.random() * 0.05
 
-    _act_type = ['OPT', 'VI', 'Random']
+    def learn(state, bact, next_state, reward, done):
+        for solver in behavior_list:
+            solver.learner(state, bact, next_state, reward, done)
 
-    def gen_act(state, act_type):
-        if(act_type == 0):
-            act = solver1.policy(state)
-        elif(act_type == 1):
-            act = solver2.policy(state)
+    def resample_solver():
+        if(need_resample and random.random() < resample_freq):
+            return random.choice(behavior_list)
         else:
-            act = random.choice(range(naction))
-        return act
+            return solver
 
     while steps <= max_steps:
-        bact = gen_act(state, ps_b_traj[steps - 1]) 
         if(offpolicy_labeling):
-            lact = gen_act(state, ps_l_traj[steps - 1])
+            bact = solver.policy(state)
+            lact = solveropt.policy(state)
         else:
+            bact = solverotsopt.policy(state)
             lact = bact
 
         next_state, reward, done, info = env.step(bact)
 
-        ppl = -numpy.log(env.transition_matrix[state, bact, next_state])
-        mse = (reward - env.reward_matrix[state, bact]) ** 2
+        ppl = -numpy.log(info["transition_gt"][next_state])
+        mse = (reward - info["reward_gt"]) ** 2
         ppl_sum.append(ppl)
         mse_sum.append(mse)
 
-        solver2.learner(state, bact, next_state, reward, done)
-
-        if(done):
-            next_state, info = env.reset()
+        learn(state, bact, next_state, reward, done)
 
         state_list.append(state)
         bact_list.append(bact)
         lact_list.append(lact)
         reward_list.append(reward)
 
+        if(done): # If done, push the next state, but add a dummy action
+            state_list.append(next_state)
+            bact_list.append(naction)
+            lact_list.append(naction)
+            reward_list.append(0.0)
+            steps += 1
+            next_state, info = env.reset()
+            solver = resample_solver()
+
         state = next_state
         steps += 1
 
-    print("Finish running, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f\n"%(
-             numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
+    print("Finish running %06d, sum reward: %f, steps: %d, gt_transition_ppl: %f, gt_reward_mse: %f"%(
+            epoch_id, numpy.sum(reward_list), len(state_list)-1, numpy.mean(ppl_sum), numpy.mean(mse_sum)))
 
     return {
             "states": numpy.array(state_list, dtype=numpy.uint32),
@@ -134,7 +118,7 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
+def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions, min_state_space,
         is_offpolicy_labeling,
         max_steps, tasks_from_file):
     # Tasks in Sequence: Number of tasks sampled for each sequence: settings for continual learning
@@ -149,10 +133,10 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions,
             task_id = (work_id + idx * world_work) % tasks_num
             task = tasks_from_file[task_id]
         else:
-            task = AnyMDPTaskSampler(nstates, nactions)
+            task = AnyMDPTaskSampler(nstates, nactions, min_state_space)
 
         env.set_task(task)
-        results = run_epoch(env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
+        results = run_epoch(idx, env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
 
         file_path = f'{path_name}/record-{idx:06d}'
         create_directory(file_path)
@@ -170,6 +154,7 @@ if __name__=="__main__":
     parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
     parser.add_argument("--state_num", type=int, default=128, help="state num, default:128")
     parser.add_argument("--action_num", type=int, default=5, help="action num, default:5")
+    parser.add_argument("--min_state_space", type=int, default=16, help="minimum state dim in task, default:8")
     parser.add_argument("--max_steps", type=int, default=4000, help="max steps, default:4000")
     parser.add_argument("--offpolicy_labeling", type=int, default=0, help="enable offpolicy labeling (DAgger), default:False")
     parser.add_argument("--epochs", type=int, default=1, help="multiple epochs:default:1")
@@ -199,7 +184,7 @@ if __name__=="__main__":
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_anymdp, 
                 args=(worker_id, args.workers, args.output_path, range(n_b, n_e), 
-                        args.state_num, args.action_num, 
+                        args.state_num, args.action_num, args.min_state_space,
                         (args.offpolicy_labeling>0), args.max_steps, tasks_from_file))
         processes.append(process)
         process.start()

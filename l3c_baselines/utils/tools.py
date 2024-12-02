@@ -179,7 +179,7 @@ def custom_load_model(model,
                 if(strict_check):
                     log_fatal(e, "Quit Job...")
                 else:
-                    if(safe_param.ndim == len(model_param_shape)):
+                    if(safe_param.ndim != len(model_param_shape)):
                         log_warn(e, "Skipping loading...", on=verbose)
                     else:
                         minimal_shape = []

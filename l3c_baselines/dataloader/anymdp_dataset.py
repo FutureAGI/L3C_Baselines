@@ -4,10 +4,8 @@ import random
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
-from l3c_baselines.utils import rewards2go
 
-
-class AnyMDPDataSet(Dataset):
+class AnyMDPDataSetBase(Dataset):
     def __init__(self, directory, time_step, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
@@ -31,9 +29,10 @@ class AnyMDPDataSet(Dataset):
         random.seed(seed)
         random.shuffle(self.file_list)
 
-    def __getitem__(self, index):
-        path = self.file_list[index]
+    def __len__(self):
+        return len(self.file_list)
 
+    def _load_and_process_data(self, path):
         try:
             observations = np.load(path + '/observations.npy')
             actions_behavior = np.load(path + '/actions_behavior.npy')
@@ -52,19 +51,59 @@ class AnyMDPDataSet(Dataset):
             else:
                 n_b = 0
                 n_e = self.time_step
-            obs_arr = torch.from_numpy(observations[n_b:n_e].astype("int32")).long() 
-            bact_arr = torch.from_numpy(actions_behavior[n_b:n_e].astype("int32")).long() 
-            lact_arr = torch.from_numpy(actions_label[n_b:n_e].astype("int32")).long() 
-            reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
 
-            return obs_arr, bact_arr, lact_arr, reward_arr
+            return observations[n_b:n_e], actions_behavior[n_b:n_e], actions_label[n_b:n_e], rewards[n_b:n_e]
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
+            return None, None, None, None
+
+class AnyMDPDataSet(AnyMDPDataSetBase):
+    def __getitem__(self, index):
+        path = self.file_list[index]
+
+        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        
+        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
             return None
 
-    def __len__(self):
-        return len(self.file_list)
+        obs_arr = torch.from_numpy(observations.astype("int32")).long() 
+        bact_arr = torch.from_numpy(actions_behavior.astype("int32")).long() 
+        lact_arr = torch.from_numpy(actions_label.astype("int32")).long() 
+        reward_arr = torch.from_numpy(rewards).float()
 
+        return obs_arr, bact_arr, lact_arr, reward_arr
+
+class AnyMDPDataSetContinuousState(AnyMDPDataSetBase):
+    def __getitem__(self, index):
+        path = self.file_list[index]
+
+        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        
+        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
+            return None
+
+        obs_arr = torch.from_numpy(observations).float() 
+        bact_arr = torch.from_numpy(actions_behavior.astype("int32")).long() 
+        lact_arr = torch.from_numpy(actions_label.astype("int32")).long() 
+        reward_arr = torch.from_numpy(rewards).float()
+
+        return obs_arr, bact_arr, lact_arr, reward_arr
+    
+class AnyMDPDataSetContinuousStateAction(AnyMDPDataSetBase):
+    def __getitem__(self, index):
+        path = self.file_list[index]
+
+        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        
+        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
+            return None
+
+        obs_arr = torch.from_numpy(observations).float() 
+        bact_arr = torch.from_numpy(actions_behavior).float() 
+        lact_arr = torch.from_numpy(actions_label).float() 
+        reward_arr = torch.from_numpy(rewards).float()
+
+        return obs_arr, bact_arr, lact_arr, reward_arr
 
 # Test Maze Data Set
 if __name__=="__main__":
@@ -72,4 +111,7 @@ if __name__=="__main__":
     dataset = AnyMDPDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
     obs, bact, lact, rewards = dataset[0]
-    print(obs.shape, bact.shape, lact.shape, rewards.shape)
+    if obs is not None:
+        print(obs.shape, bact.shape, lact.shape, rewards.shape)
+    else:
+        print("Failed to load the first sample.")
