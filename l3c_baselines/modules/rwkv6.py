@@ -14,7 +14,8 @@ class RWKV6Layer(nn.Module):
                 hidden_ratio: float = 3.5,
                 intermediate_size: int = 1024,
                 num_heads: int = 4,
-                layer_idx: int = 0):
+                layer_idx: int = 0,
+                gate_bound: float=50.0):
         super().__init__()
         self.config = RWKV6Config(
                   hidden_size=io_size,
@@ -22,7 +23,8 @@ class RWKV6Layer(nn.Module):
                   expand_v=expand_v,
                   hidden_ratio=hidden_ratio,
                   intermediate_size=intermediate_size,
-                  num_heads=num_heads)
+                  num_heads=num_heads,
+                  gate_bound=gate_bound)
         self.layer_idx = layer_idx
         self.encoder = RWKV6Block(
                   self.config,
