@@ -251,17 +251,18 @@ class AnyMDPGenerator(GeneratorBase):
             self.env = env
         return None
 
-    def reward_shaping(self, done, state, reward):
+    def reward_shaping(self, done, terminated, reward):
         if(self.config.env.lower().find("lake") >= 0):
             if done and reward < 0.5:
                 reward = -1.0
-                return reward, done
+                return reward
         elif(self.config.env.lower().find("mountaincar") >= 0):
-            if state[0] > 0.5:
+            if terminated:
                 reward = 1.0
-                done = True
-                return reward, done
-        return reward, done
+                return reward
+        elif(self.config.env.lower().find("pendulum") >= 0):
+            reward = reward / 10 + 0.3
+        return reward
             
 
     def is_success_fail(self, reward, trail_reward, step):
@@ -375,7 +376,7 @@ class AnyMDPGenerator(GeneratorBase):
                     new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
                     if terminated or truncated:
                         done = True
-                    new_reward, done = self.reward_shaping(new_state, new_reward, done)
+                    shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
                     step += 1
@@ -384,7 +385,7 @@ class AnyMDPGenerator(GeneratorBase):
                         done = True
                     if done:
                         # success rate
-                        succ_fail = self.is_success_fail(new_reward, trail_reward, step)
+                        succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
                         if trail + 1 < self.config.downsample_trail:
                             success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                         else:
@@ -482,7 +483,7 @@ class AnyMDPGenerator(GeneratorBase):
                 if terminated or truncated:
                     done = True
                 # Reward shaping
-                new_reward, done = self.reward_shaping(done, new_state, new_reward)
+                shaped_reward = self.reward_shaping(done, terminated, new_reward)
 
                 # collect data
                 act_arr.append(action)
@@ -495,14 +496,14 @@ class AnyMDPGenerator(GeneratorBase):
                     None,
                     previous_state,
                     action,
-                    new_reward)
+                    shaped_reward)
 
                 obs_arr.append(new_state) 
                 previous_state = new_state
 
                 trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
                 trail_reward += new_reward
-                trail_reward_loss += (new_reward - pred_reward) ** 2
+                trail_reward_loss += (shaped_reward - pred_reward) ** 2
 
                 step += 1
                 if(step > self.max_steps):
@@ -517,7 +518,7 @@ class AnyMDPGenerator(GeneratorBase):
                         self.action_dim,
                         0.0)
                     # success rate
-                    succ_fail = self.is_success_fail(new_reward, trail_reward, step)
+                    succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
                     if trail + 1 < self.config.downsample_trail:
                         success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                     else:
@@ -525,7 +526,7 @@ class AnyMDPGenerator(GeneratorBase):
                     
                     rew_stat.append(trail_reward)
                     state_error.append(trail_obs_loss / step)
-                    reward_error.append(trail_reward / step)
+                    reward_error.append(trail_reward_loss / step)
                     success_rate.append(success_rate_f)
                     step_trail.append(step)
 

@@ -76,7 +76,7 @@ class MapStateToDiscrete:
         speed_discrete = self.map_to_discrete(state[2], speed_min, speed_max, n_interval_speed)
         
         # Calculate the discretized state
-        state_discrete = n_interval_theta * theta_discrete + speed_discrete
+        state_discrete = n_interval_speed * theta_discrete + speed_discrete
         
         return state_discrete
     
@@ -102,7 +102,7 @@ class MapStateToDiscrete:
         velocity_discrete = self.map_to_discrete(state[1], velocity_min, velocity_max, n_interval_velocity)
         
         # Calculate the discretized state
-        state_discrete = 8 * position_discrete + velocity_discrete
+        state_discrete = n_interval_velocity * position_discrete + velocity_discrete
         
         return state_discrete
     
@@ -334,9 +334,9 @@ class OnlineRL:
         elif self.model_name.lower() == 'dqn':
             self.model = DQN(
                 policy='MlpPolicy', env=self.env,
-                learning_rate=0.00025, buffer_size=100_000, exploration_fraction=0.1,
-                exploration_final_eps=0.01, batch_size=32, tau=0.005,
-                train_freq=(4, 'step'), gradient_steps=1, seed=None, optimize_memory_usage=False,
+                learning_rate=0.001, buffer_size=500_000, exploration_fraction=0.02,
+                exploration_final_eps=0.01, batch_size=64, tau=0.01,
+                train_freq=(2, 'step'), gradient_steps=2, seed=None, optimize_memory_usage=False,
                 verbose=1)
         elif self.model_name.lower() == 'td3':
             self.model = TD3(
