@@ -95,7 +95,7 @@ class AnyMDPRSA(RSADecisionModel):
         bsz = behavior_actions.shape[0]
         seq_len = behavior_actions.shape[1]
         # Pay attention position must be acquired before calling forward()
-        ps = self.causal_model.position
+        ps = (self.causal_model.position) // len(self.rsa_type)
         pe = ps + seq_len
 
         # Predict the latent representation of action and next frame (World Model)
