@@ -20,6 +20,34 @@ def rewards2go(rewards, gamma=0.98):
         r2go += rolled_rewards
     return r2go
 
+def sa_dropout(x, p=0.15, replacement=None):
+    """
+    drop a discrete tensor with probability p
+    args:
+        x: input tensor, shape (*, seq_len) or (*, seq_len, hidden)
+        p: probability to drop
+        if x is int, see axis=-1 as the seq, replace dropped values by -1
+        if x is float, replace dropped values by 0
+    returns:
+        dropped out tensor
+    """
+    dtype=x.dtype
+    device=x.device
+    if(dtype in [torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64]):
+        if(replacement == None):
+            replacement = torch.tensor(-1, dtype=dtype).to(device)
+        mask = torch.rand(*x.shape) > p
+        x = torch.where(mask, x, replacement)
+        return x
+    else:
+        mask = torch.rand(*x.shape[:-1]) > p
+        if(replacement == None):
+            replacement = torch.zeros_like(x).to(device)
+        else:
+            replacement = replacement[*((None,) * (x.dim()-1)), :]
+        x = torch.where(mask, x, replacement)
+        return x
+
 def downsample(x, downsample_length, axis=-1):
     """
     Downsample and get the mean of each segment along a given axis

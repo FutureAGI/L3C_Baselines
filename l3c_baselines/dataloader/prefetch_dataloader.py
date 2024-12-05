@@ -172,7 +172,7 @@ def segment_iterator(full_len, seg_len, device, *args):
     for i,arg in enumerate(args):
         if(isinstance(arg, tuple) or isinstance(arg, list)):
             sdata, ext = arg
-        elif(isinstance(arg, torch.Tensor)):
+        elif(isinstance(arg, torch.Tensor) or arg is None):
             sdata = arg
             ext = 0
         else:
@@ -180,9 +180,10 @@ def segment_iterator(full_len, seg_len, device, *args):
         ext = max(0, ext)
         data_ext.append(ext)
         data.append(sdata)
-        arg_len = sdata.shape[1]
-        # Make sure we have enough space
-        full_len = min(full_len, arg_len - ext)
+        if(sdata is not None):
+            arg_len = sdata.shape[1]
+            # Make sure we have enough space
+            full_len = min(full_len, arg_len - ext)
 
     seg_num = (full_len - 1) // seg_len + 1
     for seg_id in range(seg_num):
@@ -190,5 +191,8 @@ def segment_iterator(full_len, seg_len, device, *args):
         b = seg_id * seg_len
         e = min(b + seg_len, full_len)
         for sdata, ext in zip(data, data_ext):
-            res.append(sdata[:, b:e+ext].to(device))
+            if(sdata is not None):
+                res.append(sdata[:, b:e+ext].to(device))
+            else:
+                res.append(None)
         yield tuple(res)

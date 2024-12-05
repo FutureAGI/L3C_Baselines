@@ -11,6 +11,10 @@ import multiprocessing
 import pickle
 import random as rnd
 from numpy import random
+import l3c
+from packaging import version
+assert version.parse(l3c.__version__) >= version.parse('0.2.1.19')
+
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt
 from l3c.utils import pseudo_random_seed
@@ -19,6 +23,7 @@ current_folder = os.path.dirname(os.path.abspath(__file__))
 if current_folder not in sys.path:
     sys.path.append(current_folder)
 from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
+
 
 
 def run_epoch(

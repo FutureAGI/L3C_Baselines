@@ -150,7 +150,7 @@ def custom_load_model(model,
             hits_black = False
             for name in black_list:
                 if(param_name.find(name) > -1):
-                    log_warn(f"Loading parameter {param_name} hits black lists {name}, will reinitialized", on=verbose)
+                    log_warn(f"Loading parameter {param_name} hits blacklist name {name}, skip", on=verbose)
                     hits_black = True
             if(hits_black):
                 continue

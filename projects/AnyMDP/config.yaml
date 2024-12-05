@@ -96,6 +96,7 @@ model_config:
       memory_length: 64
       position_encoding_size: 12000
       use_layer_norm: True
+      gate_bound: 22
       use_blockrecurrence: True
       checkpoints_density: -1
       memory_type: MEM
@@ -114,6 +115,7 @@ model_config:
       use_layer_norm: True
       use_blockrecurrence: True
       checkpoints_density: -1
+      gate_bound: 12
       memory_length: 0
       memory_type: MEM
 

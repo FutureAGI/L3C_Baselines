@@ -38,10 +38,18 @@ class AnyMDPDataSetBase(Dataset):
             actions_behavior = np.load(path + '/actions_behavior.npy')
             actions_label = np.load(path + '/actions_label.npy')
             rewards = np.load(path + '/rewards.npy')
+
+            if os.path.exists(path + '/prompts.npy'):
+                prompts = np.load(path + '/prompts.npy')
+            if os.path.exists(path + '/tags.npy'):
+                tags = np.load(path + '/tags.npy')
+
             max_t = min(actions_label.shape[0], 
                         rewards.shape[0], 
                         actions_behavior.shape[0],
-                        observations.shape[0])
+                        observations.shape[0],
+                        prompts.shape[0],
+                        tags.shape[0])
 
             # Shape Check
             if(self.time_step > max_t):
@@ -52,58 +60,71 @@ class AnyMDPDataSetBase(Dataset):
                 n_b = 0
                 n_e = self.time_step
 
-            return observations[n_b:n_e], actions_behavior[n_b:n_e], actions_label[n_b:n_e], rewards[n_b:n_e]
+            return (observations[n_b:n_e], 
+                    prompts[n_b:n_e],
+                    tags[n_b:n_e],
+                    actions_behavior[n_b:n_e], 
+                    rewards[n_b:n_e],
+                    actions_label[n_b:n_e])
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
-            return None, None, None, None
+            return (None,) * 6
 
 class AnyMDPDataSet(AnyMDPDataSetBase):
     def __getitem__(self, index):
         path = self.file_list[index]
 
-        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        data = self._load_and_process_data(path)
         
-        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
+        if any(arr is None for arr in data):
             return None
 
-        obs_arr = torch.from_numpy(observations.astype("int32")).long() 
-        bact_arr = torch.from_numpy(actions_behavior.astype("int32")).long() 
-        lact_arr = torch.from_numpy(actions_label.astype("int32")).long() 
-        reward_arr = torch.from_numpy(rewards).float()
+        obs_arr = torch.from_numpy(data[0].astype("int32")).long() 
+        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
+        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
+        bact_arr = torch.from_numpy(data[3].astype("int32")).long()
+        rwd_arr = torch.from_numpy(data[4]).float()
+        lact_arr = torch.from_numpy(data[5].astype("int32")).long() 
 
-        return obs_arr, bact_arr, lact_arr, reward_arr
+        # Orders: O-P-T-A-R and Action Label
+        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
 
 class AnyMDPDataSetContinuousState(AnyMDPDataSetBase):
     def __getitem__(self, index):
         path = self.file_list[index]
 
-        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        data = self._load_and_process_data(path)
         
-        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
+        if any(arr is None for arr in data):
             return None
+        
+        obs_arr = torch.from_numpy(data[0]).float() 
+        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
+        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
+        bact_arr = torch.from_numpy(data[3].astype("int32")).long()
+        rwd_arr = torch.from_numpy(data[4]).float()
+        lact_arr = torch.from_numpy(data[5].astype("int32")).long() 
 
-        obs_arr = torch.from_numpy(observations).float() 
-        bact_arr = torch.from_numpy(actions_behavior.astype("int32")).long() 
-        lact_arr = torch.from_numpy(actions_label.astype("int32")).long() 
-        reward_arr = torch.from_numpy(rewards).float()
-
-        return obs_arr, bact_arr, lact_arr, reward_arr
+        # Orders: O-P-T-A-R and Action Label
+        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
     
 class AnyMDPDataSetContinuousStateAction(AnyMDPDataSetBase):
     def __getitem__(self, index):
         path = self.file_list[index]
 
-        observations, actions_behavior, actions_label, rewards = self._load_and_process_data(path)
+        data = self._load_and_process_data(path)
         
-        if any(arr is None for arr in [observations, actions_behavior, actions_label, rewards]):
+        if any(arr is None for arr in data):
             return None
+        obs_arr = torch.from_numpy(data[0]).float() 
+        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
+        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
+        bact_arr = torch.from_numpy(data[3]).float()
+        rwd_arr = torch.from_numpy(data[4]).float()
+        lact_arr = torch.from_numpy(data[5]).float() 
 
-        obs_arr = torch.from_numpy(observations).float() 
-        bact_arr = torch.from_numpy(actions_behavior).float() 
-        lact_arr = torch.from_numpy(actions_label).float() 
-        reward_arr = torch.from_numpy(rewards).float()
-
-        return obs_arr, bact_arr, lact_arr, reward_arr
+        # Orders: O-P-T-A-R and Action Label
+        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
 
 # Test Maze Data Set
 if __name__=="__main__":

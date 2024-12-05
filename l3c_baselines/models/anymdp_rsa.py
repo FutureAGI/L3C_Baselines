@@ -8,13 +8,13 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import weighted_loss, img_pro, img_post
+from l3c_baselines.utils import weighted_loss, sa_dropout, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.utils import log_debug, log_warn, log_fatal
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
-from .decision_model import RSADecisionModel
+from .decision_model import OPTARDecisionModel
 
-class AnyMDPRSA(RSADecisionModel):
+class AnyMDPRSA(OPTARDecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 
@@ -32,6 +32,20 @@ class AnyMDPRSA(RSADecisionModel):
         self.state_dtype = config.state_encode.input_type
         self.reward_dtype = config.reward_encode.input_type
         self.action_dtype = config.action_encode.input_type
+
+        if(config.reward_encode.input_type == "Discrete"):
+            self.default_r = torch.full(config.reward_encode.input_size, (1, 1), dtype=torch.int64)
+        elif(self.config.reward_encode.input_type == "Continuous"):
+            self.default_r = torch.zeros((1, 1, config.reward_encode.input_size))
+        else:
+            raise ValueError("Invalid reward encoding type", config.reward_encoding)
+        
+        if(config.action_encode.input_type == "Discrete"):
+            self.default_a = torch.full((1, 1), config.action_encode.input_size, dtype=torch.int64)
+        elif(config.action_encode.input_type == "Continuous"):
+            self.default_a = torch.zeros((1, 1, config.action_encode.input_size))
+        else:
+            raise ValueError("Invalid reward encoding type", config.action_encoding)
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
@@ -81,32 +95,31 @@ class AnyMDPRSA(RSADecisionModel):
             else:
                 self.r_decoder.requires_grad_(True)
 
-    def sequential_loss(self, prompts, 
-                            observations, 
-                            rewards, 
+    def sequential_loss(self, observations, 
+                            prompts,
+                            tags,
                             behavior_actions, 
+                            rewards, 
                             label_actions, 
                             state_dropout=0.0,
-                            reward_dropout=0.0,
+                            prompt_dropout=0.0,
                             update_memory=True,
                             use_loss_weight=True,
                             reduce_dim=1):
-    
         bsz = behavior_actions.shape[0]
         seq_len = behavior_actions.shape[1]
         # Pay attention position must be acquired before calling forward()
-        ps = self.causal_model.position
+        ps = self.causal_model.position // self.rsa_occ
         pe = ps + seq_len
-
+        o_in = sa_dropout(observations[:, :-1].clone())
         # Predict the latent representation of action and next frame (World Model)
         s_pred, a_pred, r_pred, _ = self.forward(
-                prompts, observations[:, :-1], behavior_actions, rewards,
+                o_in, prompts, tags, behavior_actions, rewards,
                 cache=None, need_cache=False, state_dropout=state_dropout,
                 update_memory=update_memory)
 
         # Calculate the loss information
         loss = dict()
-
         # Mask out the invalid actions
         loss_weight_s = None
         loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
@@ -164,36 +177,48 @@ class AnyMDPRSA(RSADecisionModel):
                                     loss_type="ent", 
                                     loss_wht=loss_weight_a,
                                     reduce_dim=reduce_dim)
-
         loss["causal-l2"] = parameters_regularization(self)
-
         return loss
     
-    def generate(self, prompts,
-                       observation,
-                       temp,
-                       action_clip=None,
-                       need_numpy=True,
-                       single_batch=True):
+    def generate(self, observation,
+                    prompt,
+                    tag,
+                    temp,
+                    need_numpy=True,
+                    single_batch=True,
+                    future_prediction=False):
         """
         Generating Step By Step Action and Next Frame Prediction
         Args:
-            prompts:
-            observation: 
+            observation 
+            prompts: None if not included
+            tags: None if not included
             temp: temperature for sampling
             single_batch: if true, add additional batch to input tensor
         Returns:
-            o_pred: predicted states
-            action_out: action decision
-            r_pred: predicted rewards
+            o_pred: predicted states, only valid if future_prediction is True
+            a_pred: predicted actions 
+            r_pred: predicted rewards, only valid if future_prediction is True
         """
         device = next(self.parameters()).device
+
+        # Prepare the input prompts
         if(not self.p_included):
             pro_in = None
-        elif(not isinstance(prompts, torch.Tensor)):
-            pro_in = torch.tensor([prompts], dtype=torch.int64).to(device)
+        elif(not isinstance(prompt, torch.Tensor)):
+            pro_in = torch.tensor([prompt], dtype=torch.int64).to(device)
         else:
-            pro_in = prompts.to(device)
+            pro_in = prompt.to(device)
+        
+        # Prepare the input tags
+        if(not self.t_included):
+            tag_in = None
+        elif(not isinstance(tag, torch.Tensor)):
+            tag_in = torch.tensor([tag], dtype=torch.int64).to(device)
+        else:
+            tag_in = tag.to(device)
+
+        # Prepare the input observations
         if(not isinstance(observation, torch.Tensor)):
             obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
         else:
@@ -211,48 +236,56 @@ class AnyMDPRSA(RSADecisionModel):
         default_a = self.default_a.to(device)
 
         o_pred, a_pred, r_pred, _ = self.forward(
-            pro_in,
             obs_in,
+            pro_in,
+            tag_in,
             default_a,
             default_r,
             T=temp,
             update_memory=False,
             need_cache=False)
         
-        if(self.a_is_discrete):
-            if(action_clip is not None):
-                a_pred[:, :, action_clip:] = 0.0
+        if(self.a_discrete):
             act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
-            # bsz, 1, nactions
             act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
             act_out = act_in.squeeze()
         else:
             act_in = a_pred
             act_out = act_in.squeeze()
-        
-        o_pred, a_pred, r_pred, _ = self.forward(
-            prompts,
-            obs_in,
-            act_in,
-            default_r,
-            T=temp,
-            update_memory=False,
-            need_cache=False)
-        
-        state = o_pred.detach().cpu().squeeze()
-        act_out = act_out.detach().cpu().squeeze()
-        reward = r_pred.detach().cpu().squeeze()
 
+        act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
             act_out = act_out.numpy()
             if(act_out.size < 2):
                 act_out = act_out.item()
-            state = state.numpy()
-            if(state.size < 2):
-                state = state.item()
-            reward = reward.numpy()
-            if(reward.size < 2):
-                reward = reward.item()
+
+        if(future_prediction):
+            o_pred, a_pred, r_pred, _ = self.forward(
+                obs_in,
+                pro_in,
+                tag_in,
+                act_in,
+                default_r,
+                T=temp,
+                update_memory=False,
+                need_cache=False)
+            
+            state = o_pred.detach().cpu().squeeze()
+            reward = r_pred.detach().cpu().squeeze()
+
+            if(need_numpy):
+                state = state.numpy()
+                if(state.size < 2):
+                    state = state.item()
+                reward = reward.numpy()
+                if(reward.size < 2):
+                    reward = reward.item()
+
+        else:
+            state = None
+            reward = None
+
+
         
         return state, act_out, reward
 
