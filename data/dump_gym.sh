@@ -12,11 +12,14 @@ N_MAX_STEPS=200 # Maximum number of steps per trail, for PENDULUM & MOUNTAINCAR 
 N_WORKERS=10 # Number of parallel workers for segment data generation, default is 10
 ENABLE_LOAD_MODEL="False" # Whether to load a pre-trained model, default is False
 RANDOM_ENV="False" # Whether to use random environment, default is False
-ACTION_DONE=4 # Action when env return done, default is action_dim of env.
+ACTION_DONE=5 # Action when env return done, default is action_dim of env.
 REWARD_DONE=0.0 # Reward when env return done, default is 0.0
-SAVE_STATE_DISCRETE="False" # Whether to save state discrete, default is False
+MAP_ENV_TO_DISCRETE="True" # Whether to map the env to discrete space, default is True
+ACTION_CLIP=5 # Action discrete space, default is 5.
+STATE_CLIP=64 # State discrete space, default is 64.
 
 # Run the gen_gym_record.py script
+export CUDA_VISIBLE_DEVICES=0
 python gen_gym_record.py \
     --env_name $ENV_NAME \
     --save_path $SAVE_PATH \
@@ -30,4 +33,6 @@ python gen_gym_record.py \
     --random_env $RANDOM_ENV \
     --action_done $ACTION_DONE \
     --reward_done $REWARD_DONE \
-    --save_state_discrete $SAVE_STATE_DISCRETE
+    --map_env_to_discrete $MAP_ENV_TO_DISCRETE \
+    --action_clip $ACTION_CLIP \
+    --state_clip $STATE_CLIP

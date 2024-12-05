@@ -9,32 +9,42 @@ from gym.envs.toy_text.frozen_lake import generate_random_map
 from stable_baselines3 import DQN, A2C, TD3, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from l3c_baselines.utils import MapStateToDiscrete
+from l3c_baselines.utils import DiscreteEnvWrapper
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
-def create_env(env_name, randon_env):
-    if(env_name.lower() == "lake"):
-        if randon_env:
+def create_env(args):
+    if(args.env_name.lower() == "lake"):
+        if args.randon_env:
             env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
             return env
         else:
             env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
             return env
-    elif(env_name.lower() == "lander"):
+    elif(args.env_name.lower() == "lander"):
         env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
                enable_wind=False, wind_power=15.0, turbulence_power=1.5)
         return env
-    elif(env_name.lower() == "pendulum"):
+    elif(args.env_name.lower() == "pendulum"):
         env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
+        if args.map_env_to_discrete:
+            env = DiscreteEnvWrapper(env=env,
+                                    env_name=args.env_name.lower(),
+                                    action_space=args.action_clip,
+                                    state_space=args.state_clip)
         return env
-    elif(env_name.lower() == "mountaincar"):
+    elif(args.env_name.lower() == "mountaincar"):
         env = gym.make("MountainCar-v0", render_mode="rgb_array")
+        if args.map_env_to_discrete:
+            env = DiscreteEnvWrapper(env=env,
+                                    env_name=args.env_name.lower(),
+                                    action_space=args.action_clip,
+                                    state_space=args.state_clip)
         return env
     else:
-        raise ValueError("Unknown env name: {}".format(env_name))
+        raise ValueError("Unknown env name: {}".format(args.env_name))
 
 def train_model(env, model_name, n_total_timesteps, save_path):
     # For more RL alg, please refer to https://stable-baselines3.readthedocs.io/en/master/guide/algos.html
@@ -67,16 +77,8 @@ def reset_env(env, args):
     return state
 def produce_data(args, worker_id, shared_list, seg_len):
     # Create environment
-    env = create_env(args.env_name, args.random_env)
+    env = create_env(args)
     model = load_model(args.policy_name, args.save_path, env)
-
-    if args.save_state_discrete:
-        map_state_to_discrete = MapStateToDiscrete(env_name=args.env_name).map_state_to_discrete
-    if args.env_name.lower().find("pendulum") >= 0:
-        map_action_to_discrete = MapStateToDiscrete(env_name=args.env_name).map_to_discrete
-        map_action = True
-    else:
-        map_action = False
 
     state_list = []
     act_list = []
@@ -89,23 +91,30 @@ def produce_data(args, worker_id, shared_list, seg_len):
     step = 0
     while step < seg_len:
         trail_reward = 0
-        reset_env(env, args)  # Reset environment
+        state = reset_env(env, args)  # Reset environment
         done = False
         step_trail_start = step
         while not done:
             action, _ = model.predict(state)  # Select action
-            next_state, reward, done, *_ = env.step(action)  # Execute action
+            next_state, reward, terminated, truncated, *_ = env.step(action)  # Execute action
             
+            if args.env_name.lower().find("anymdp") >=0:
+                done = terminated
+            else:
+                if terminated or truncated:
+                    done = True
+            # Reward shaping
+            if args.env_name.lower().find("mountaincar") >=0 and terminated:
+                reward = 1.0
+            elif args.env_name.lower().find("lake") >=0 and done and reward < 0.5:
+                reward = -1.0
+            elif args.env_name.lower().find("pendulum") >=0:
+                reward = reward / 10 + 0.3
+
             # Record state, action, and reward
-            if args.save_state_discrete:
-                state_list.append(map_state_to_discrete(state))  # Append current state
-            else:
-                state_list.append(state)  # Append current state
+            state_list.append(state)  # Append current state
             
-            if map_action:
-                act_list.append(np.squeeze(map_action_to_discrete(value = action, min_val=-2.0, max_val=2.0, n_interval=5)))  # Append action taken
-            else:
-                act_list.append(action)    # Append action taken
+            act_list.append(action)    # Append action taken
 
             reward_list.append(reward) # Append reward received
             
@@ -114,14 +123,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
             step += 1
             if step - step_trail_start > args.n_max_steps:
                 done = True
-            elif args.env_name.lower().find("mountaincar") >=0 and next_state[0]>=0.5:
-                done = True
-
             if done:
-                if args.save_state_discrete:
-                    state_list.append(map_state_to_discrete(next_state))  # Append next state
-                else:
-                    state_list.append(next_state)  # Append next state
+                state_list.append(next_state)  # Append next state
                 act_list.append(np.array(args.action_done))    # Append action flag
                 reward_list.append(np.array(args.reward_done)) # Append reward zero
                 trail_reward_list.append(trail_reward) # Append trail reward
@@ -150,7 +153,7 @@ def produce_data(args, worker_id, shared_list, seg_len):
     return
 
 def generate_records(args, task_id):
-    env = create_env(args.env_name, args.random_env)
+    env = create_env(args)
     if not args.enable_load_model or args.random_env:
         train_model(env, args.policy_name, args.n_total_timesteps, args.save_path)
 
@@ -219,17 +222,16 @@ if __name__ == "__main__":
     parser.add_argument('--n_workers', type=int, default=1, help='Number of parallel workers for training.')
     parser.add_argument('--enable_load_model', type=str, default="False", help='Whether to load a pre-trained model.')
     parser.add_argument('--random_env', type=str, default="False", help='Random env.')
-    parser.add_argument('--action_done', type=int, default=4, help='Action when done.')
+    parser.add_argument('--action_done', type=int, default=5, help='Action when done.')
     parser.add_argument('--reward_done', type=float, default=0.0, help='Reward when left.')
-    parser.add_argument('--save_state_discrete', type=str, default="False", help='Convert continous state into discrete state, support .')
-
+    parser.add_argument('--map_env_to_discrete', type=str, default=0, help='Map env to discrete state.')
+    parser.add_argument('--action_clip', type=int, default=5, help='Discrete env action_clip.')
+    parser.add_argument('--state_clip', type=int, default=64, help='Discrete env state_clip.')
 
     args = parser.parse_args()
     args.enable_load_model = args.enable_load_model.lower() == "true"
     args.random_env = args.random_env.lower() == "true"
-    args.save_state_discrete = args.save_state_discrete.lower() == "true"
-    if args.env_name.lower().find("pendulum") < 0 and args.env_name.lower().find("mountaincar") < 0:
-        args.save_state_discrete = False
+    args.map_env_to_discrete = args.map_env_to_discrete.lower() == "true"
 
     for task_id in range(args.n_task):
         generate_records(args, task_id)

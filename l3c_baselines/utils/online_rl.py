@@ -334,9 +334,9 @@ class OnlineRL:
         elif self.model_name.lower() == 'dqn':
             self.model = DQN(
                 policy='MlpPolicy', env=self.env,
-                learning_rate=0.001, buffer_size=500_000, exploration_fraction=0.02,
-                exploration_final_eps=0.01, batch_size=64, tau=0.01,
-                train_freq=(2, 'step'), gradient_steps=2, seed=None, optimize_memory_usage=False,
+                learning_rate=0.00025, buffer_size=100_000, exploration_fraction=0.1,
+                exploration_final_eps=0.01, batch_size=32, tau=0.005,
+                train_freq=(4, 'step'), gradient_steps=1, seed=None, optimize_memory_usage=False,
                 verbose=1)
         elif self.model_name.lower() == 'td3':
             self.model = TD3(

@@ -374,8 +374,11 @@ class AnyMDPGenerator(GeneratorBase):
                 while not done:
                     action= benchmark_model(new_state)
                     new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
-                    if terminated or truncated:
-                        done = True
+                    if self.config.env.lower().find("anymdp") >= 0:
+                        done = terminated
+                    else:
+                        if terminated or truncated:
+                            done = True
                     shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
@@ -480,8 +483,11 @@ class AnyMDPGenerator(GeneratorBase):
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
                 new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
-                if terminated or truncated:
-                    done = True
+                if self.config.env.lower().find("anymdp") >= 0:
+                        done = terminated
+                else:
+                    if terminated or truncated:
+                        done = True
                 # Reward shaping
                 shaped_reward = self.reward_shaping(done, terminated, new_reward)
 
