@@ -11,6 +11,7 @@ import multiprocessing
 import pickle
 import random as rnd
 from numpy import random
+from l3c_baselines.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.utils import pseudo_random_seed
 
@@ -34,7 +35,7 @@ class AnyPolicySolver(object):
         self.policy_transfer = self.policy_transfer / numpy.sum(self.policy_transfer, axis=1, keepdims=True)
 
     def learner(self, *args, **kwargs):
-        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer)
+        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer), tag_mapping_id['rnd']
 
     def policy(self, state):
         return numpy.random.choice(self.n_actions, size=1, p=self.policy_matrix[state])[0]
@@ -45,6 +46,7 @@ class AnyMDPOptNoiseDistiller(object):
         self.nstate = env.observation_space.n
         self.naction = env.action_space.n
         self.opt_solver = opt_solver
+        self.opt_tag = opt_solver.tag if opt_solver is not None else None
         self.noise_decay = random.uniform(0.0, 1.0 / (self.nstate * self.naction))
     
     def learner(self, *args, **kwargs):
@@ -53,9 +55,11 @@ class AnyMDPOptNoiseDistiller(object):
     def policy(self, state):
         if(self.opt_solver is None or random.random() < self.noise):
             action = random.randint(0, self.naction - 1)
+            act_type = tag_mapping_id['rnd']
         else:
             action = self.opt_solver.policy(state)
-        return action
+            act_type = tag_mapping_id[self.opt_tag]
+        return action, act_type
 
 class AnyMDPOTSNoiseDistiller(AnyMDPSolverOTS):
     def __init__(self, env, 
@@ -87,9 +91,11 @@ class AnyMDPOTSNoiseDistiller(AnyMDPSolverOTS):
     def policy(self, state):
         if(random.random() < self.noise):
             action = random.randint(0, self.naction - 1)
+            act_type = tag_mapping_id['rnd']
         else:
             action = super().policy(state)
-        return action
+            act_type = tag_mapping_id['exp1']
+        return action, act_type
     
 class AnyMDPQNoiseDistiller(AnyMDPSolverQ):
     def __init__(self, env, 
@@ -121,9 +127,11 @@ class AnyMDPQNoiseDistiller(AnyMDPSolverQ):
     def policy(self, state):
         if(random.random() < self.noise):
             action = random.randint(0, self.naction - 1)
+            act_type = tag_mapping_id['rnd']
         else:
             action = super().policy(state)
-        return action
+            act_type = tag_mapping_id['exp2']
+        return action, act_type
     
 class AnyMDPOTSOpter(AnyMDPSolverOTS):
     def __init__(self, env, solver_opt=None,
@@ -142,7 +150,8 @@ class AnyMDPOTSOpter(AnyMDPSolverOTS):
         self.opt = random.uniform(-2.0, -0.5)
         self.opt_end = random.uniform(0.0, 0.20)
         self.opt_inc = random.uniform(0.0, 0.10 / (self.nstate * self.naction))
-    
+        self.opt_tag = solver_opt.tag if solver_opt is not None else None
+
     def learner(self, *args, **kwargs):
         super().learner(*args, **kwargs)
         self.noise -= self.noise_decay
@@ -153,8 +162,24 @@ class AnyMDPOTSOpter(AnyMDPSolverOTS):
     def policy(self, state):
         if(random.random() < self.noise):
             action = random.randint(0, self.naction - 1)
+            act_type = tag_mapping_id['rnd']
         elif(random.random() < self.opt and self.solver_opt is not None):
             action = self.solver_opt.policy(state)
+            act_type = tag_mapping_id[self.opt_tag]
         else:
             action = super().policy(state)
-        return action
+            act_type = tag_mapping_id['exp1']
+        return action, act_type
+
+
+class AnyMDPOpter(AnyMDPSolverOpt):
+    def __init__(self, i, *args, **kwargs):
+        self.tag = f'opt{i}'
+        self.prompts = tag_mapping_id[self.tag]
+        super().__init__(*args, **kwargs, gamma=tag_mapping_gamma[self.tag])
+    
+    def learner(self, *args, **kwargs):
+        pass
+
+    def policy(self, state):
+        return super().policy(state), self.prompts

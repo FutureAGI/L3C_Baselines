@@ -14,6 +14,7 @@ from numpy import random
 import l3c
 from packaging import version
 assert version.parse(l3c.__version__) >= version.parse('0.2.1.19')
+from l3c_baselines.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt
@@ -22,7 +23,7 @@ from l3c.utils import pseudo_random_seed
 current_folder = os.path.dirname(os.path.abspath(__file__))
 if current_folder not in sys.path:
     sys.path.append(current_folder)
-from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller
+from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller, AnyMDPOpter
 
 
 
@@ -39,51 +40,104 @@ def run_epoch(
     nstate = env.observation_space.n
     naction = env.action_space.n
 
-    # Data Storage
-    state_list = list()
-    lact_list = list()
-    bact_list = list()
-    reward_list = list()
-    
     # Referrence Policies
-    solveropt = AnyMDPSolverOpt(env)
+    solveropt0 = AnyMDPOpter(0, env)
+    solveropt1 = AnyMDPOpter(1, env)
+    solveropt2 = AnyMDPOpter(2, env)
+    solveropt3 = AnyMDPOpter(3, env)
 
     # List of Behavior Policies
     solverneg = AnyPolicySolver(env)
     solverots = AnyMDPOTSNoiseDistiller(env, max_steps=max_steps)
     solverq = AnyMDPQNoiseDistiller(env, max_steps=max_steps)
-    solverotsopt = AnyMDPOTSOpter(env, solver_opt=solveropt, max_steps=max_steps)
-    solveroptnoise = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt)
-    behavior_list = [solverneg, solverots, solverq, solverotsopt, solveroptnoise]
+    solverotsopt0 = AnyMDPOTSOpter(env, solver_opt=solveropt0, opt_tag='opt0', max_steps=max_steps)
+    solverotsopt1 = AnyMDPOTSOpter(env, solver_opt=solveropt1, opt_tag='opt1', max_steps=max_steps)
+    solverotsopt2 = AnyMDPOTSOpter(env, solver_opt=solveropt2, opt_tag='opt2', max_steps=max_steps)
+    solverotsopt3 = AnyMDPOTSOpter(env, solver_opt=solveropt3, max_steps=max_steps)
+    solveroptnoise3 = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt3)
+
+    # Data Generation Strategy
+    behavior_dict = [(solverneg, 0.10),
+                     (solverots, 0.10),
+                     (solverq,   0.10),
+                     (solverotsopt0, 0.15),
+                     (solverotsopt1, 0.15),
+                     (solverotsopt2, 0.15),
+                     (solverotsopt3, 0.15)
+                     (solveropt0, 0.025),
+                     (solveropt1, 0.025),
+                     (solveropt2, 0.025),
+                     (solveropt3, 0.025)]
+    reference_dict = [(solveropt0, 0.10),
+                      (solveropt1, 0.10),
+                      (solveropt2, 0.20),
+                      (solveropt3, 0.60)]
+    
+    # Policy Sampler
+    blist, bprob = zip(*behavior_dict)
+    rlist, rprob = zip(*reference_dict)
+
+    bprob = numpy.cumsum(bprob)
+    bprob /= bprob[-1]
+    rprob = numpy.cumsum(rprob)
+    rprob /= rprob[-1]
+
+    def sample_behavior():
+        return blist[numpy.searchsorted(bprob, random.random())]
+    
+    def sample_reference():
+        return rlist[numpy.searchsorted(rprob, random.random())]
 
     state, info = env.reset()
 
     ppl_sum = []
     mse_sum = []
 
-    solver = random.choice(behavior_list)
-    need_resample = (random.random() > 0.60)
-    resample_freq = random.random() * 0.05
+    bsolver = sample_behavior()
+    rsolver = sample_reference()
+
+    mask_all_tag_prob = 0.15
+    mask_tag_prob = 0.15
+
+    need_resample_b = (random.random() < 0.5)
+    resample_freq_b = 0.05
+    need_resample_r = (random.random() < 0.5)
+    resample_freq_r = 0.05
+    mask_all_tag = (random.random() < mask_all_tag_prob) # 15% probability to mask all tags
 
     def learn(state, bact, next_state, reward, done):
-        for solver in behavior_list:
+        for solver, _ in behavior_dict:
             solver.learner(state, bact, next_state, reward, done)
 
-    def resample_solver():
-        if(need_resample and random.random() < resample_freq):
-            return random.choice(behavior_list)
-        else:
-            return solver
+    def resample_bsolver():
+        if(need_resample_b and random.random() < resample_freq_b):
+            bsolver = sample_behavior()
+
+    def resample_rsolver():
+        if(need_resample_r and random.random() < resample_freq_r):
+            rsolver = sample_reference()
+
+    # Data Storage
+    state_list = list()
+    lact_list = list()
+    bact_list = list()
+    reward_list = list()
+    prompt_list = list()
+    tag_list = list()
 
     while steps <= max_steps:
         if(offpolicy_labeling):
-            bact = solver.policy(state)
-            lact = solveropt.policy(state)
+            bact, bact_type = bsolver.policy(state)
+            lact, prompt = rsolver.policy(state)
+            resample_rsolver()
         else:
-            bact = solverotsopt.policy(state)
+            bact, bact_type = solverotsopt3.policy(state)
             lact = bact
+            prompt = bact_type
 
         next_state, reward, done, info = env.step(bact)
+        if(random.random() < mask_all_tag or mask_all_tag):
+            act_type = tag_mapping_id['unk']
 
         ppl = -numpy.log(info["transition_gt"][next_state])
         mse = (reward - info["reward_gt"]) ** 2
@@ -96,15 +150,20 @@ def run_epoch(
         bact_list.append(bact)
         lact_list.append(lact)
         reward_list.append(reward)
+        tag_list.append(bact_type)
+        prompt_list.append(prompt)
 
         if(done): # If done, push the next state, but add a dummy action
             state_list.append(next_state)
             bact_list.append(naction)
             lact_list.append(naction)
             reward_list.append(0.0)
+            tag_list.append(tag_mapping_id['unk'])
+            prompt_list.append(tag_mapping_id['unk'])
+
             steps += 1
             next_state, info = env.reset()
-            solver = resample_solver()
+            resample_bsolver()
 
         state = next_state
         steps += 1
@@ -114,9 +173,11 @@ def run_epoch(
 
     return {
             "states": numpy.array(state_list, dtype=numpy.uint32),
+            "prompts": numpy.array(prompt_list, dtype=numpy.uint32),
+            "tags": numpy.array(tag_list, dtype=numpy.uint32),
             "actions_behavior": numpy.array(bact_list, dtype=numpy.uint32),
+            "rewards": numpy.array(reward_list, dtype=numpy.float32),
             "actions_label": numpy.array(lact_list, dtype=numpy.uint32),
-            "rewards": numpy.array(reward_list, dtype=numpy.float32)
             }
 
 def create_directory(directory_path):
@@ -147,9 +208,12 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions, mi
         create_directory(file_path)
 
         numpy.save("%s/observations.npy" % file_path, results["states"])
+        numpy.save("%s/prompts.npy" % file_path, results["prompts"])
+        numpy.save("%s/tags.npy" % file_path, results["tags"])
         numpy.save("%s/actions_behavior.npy" % file_path, results["actions_behavior"])
-        numpy.save("%s/actions_label.npy" % file_path, results["actions_label"])
         numpy.save("%s/rewards.npy" % file_path, results["rewards"])
+        numpy.save("%s/actions_label.npy" % file_path, results["actions_label"])
+
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name

@@ -8,6 +8,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
+from l3c_baselines.utils import gamma_vocabulary, tag_vocabulary, tag_mapping
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
@@ -164,8 +165,8 @@ class AnyMDPEpoch:
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
 
-
-# TODO: ADAPT Generator To OPTAR
+# TODO: ADAPT Generator To OPTAR @PENGTAO
+# use gamma_vocabulary and tag_vocabulary
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
         if(self.config.env.lower().find("lake") >= 0):
@@ -519,4 +520,3 @@ class AnyMDPGenerator(GeneratorBase):
                                 random_results['reward']['mean'],
                                 random_results['success_rate']['mean'])
             save_results(random_results, "random_result")
-                        
