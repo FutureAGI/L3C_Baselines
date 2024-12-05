@@ -33,6 +33,20 @@ class AnyMDPRSA(RSADecisionModel):
         self.reward_dtype = config.reward_encode.input_type
         self.action_dtype = config.action_encode.input_type
 
+        if(config.reward_encode.input_type == "Discrete"):
+            self.default_r = torch.full(config.reward_encode.input_size, (1, 1), dtype=torch.int64)
+        elif(self.config.reward_encode.input_type == "Continuous"):
+            self.default_r = torch.zeros((1, 1, config.reward_encode.input_size))
+        else:
+            raise ValueError("Invalid reward encoding type", config.reward_encoding)
+        
+        if(config.action_encode.input_type == "Discrete"):
+            self.default_a = torch.full((1, 1), config.action_encode.input_size - 1, dtype=torch.int64)
+        elif(config.action_encode.input_type == "Continuous"):
+            self.default_a = torch.zeros((1, 1, config.action_encode.input_size))
+        else:
+            raise ValueError("Invalid reward encoding type", config.action_encoding)
+
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
             log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model)))
@@ -81,10 +95,11 @@ class AnyMDPRSA(RSADecisionModel):
             else:
                 self.r_decoder.requires_grad_(True)
 
-    def sequential_loss(self, prompts, 
-                            observations, 
-                            rewards, 
+    def sequential_loss(self, observations, 
+                            prompts,
+                            tags,
                             behavior_actions, 
+                            rewards, 
                             label_actions, 
                             state_dropout=0.0,
                             reward_dropout=0.0,
