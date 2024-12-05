@@ -8,7 +8,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.utils import gamma_vocabulary, tag_vocabulary, tag_mapping
+from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
@@ -71,14 +71,11 @@ class AnyMDPEpoch:
         Defining the computation function for each batch
         """
         state_dropout = 0.0
-        reward_dropout = 0.0
         if(self.is_training):
             assert self.optimizer is not None, "optimizer is required for training"
             state_dropout = self.state_dropout
-            reward_dropout = self.reward_dropout
         else:
             state_dropout = 0.0
-            reward_dropout = 0.0
 
         losses = []
         for sub_idx, states, prompts, tags, bactions, rewards, lactions in segment_iterator(
@@ -86,13 +83,12 @@ class AnyMDPEpoch:
                     (sarr, 1), parr, tarr, baarr, rarr, laarr):
             loss = self.model.module.sequential_loss(
                     states,  # Observations
-                    bactions, # Behavior Actions
                     prompts,  # Prompts
                     tags,  # Tags
+                    bactions, # Behavior Actions
                     rewards, # Rewards
                     lactions, # Reference Actions
                     state_dropout=state_dropout, 
-                    reward_dropout=reward_dropout,
                     use_loss_weight=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)

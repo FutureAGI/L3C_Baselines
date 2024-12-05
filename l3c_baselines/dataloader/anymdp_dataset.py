@@ -38,11 +38,8 @@ class AnyMDPDataSetBase(Dataset):
             actions_behavior = np.load(path + '/actions_behavior.npy')
             actions_label = np.load(path + '/actions_label.npy')
             rewards = np.load(path + '/rewards.npy')
-
-            if os.path.exists(path + '/prompts.npy'):
-                prompts = np.load(path + '/prompts.npy')
-            if os.path.exists(path + '/tags.npy'):
-                tags = np.load(path + '/tags.npy')
+            prompts = np.load(path + '/prompts.npy')
+            tags = np.load(path + '/tags.npy')
 
             max_t = min(actions_label.shape[0], 
                         rewards.shape[0], 

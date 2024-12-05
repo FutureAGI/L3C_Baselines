@@ -13,8 +13,9 @@ tag_vocabulary={
 
 tag_mapping_id={v:k for k, v in tag_vocabulary.items()}
 
-tag_mapping_gamma={v:0.0 for v in tag_vocabulary.values()}.update(
-    {'opt0': 0.0，
+tag_mapping_gamma={v:0.0 for v in tag_vocabulary.values()}
+tag_mapping_gamma.update(
+    {'opt0': 0.0,
      'opt1': 0.5,
      'opt2': 0.93,
      'opt3': 0.994

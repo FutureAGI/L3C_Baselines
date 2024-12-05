@@ -35,10 +35,10 @@ class AnyPolicySolver(object):
         self.policy_transfer = self.policy_transfer / numpy.sum(self.policy_transfer, axis=1, keepdims=True)
 
     def learner(self, *args, **kwargs):
-        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer), tag_mapping_id['rnd']
+        self.policy_matrix = numpy.matmul(self.policy_matrix, self.policy_transfer)
 
     def policy(self, state):
-        return numpy.random.choice(self.n_actions, size=1, p=self.policy_matrix[state])[0]
+        return numpy.random.choice(self.n_actions, size=1, p=self.policy_matrix[state])[0], tag_mapping_id['rnd']
     
 class AnyMDPOptNoiseDistiller(object):
     def __init__(self, env, opt_solver=None, noise_start=1.0, noise_decay=None):
@@ -46,7 +46,6 @@ class AnyMDPOptNoiseDistiller(object):
         self.nstate = env.observation_space.n
         self.naction = env.action_space.n
         self.opt_solver = opt_solver
-        self.opt_tag = opt_solver.tag if opt_solver is not None else None
         self.noise_decay = random.uniform(0.0, 1.0 / (self.nstate * self.naction))
     
     def learner(self, *args, **kwargs):
@@ -57,8 +56,7 @@ class AnyMDPOptNoiseDistiller(object):
             action = random.randint(0, self.naction - 1)
             act_type = tag_mapping_id['rnd']
         else:
-            action = self.opt_solver.policy(state)
-            act_type = tag_mapping_id[self.opt_tag]
+            action, act_type = self.opt_solver.policy(state)
         return action, act_type
 
 class AnyMDPOTSNoiseDistiller(AnyMDPSolverOTS):
@@ -150,7 +148,6 @@ class AnyMDPOTSOpter(AnyMDPSolverOTS):
         self.opt = random.uniform(-2.0, -0.5)
         self.opt_end = random.uniform(0.0, 0.20)
         self.opt_inc = random.uniform(0.0, 0.10 / (self.nstate * self.naction))
-        self.opt_tag = solver_opt.tag if solver_opt is not None else None
 
     def learner(self, *args, **kwargs):
         super().learner(*args, **kwargs)
@@ -164,8 +161,7 @@ class AnyMDPOTSOpter(AnyMDPSolverOTS):
             action = random.randint(0, self.naction - 1)
             act_type = tag_mapping_id['rnd']
         elif(random.random() < self.opt and self.solver_opt is not None):
-            action = self.solver_opt.policy(state)
-            act_type = tag_mapping_id[self.opt_tag]
+            action, act_type = self.solver_opt.policy(state)
         else:
             action = super().policy(state)
             act_type = tag_mapping_id['exp1']
@@ -182,4 +178,4 @@ class AnyMDPOpter(AnyMDPSolverOpt):
         pass
 
     def policy(self, state):
-        return super().policy(state), self.prompts
+        return super().policy(state), int(self.prompts)

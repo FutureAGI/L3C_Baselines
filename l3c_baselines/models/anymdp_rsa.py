@@ -102,7 +102,6 @@ class AnyMDPRSA(OPTARDecisionModel):
                             rewards, 
                             label_actions, 
                             state_dropout=0.0,
-                            prompt_dropout=0.0,
                             update_memory=True,
                             use_loss_weight=True,
                             reduce_dim=1):
@@ -115,7 +114,7 @@ class AnyMDPRSA(OPTARDecisionModel):
         # Predict the latent representation of action and next frame (World Model)
         s_pred, a_pred, r_pred, _ = self.forward(
                 o_in, prompts, tags, behavior_actions, rewards,
-                cache=None, need_cache=False, state_dropout=state_dropout,
+                cache=None, need_cache=False,
                 update_memory=update_memory)
 
         # Calculate the loss information

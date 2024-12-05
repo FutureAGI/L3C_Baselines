@@ -50,24 +50,26 @@ def run_epoch(
     solverneg = AnyPolicySolver(env)
     solverots = AnyMDPOTSNoiseDistiller(env, max_steps=max_steps)
     solverq = AnyMDPQNoiseDistiller(env, max_steps=max_steps)
-    solverotsopt0 = AnyMDPOTSOpter(env, solver_opt=solveropt0, opt_tag='opt0', max_steps=max_steps)
-    solverotsopt1 = AnyMDPOTSOpter(env, solver_opt=solveropt1, opt_tag='opt1', max_steps=max_steps)
-    solverotsopt2 = AnyMDPOTSOpter(env, solver_opt=solveropt2, opt_tag='opt2', max_steps=max_steps)
+    solverotsopt0 = AnyMDPOTSOpter(env, solver_opt=solveropt0, max_steps=max_steps)
+    solverotsopt1 = AnyMDPOTSOpter(env, solver_opt=solveropt1, max_steps=max_steps)
+    solverotsopt2 = AnyMDPOTSOpter(env, solver_opt=solveropt2, max_steps=max_steps)
     solverotsopt3 = AnyMDPOTSOpter(env, solver_opt=solveropt3, max_steps=max_steps)
+    solveroptnoise2 = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt2)
     solveroptnoise3 = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt3)
 
     # Data Generation Strategy
     behavior_dict = [(solverneg, 0.10),
                      (solverots, 0.10),
                      (solverq,   0.10),
-                     (solverotsopt0, 0.15),
-                     (solverotsopt1, 0.15),
-                     (solverotsopt2, 0.15),
-                     (solverotsopt3, 0.15)
-                     (solveropt0, 0.025),
-                     (solveropt1, 0.025),
-                     (solveropt2, 0.025),
-                     (solveropt3, 0.025)]
+                     (solverotsopt0, 0.10),
+                     (solverotsopt1, 0.10),
+                     (solverotsopt2, 0.10),
+                     (solverotsopt3, 0.10),
+                     (solveroptnoise2, 0.10),
+                     (solveroptnoise3, 0.10),
+                     (solveropt1, 0.02),
+                     (solveropt2, 0.03),
+                     (solveropt3, 0.05)]
     reference_dict = [(solveropt0, 0.10),
                       (solveropt1, 0.10),
                       (solveropt2, 0.20),
@@ -100,22 +102,10 @@ def run_epoch(
     mask_tag_prob = 0.15
 
     need_resample_b = (random.random() < 0.5)
-    resample_freq_b = 0.05
-    need_resample_r = (random.random() < 0.5)
-    resample_freq_r = 0.05
+    resample_freq_b = 0.20
+    need_resample_r = (random.random() < 0.8)
+    resample_freq_r = 0.20
     mask_all_tag = (random.random() < mask_all_tag_prob) # 15% probability to mask all tags
-
-    def learn(state, bact, next_state, reward, done):
-        for solver, _ in behavior_dict:
-            solver.learner(state, bact, next_state, reward, done)
-
-    def resample_bsolver():
-        if(need_resample_b and random.random() < resample_freq_b):
-            bsolver = sample_behavior()
-
-    def resample_rsolver():
-        if(need_resample_r and random.random() < resample_freq_r):
-            rsolver = sample_reference()
 
     # Data Storage
     state_list = list()
@@ -129,22 +119,24 @@ def run_epoch(
         if(offpolicy_labeling):
             bact, bact_type = bsolver.policy(state)
             lact, prompt = rsolver.policy(state)
-            resample_rsolver()
+            if(need_resample_r and resample_freq_r > random.random()):
+                rsolver = sample_reference()
         else:
             bact, bact_type = solverotsopt3.policy(state)
             lact = bact
             prompt = bact_type
 
         next_state, reward, done, info = env.step(bact)
-        if(random.random() < mask_all_tag or mask_all_tag):
-            act_type = tag_mapping_id['unk']
+        if(random.random() < mask_tag_prob or mask_all_tag):
+            bact_type = tag_mapping_id['unk']
 
         ppl = -numpy.log(info["transition_gt"][next_state])
         mse = (reward - info["reward_gt"]) ** 2
         ppl_sum.append(ppl)
         mse_sum.append(mse)
 
-        learn(state, bact, next_state, reward, done)
+        for solver, _ in behavior_dict:
+            solver.learner(state, bact, next_state, reward, done)
 
         state_list.append(state)
         bact_list.append(bact)
@@ -163,7 +155,8 @@ def run_epoch(
 
             steps += 1
             next_state, info = env.reset()
-            resample_bsolver()
+            if(need_resample_b and resample_freq_b > random.random()):
+                bsolver = sample_reference()
 
         state = next_state
         steps += 1

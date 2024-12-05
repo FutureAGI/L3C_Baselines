@@ -185,6 +185,9 @@ class OPTARDecisionModel(nn.Module):
             assert r_arr.shape[:2] == o_arr.shape[:2]
             if(self.r_discrete):
                 r_arr = torch.where(r_arr<0, torch.full_like(r_arr, self.r_dim), r_arr)
+            else:
+                if(r_arr.dim() < 3):
+                    r_arr = r_arr.view(B, NT, 1)
         if(self.t_included):
             assert t_arr is not None
             assert t_arr.shape[:2] == o_arr.shape[:2]            
@@ -204,13 +207,16 @@ class OPTARDecisionModel(nn.Module):
 
         # Insert Prompts, tags and rewards if necessary
         if(self.t_included):
-            t_in = self.t_encoder(t_arr.view(B, NT, 1)).view(B, NT, 1, -1)
-            inputs.insert(1, p_in)
+            t_in = self.t_encoder(t_arr)
+            t_in = t_in.view(B, NT, 1, -1)
+            inputs.insert(1, t_in)
         if(self.p_included):
-            p_in = self.p_encoder(p_arr.view(B, NT, 1)).view(B, NT, 1, -1)
+            p_in = self.p_encoder(p_arr)
+            p_in = p_in.view(B, NT, 1, -1)
             inputs.insert(1, p_in)
         if(self.r_included):
-            r_in = self.r_encoder(r_arr.view(B, NT, 1)).view(B, NT, 1, -1)
+            r_in = self.r_encoder(r_arr)
+            r_in = r_in.view(B, NT, 1, -1)
             inputs.append(r_in)
 
         # [B, NT, 2-5, H]

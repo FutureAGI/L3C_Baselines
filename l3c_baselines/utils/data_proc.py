@@ -36,16 +36,17 @@ def sa_dropout(x, p=0.15, replacement=None):
     if(dtype in [torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64]):
         if(replacement == None):
             replacement = torch.tensor(-1, dtype=dtype).to(device)
-        mask = torch.rand(*x.shape) > p
+        mask = (torch.rand(*x.shape) > p).to(device)
         x = torch.where(mask, x, replacement)
         return x
     else:
-        mask = torch.rand(*x.shape[:-1]) > p
+        mask = (torch.rand(*x.shape[:-1]) > p).to(device)
         if(replacement == None):
             replacement = torch.zeros_like(x).to(device)
         else:
-            replacement = replacement[*((None,) * (x.dim()-1)), :]
-        x = torch.where(mask, x, replacement)
+            for _ in range(x.dim() - 1):
+                replacement = torch.unsqueeze(replacement, 0)
+        x = torch.where(mask, x, replacement.to(device))
         return x
 
 def downsample(x, downsample_length, axis=-1):
