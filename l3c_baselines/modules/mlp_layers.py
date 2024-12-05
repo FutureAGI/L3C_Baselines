@@ -5,7 +5,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 
 
 class MLPEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, reserved_ID=False):
         super().__init__()
 
         input_size = config.input_size
@@ -21,7 +21,10 @@ class MLPEncoder(nn.Module):
         if(input_type.startswith("discrete")):
             self.is_continuous = False
             assert isinstance(hidden_size, int)
-            self.encoder_layer = nn.Embedding(input_size, hidden_size)
+            if(reserved_ID): # Reserve the last ID for special token
+                self.encoder_layer = nn.Embedding(input_size + 1, hidden_size)
+            else:
+                self.encoder_layer = nn.Embedding(input_size, hidden_size)
             self.output_size = hidden_size
         elif(input_type.startswith("continuous")):
             self.is_continuous = True
