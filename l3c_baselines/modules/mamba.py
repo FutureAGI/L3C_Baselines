@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-from mamba_ssm import Mamba
-from mamba_ssm.utils.generation import InferenceParams
+from fla.models.mamba2.modeling_mamba2 import Mamba2Mixer, Mamba2Cache
+from fla.models.mamba2.configuration_mamba2 import Mamba2Config
 
 
 class MambaCache(object):
@@ -61,7 +61,7 @@ class MambaBlock(nn.Module):
 
         self.layer_idx = layer_idx
         self.max_position_encoding = max_position_encoding
-        self.encoder = Mamba(
+        self.encoder = Mamba2Mixer(
                   io_size,
                   d_state=d_state,
                   d_conv=d_conv,
