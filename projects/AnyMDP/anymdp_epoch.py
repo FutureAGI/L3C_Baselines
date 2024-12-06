@@ -298,17 +298,22 @@ class AnyMDPGenerator(GeneratorBase):
             
             if os.path.isdir(folder_path):
                 states = numpy.load(os.path.join(folder_path, 'observations.npy'))
+                prompts = numpy.load(os.path.join(folder_path, 'prompts.npy'))
+                tags = numpy.load(os.path.join(folder_path, 'tags.npy'))
                 actions = numpy.load(os.path.join(folder_path, 'actions_behavior.npy'))
                 rewards = numpy.load(os.path.join(folder_path, 'rewards.npy'))
                 states = states.astype(numpy.int32)
+                prompts = prompts.astype(numpy.int32)
+                tags = tags.astype(numpy.int32)
                 actions = actions.astype(numpy.int32)
                 rewards = rewards.astype(numpy.float32)
                 segment_len = 1000
                 for start in range(0, len(states), segment_len):
                     end = min(start + segment_len, len(states))
                     self.model.module.in_context_learn(
-                        None,
                         states[start:end],
+                        prompts[start:end],
+                        tags[start:end],
                         actions[start:end],
                         rewards[start:end],
                         single_batch=True,
@@ -457,6 +462,9 @@ class AnyMDPGenerator(GeneratorBase):
         total_step = 0
         pred_state_dist = None
 
+        interactive_prompt = numpy(int(3)) # opt3 with gamma 0.994
+        interactive_tag = numpy(int(7)) # Unknown, let model deside current policy quality 
+
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher()
 
@@ -475,8 +483,9 @@ class AnyMDPGenerator(GeneratorBase):
             while not done:
                 # Generate action, world model prediction
                 pred_state_dist, action, pred_reward = self.model.module.generate(
-                    None,
                     previous_state,
+                    interactive_prompt,
+                    interactive_tag,
                     temp=temp)
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
@@ -495,10 +504,11 @@ class AnyMDPGenerator(GeneratorBase):
                 # world model reward prediction correct count:
                 # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
 
-                # start learning
+                # start learning        
                 self.model.module.in_context_learn(
-                    None,
                     previous_state,
+                    interactive_prompt,
+                    interactive_tag,
                     action,
                     shaped_reward)
 
@@ -517,8 +527,9 @@ class AnyMDPGenerator(GeneratorBase):
                     act_arr.append(self.action_dim)
                     rew_arr.append(0.0)
                     self.model.module.in_context_learn(
-                        None,
                         new_state,
+                        interactive_prompt,
+                        interactive_tag,
                         self.action_dim,
                         0.0)
                     # success rate

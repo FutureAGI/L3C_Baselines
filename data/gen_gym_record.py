@@ -142,8 +142,12 @@ def produce_data(args, worker_id, shared_list, seg_len):
     if(args.env_name.lower() == "lake" or args.env_name.lower() == "lander"):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
+    prompt_array = np.full(len(state_list), int(args.prompt), dtype=int)
+    tag_array = prompt_array
     result = {
         "states": np.squeeze(np.array(state_list)),
+        "prompts": prompt_array,
+        "tags": tag_array,
         "actions": np.squeeze(np.array(act_list)),
         "rewards": np.squeeze(np.array(reward_list)),
         "trail_reward": np.squeeze(np.array(trail_reward_list))
@@ -222,6 +226,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_workers', type=int, default=1, help='Number of parallel workers for training.')
     parser.add_argument('--enable_load_model', type=str, default="False", help='Whether to load a pre-trained model.')
     parser.add_argument('--random_env', type=str, default="False", help='Random env.')
+    parser.add_argument('--prompt', type=int, default=3, help='Prompt. 3 for opt with gramma 0.994. 4 for opt with noise. 5 for q-learning with noise.')
     parser.add_argument('--action_done', type=int, default=5, help='Action when done.')
     parser.add_argument('--reward_done', type=float, default=0.0, help='Reward when left.')
     parser.add_argument('--map_env_to_discrete', type=str, default=0, help='Map env to discrete state.')
