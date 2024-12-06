@@ -22,24 +22,35 @@ model_config:
       input_size: 128
       hidden_size: 512
       dropout: 0.0
+      is_frozen: False
 
   action_encode:
       input_type: Discrete
       input_size: 6
       hidden_size: 512
       dropout: 0.0
+      is_frozen: False
 
   prompt_encode:
-      input_type: Continuous
-      input_size: 1
+      input_type: Discrete
+      input_size: 8
       hidden_size: 512
       dropout: 0.0
+      is_frozen: False
+
+  tag_encode:
+      input_type: Discrete
+      input_size: 8
+      hidden_size: 512
+      dropout: 0.0
+      is_frozen: False
 
   reward_encode:
       input_type: Continuous
       input_size: 1
       hidden_size: 512
       dropout: 0.0
+      is_frozen: False
 
   state_decode:
       output_type: Discrete
@@ -50,6 +61,7 @@ model_config:
       layer_norm: True
       residual_connect: True
       dropout: 0.0
+      is_frozen: False
 
   action_decode:
       output_type: Discrete
@@ -60,6 +72,7 @@ model_config:
       layer_norm: True
       residual_connect: True
       dropout: 0.0
+      is_frozen: False
 
   reward_decode:
       output_type: Continuous
@@ -70,6 +83,7 @@ model_config:
       layer_norm: True
       residual_connect: True
       dropout: 0.0
+      is_frozen: False
 
   causal_block_bak_1: # change to causal_block if use this block
       model_type: TRANSFORMER
