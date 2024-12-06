@@ -26,7 +26,6 @@ class AnyMDPRSA(OPTARDecisionModel):
         loss_weight = loss_weight / torch.sum(loss_weight)
 
         self.register_buffer('loss_weight', loss_weight)
-        self.set_train_config(config)
 
         self.nactions = config.action_dim
         self.state_dtype = config.state_encode.input_type

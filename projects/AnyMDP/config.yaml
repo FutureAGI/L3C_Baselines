@@ -14,8 +14,7 @@ model_config:
   max_position_loss_weighting: 48000
   action_dim: 5
   policy_loss_type: CrossEntropy
-  rsa_type: sar  #psa/sar/psar/sa
-  frozen_modules: None #causal_model/s_encoder/s_decoder/a_encoder/a_decoder/r_encoder/r_decoder/p_encoder/p_decoder
+  rsa_type: sptar  #sta, sa, sar
 
   state_encode:
       input_type: Discrete
@@ -99,6 +98,7 @@ model_config:
       use_blockrecurrence: True
       memory_length: 3000
       memory_type: KV
+      is_frozen: False
 
   causal_block_bak_2:
       model_type: GSA # GLA
@@ -114,6 +114,7 @@ model_config:
       use_blockrecurrence: True
       checkpoints_density: -1
       memory_type: MEM
+      is_frozen: False
 
   causal_block_bak_3:
       model_type: RWKV6
@@ -132,6 +133,7 @@ model_config:
       gate_bound: 12
       memory_length: 0
       memory_type: MEM
+      is_frozen: False
 
   causal_block_bak_4:
       model_type: Mamba
@@ -148,6 +150,7 @@ model_config:
       checkpoints_density: -1
       memory_length: 0
       memory_type: MEM
+      is_frozen: False
 
 train_config:
     max_epochs: 20
