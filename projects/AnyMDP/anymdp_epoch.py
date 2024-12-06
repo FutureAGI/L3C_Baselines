@@ -10,6 +10,7 @@ from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsampl
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
 from l3c_baselines.utils import DiscreteEnvWrapper
 from l3c_baselines.utils import OnlineRL
+from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
@@ -64,35 +65,31 @@ class AnyMDPEpoch:
         else:
             self.reward_dropout = 0.20
 
-    def compute(self, sarr, baarr, laarr, rarr, 
+    def compute(self, sarr, parr, tarr, baarr, rarr, laarr,
                         epoch_id=-1, 
                         batch_id=-1):
         """
         Defining the computation function for each batch
         """
         state_dropout = 0.0
-        reward_dropout = 0.0
         if(self.is_training):
             assert self.optimizer is not None, "optimizer is required for training"
             state_dropout = self.state_dropout
-            reward_dropout = self.reward_dropout
         else:
             state_dropout = 0.0
-            reward_dropout = 0.0
 
         losses = []
-        r2goarr = rewards2go(rarr)
-        for sub_idx, states, bactions, lactions, rewards, r2go in segment_iterator(
+        for sub_idx, states, prompts, tags, bactions, rewards, lactions in segment_iterator(
                     self.config.seq_len, self.config.seg_len, self.device, 
-                    (sarr, 1), baarr, laarr, rarr, (r2goarr, 1)):
+                    (sarr, 1), parr, tarr, baarr, rarr, laarr):
             loss = self.model.module.sequential_loss(
-                    r2go[:, :-1], # Prompts
-                    states, 
-                    rewards, # Rewards 
-                    bactions, 
-                    lactions, 
+                    states,  # Observations
+                    prompts,  # Prompts
+                    tags,  # Tags
+                    bactions, # Behavior Actions
+                    rewards, # Rewards
+                    lactions, # Reference Actions
                     state_dropout=state_dropout, 
-                    reward_dropout=reward_dropout,
                     use_loss_weight=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
@@ -165,7 +162,8 @@ class AnyMDPEpoch:
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
 
-
+# TODO: ADAPT Generator To OPTAR @PENGTAO
+# use gamma_vocabulary and tag_vocabulary
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
         if(self.config.env.lower().find("lake") >= 0):
@@ -615,4 +613,3 @@ class AnyMDPGenerator(GeneratorBase):
                                 random_results['reward']['mean'],
                                 random_results['success_rate']['mean'])
             save_results(random_results, "random_result")
-                        
