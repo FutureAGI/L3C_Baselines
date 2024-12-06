@@ -99,12 +99,13 @@ def run_epoch(
     rsolver = sample_reference()
 
     mask_all_tag_prob = 0.15
-    mask_tag_prob = 0.15
+    mask_epoch_tag_prob = 0.15
 
-    need_resample_b = (random.random() < 0.5)
+    need_resample_b = (random.random() < 0.8)
     resample_freq_b = 0.20
-    need_resample_r = (random.random() < 0.8)
+    need_resample_r = (random.random() < 0.6)
     resample_freq_r = 0.20
+
     mask_all_tag = (random.random() < mask_all_tag_prob) # 15% probability to mask all tags
 
     # Data Storage
@@ -127,7 +128,7 @@ def run_epoch(
             prompt = bact_type
 
         next_state, reward, done, info = env.step(bact)
-        if(random.random() < mask_tag_prob or mask_all_tag):
+        if(mask_all_tag or mask_epoch_tag):
             bact_type = tag_mapping_id['unk']
 
         ppl = -numpy.log(info["transition_gt"][next_state])
@@ -157,6 +158,7 @@ def run_epoch(
             next_state, info = env.reset()
             if(need_resample_b and resample_freq_b > random.random()):
                 bsolver = sample_reference()
+            mask_epoch_tag = (random.random() < mask_epoch_tag_prob)
 
         state = next_state
         steps += 1
