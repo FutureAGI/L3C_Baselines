@@ -462,8 +462,8 @@ class AnyMDPGenerator(GeneratorBase):
         total_step = 0
         pred_state_dist = None
 
-        interactive_prompt = numpy(int(3)) # opt3 with gamma 0.994
-        interactive_tag = numpy(int(7)) # Unknown, let model deside current policy quality 
+        interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
+        interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher()
@@ -486,7 +486,10 @@ class AnyMDPGenerator(GeneratorBase):
                     previous_state,
                     interactive_prompt,
                     interactive_tag,
-                    temp=temp)
+                    temp=temp,
+                    need_numpy=True,
+                    single_batch=True,
+                    future_prediction=True)
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
                 new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
