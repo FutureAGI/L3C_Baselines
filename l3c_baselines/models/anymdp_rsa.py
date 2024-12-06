@@ -338,8 +338,9 @@ class AnyMDPRSA(OPTARDecisionModel):
 
         # s, a, r = obs, act_pred, r_pred; update memory = true
         _, _, _, new_cache = self.forward(
-            pro_in,
             obs_in,
+            pro_in,
+            pro_in,
             act_in,
             rew_in,
             need_cache=need_cache,
