@@ -96,14 +96,14 @@ class OPTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["optar", "oar", "ota", "oa"]
+        self.rsa_choice =  ["sptar", "sar", "sta", "sa"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the s
         if(self.rsa_type.find('p') > -1):
             self.pm_pos = self.rsa_type.find('p')
         else:
-            self.pm_pos = self.rsa_type.find('o')
+            self.pm_pos = self.rsa_type.find('s')
         # Predict world modeling from the action
         self.wm_pos = self.rsa_type.find('a')
 

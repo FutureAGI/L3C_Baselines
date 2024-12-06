@@ -180,7 +180,15 @@ def EpochManager(cls):
                     log_progress((batch_id + 1) / data_length, on=self.main)
 
                 yield need_break
+
+            # Save At Training Epoch End
+            if(self.main and self.is_training):
+                check_model_validity(self.model.module)
+                save_model_path = model_path(self.config.save_model_path, epoch_id)
+                torch.save(self.model.state_dict(), save_model_path)
+
             yield True
+
     return WrapperEpochManager
 
 def dist_process(rank, use_gpu, world_size, config, main_rank,
