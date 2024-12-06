@@ -94,6 +94,11 @@ class CausalBlock(nn.Module):
         self.layers = main_encoder
         self.checkpoints_density = config.checkpoints_density
 
+        if(config.has_attr('is_fronzen')):
+            if(config.is_frozen):
+                for param in self.parameters():
+                    param.requires_grad_(False)
+
     @property
     def position(self):
         if(hasattr(self.layers, 'position')):

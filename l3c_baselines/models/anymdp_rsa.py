@@ -26,7 +26,6 @@ class AnyMDPRSA(OPTARDecisionModel):
         loss_weight = loss_weight / torch.sum(loss_weight)
 
         self.register_buffer('loss_weight', loss_weight)
-        self.set_train_config(config)
 
         self.nactions = config.action_dim
         self.state_dtype = config.state_encode.input_type
@@ -50,50 +49,6 @@ class AnyMDPRSA(OPTARDecisionModel):
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
             log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model)))
-
-    def set_train_config(self, config):
-        if(config.has_attr("frozen_modules")):
-            if("causal_model" in config.frozen_modules):
-               self.causal_model.requires_grad_(False)
-            else:
-               self.causal_model.requires_grad_(True)
-
-            if("s_encoder" in config.frozen_modules):
-                self.s_encoder.requires_grad_(False)
-            else:
-                self.s_encoder.requires_grad_(True)
-
-            if("a_encoder" in config.frozen_modules):
-                self.a_encoder.requires_grad_(False)
-            else:
-                self.a_encoder.requires_grad_(True)
-
-            if(self.r_included):
-                if("r_encoder" in config.frozen_modules):
-                    self.r_encoder.requires_grad_(False)
-                else:
-                    self.r_encoder.requires_grad_(True)
-
-            if(self.p_included):
-                if("p_encoder" in config.frozen_modules):
-                    self.p_encoder.requires_grad_(False)
-                else:
-                    self.p_encoder.requires_grad_(True)
-
-            if("s_decoder" in config.frozen_modules):
-                self.s_decoder.requires_grad_(False)
-            else:
-                self.s_decoder.requires_grad_(True)
-
-            if("a_decoder" in config.frozen_modules):
-                self.a_decoder.requires_grad_(False)
-            else:
-                self.a_decoder.requires_grad_(True)
-
-            if("r_decoder" in config.frozen_modules):
-                self.r_decoder.requires_grad_(False)
-            else:
-                self.r_decoder.requires_grad_(True)
 
     def sequential_loss(self, observations, 
                             prompts,
@@ -284,8 +239,6 @@ class AnyMDPRSA(OPTARDecisionModel):
             state = None
             reward = None
 
-
-        
         return state, act_out, reward
 
     def in_context_learn(self, prompts,

@@ -48,6 +48,12 @@ class MLPEncoder(nn.Module):
         else:
             log_fatal(f"action input type must be ContinuousXX or DiscreteXX, unrecognized `{output_type}`")
 
+        # Frozen the parameters
+        if(config.has_attr('is_fronzen')):
+            if(config.is_frozen):
+                for param in self.parameters():
+                    param.requires_grad_(False)
+
     def forward(self, input):
         return self.encoder_layer(input)
 
@@ -115,6 +121,12 @@ class ResidualMLPDecoder(nn.Module):
             self.decoder_output = nn.Identity()
         else:
             raise log_fatal(f"action output type must be Continuous or Discrete, unrecognized `{output_type}`")
+
+        # Frozen the parameters
+        if(config.has_attr('is_fronzen')):
+            if(config.is_frozen):
+                for param in self.parameters():
+                    param.requires_grad_(False)
 
     def forward(self, input, T=1.0):
         src = self.layer_norm(input)
