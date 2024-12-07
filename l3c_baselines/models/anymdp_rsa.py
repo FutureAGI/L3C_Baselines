@@ -181,6 +181,8 @@ class AnyMDPRSA(OPTARDecisionModel):
         if(single_batch):
             if(pro_in is not None):
                 pro_in = pro_in.unsqueeze(0)
+            if(tag_in is not None):
+                tag_in = tag_in.unsqueeze(0)
             obs_in = obs_in.unsqueeze(0)
 
         if(self.r_included):
