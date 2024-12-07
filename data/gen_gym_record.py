@@ -17,7 +17,7 @@ def create_directory(directory_path):
 
 def create_env(args):
     if(args.env_name.lower() == "lake"):
-        if args.randon_env:
+        if args.random_env:
             env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
             return env
         else:
@@ -96,6 +96,7 @@ def produce_data(args, worker_id, shared_list, seg_len):
         step_trail_start = step
         while not done:
             action, _ = model.predict(state)  # Select action
+            action = np.squeeze(action).item()
             next_state, reward, terminated, truncated, *_ = env.step(action)  # Execute action
             
             if args.env_name.lower().find("anymdp") >=0:
