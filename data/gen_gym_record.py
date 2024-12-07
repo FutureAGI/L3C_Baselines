@@ -183,15 +183,21 @@ def generate_records(args, task_id):
     for result in results:
         if "states" not in merged_result:
             merged_result["states"] = result["states"]
+            merged_result["prompts"] = result["prompts"]
+            merged_result["tags"] = result["tags"]
             merged_result["actions"] = result["actions"]
             merged_result["rewards"] = result["rewards"]
             merged_result["trail_reward"] = result["trail_reward"]
             continue            
         merged_result["states"] = np.concatenate((merged_result["states"], result["states"]))
+        merged_result["prompts"] = np.concatenate((merged_result["prompts"], result["prompts"]))
+        merged_result["tags"] = np.concatenate((merged_result["tags"], result["tags"]))
         merged_result["actions"] = np.concatenate((merged_result["actions"], result["actions"]))
         merged_result["rewards"] = np.concatenate((merged_result["rewards"], result["rewards"]))
         merged_result["trail_reward"] = np.concatenate((merged_result["trail_reward"], result["trail_reward"]))
     merged_result["states"] = merged_result["states"][:args.n_seq_len]
+    merged_result["prompts"] = merged_result["prompts"][:args.n_seq_len]
+    merged_result["tags"] = merged_result["tags"][:args.n_seq_len]
     merged_result["actions"] = merged_result["actions"][:args.n_seq_len]
     if args.env_name.lower() == "lander":
         merged_result["rewards"] = np.multiply(merged_result["rewards"][:args.n_seq_len], 0.01)
@@ -201,6 +207,8 @@ def generate_records(args, task_id):
     file_path = f'{args.save_path}/data/record-{task_id:06d}'
     create_directory(file_path)
     np.save(f"{file_path}/observations.npy", merged_result["states"])  # Save state data
+    np.save(f"{file_path}/prompts.npy", merged_result["prompts"])  # Save prompt data
+    np.save(f"{file_path}/tags.npy", merged_result["tags"])  # Save tag data
     np.save(f"{file_path}/actions_behavior.npy", merged_result["actions"])  # Save action data
     np.save(f"{file_path}/rewards.npy", merged_result["rewards"])  # Save reward data
     np.save(f"{file_path}/actions_label.npy", merged_result["actions"])  # Save fake label data.
