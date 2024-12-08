@@ -40,11 +40,11 @@ def run_epoch(
     nstate = env.observation_space.n
     naction = env.action_space.n
 
-    # Referrence Policies
-    solveropt0 = AnyMDPOpter(0, env)
-    solveropt1 = AnyMDPOpter(1, env)
-    solveropt2 = AnyMDPOpter(2, env)
-    solveropt3 = AnyMDPOpter(3, env)
+    # Referrence Policiess
+    solveropt0 = AnyMDPOpter(0, env)    #gamma = 0.0
+    solveropt1 = AnyMDPOpter(1, env)    #gamma = 0.5
+    solveropt2 = AnyMDPOpter(2, env)    #gamma = 0.93
+    solveropt3 = AnyMDPOpter(3, env)    #gamma = 0.994
 
     # List of Behavior Policies
     solverneg = AnyPolicySolver(env)
@@ -58,22 +58,22 @@ def run_epoch(
     solveroptnoise3 = AnyMDPOptNoiseDistiller(env, opt_solver=solveropt3)
 
     # Data Generation Strategy
-    behavior_dict = [(solverneg, 0.10),
-                     (solverots, 0.10),
-                     (solverq,   0.10),
-                     (solverotsopt0, 0.10),
-                     (solverotsopt1, 0.10),
-                     (solverotsopt2, 0.10),
-                     (solverotsopt3, 0.10),
-                     (solveroptnoise2, 0.10),
-                     (solveroptnoise3, 0.10),
-                     (solveropt1, 0.02),
-                     (solveropt2, 0.03),
-                     (solveropt3, 0.05)]
-    reference_dict = [(solveropt0, 0.10),
-                      (solveropt1, 0.10),
-                      (solveropt2, 0.20),
-                      (solveropt3, 0.60)]
+    behavior_dict = [(solverneg, 0.10),     #rnd, 6
+                     (solverots, 0.10),     #rand, 6; exp1, 4;
+                     (solverq,   0.10),     #rand, 6; exp2, 5
+                     (solverotsopt0, 0.10), #rnd, 6; or opt0, 0; or exp1, 4
+                     (solverotsopt1, 0.10), #rnd, 6; or opt1, 1; or exp1, 4
+                     (solverotsopt2, 0.10), #rnd, 6; or opt2, 2; or exp1, 4
+                     (solverotsopt3, 0.10), #rnd, 6; or opt3, 3; or exp1, 4
+                     (solveroptnoise2, 0.10), #rnd, 6; or opt2, 2; or exp2, 5
+                     (solveroptnoise3, 0.10), #rnd, 6; or opt3, 3; or exp2, 5
+                     (solveropt1, 0.02),    #opt1, 1
+                     (solveropt2, 0.03),    #opt2, 2
+                     (solveropt3, 0.05)]    #opt3, 3
+    reference_dict = [(solveropt0, 0.10),   #opt0, 0
+                      (solveropt1, 0.10),   #opt1, 1
+                      (solveropt2, 0.20),   #opt2, 2
+                      (solveropt3, 0.60)]   #opt3, 3
     
     # Policy Sampler
     blist, bprob = zip(*behavior_dict)

@@ -8,6 +8,8 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
+from l3c_baselines.utils import DiscreteEnvWrapper
+from l3c_baselines.utils import OnlineRL
 from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
@@ -19,7 +21,6 @@ from gym.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from stable_baselines3 import DQN, A2C, TD3, PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 def string_mean_var(downsample_length, res):
@@ -170,6 +171,10 @@ class AnyMDPGenerator(GeneratorBase):
         elif(self.config.env.lower().find("anymdp") >= 0):
             self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
             self.task_sampler = self.task_sampler_anymdp
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            self.task_sampler = self.task_sampler_mountain_car
+        elif(self.config.env.lower().find("pendulum") >= 0):
+            self.task_sampler = self.task_sampler_pendulum
         else:
             log_fatal("Unsupported environment:", self.config.env)
 
@@ -184,7 +189,8 @@ class AnyMDPGenerator(GeneratorBase):
         benchmark_logger_keys = ["step", "reward", "success_rate"]
 
         self.stat = DistStatistics(*logger_keys)
-        self.stat_benchmark = DistStatistics(*benchmark_logger_keys)
+        self.stat_opt = DistStatistics(*benchmark_logger_keys)
+        self.stat_online = DistStatistics(*logger_keys)
         self.stat_random = DistStatistics(*benchmark_logger_keys)
         self.logger = Logger("trail_idx",
                             "total_steps",
@@ -221,21 +227,70 @@ class AnyMDPGenerator(GeneratorBase):
             is_slippery=True, 
             max_episode_steps=1000)
         return None
+    def task_sampler_mountain_car(self, epoch_id=0):
+        env = gym.make("MountainCar-v0", render_mode="rgb_array")
+        if self.config.map_env_discrete:
+            self.env = DiscreteEnvWrapper(env=env,
+                                            env_name=self.config.env.lower(),
+                                            action_space=self.config.action_clip,
+                                            state_space=self.config.state_clip)
+        else:
+            self.env = env
+        return None
+    
+    def task_sampler_pendulum(self, epoch_id=0):
+        env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
+        if self.config.map_env_discrete:
+            self.env = DiscreteEnvWrapper(env=env,
+                                            env_name=self.config.env.lower(),
+                                            action_space=self.config.action_clip,
+                                            state_space=self.config.state_clip)
+        else:
+            self.env = env
+        return None
 
-    def is_success_fail(self, reward):
+    def reward_shaping(self, done, terminated, reward):
+        if(self.config.env.lower().find("lake") >= 0):
+            if done and reward < 0.5:
+                reward = -1.0
+                return reward
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            if terminated:
+                reward = 1.0
+                return reward
+        elif(self.config.env.lower().find("pendulum") >= 0):
+            reward = reward / 10 + 0.3
+        return reward
+            
+
+    def is_success_fail(self, reward, trail_reward, step):
         if(self.config.env.lower().find("lake") >= 0):
             if reward > 1.0e-3:
                 return 1
             else:
                 return 0
         elif(self.config.env.lower().find("lander") >= 0):
-            if reward >= 200:
+            if trail_reward >= 200:
+                return 1
+            else:
+                return 0
+        elif(self.config.env.lower().find("mountaincar") >= 0):
+            if step < self.max_steps:
                 return 1
             else:
                 return 0
         else:
             return 0
-        
+    
+    def reset_env(self):
+        if self.config.env.lower().find("pendulum") >= 0:
+            state, *_ = self.env.reset(seed=123, options={"low": -0.7, "high": 0.5})
+        elif self.config.env.lower().find("mountaincar") >= 0:
+            state, *_ = self.env.reset(seed=123, options={"x_init": numpy.pi/2, "y_init": 0.5})
+        else:
+            state, *_ = self.env.reset()
+        return state
+
     def in_context_learn_from_teacher(self):
         # Task ID: retrieve the correpsonding teacher trajectory with task ID
         for folder in os.listdir(self.config.data_root):
@@ -243,17 +298,22 @@ class AnyMDPGenerator(GeneratorBase):
             
             if os.path.isdir(folder_path):
                 states = numpy.load(os.path.join(folder_path, 'observations.npy'))
+                prompts = numpy.load(os.path.join(folder_path, 'prompts.npy'))
+                tags = numpy.load(os.path.join(folder_path, 'tags.npy'))
                 actions = numpy.load(os.path.join(folder_path, 'actions_behavior.npy'))
                 rewards = numpy.load(os.path.join(folder_path, 'rewards.npy'))
                 states = states.astype(numpy.int32)
+                prompts = prompts.astype(numpy.int32)
+                tags = tags.astype(numpy.int32)
                 actions = actions.astype(numpy.int32)
                 rewards = rewards.astype(numpy.float32)
                 segment_len = 1000
                 for start in range(0, len(states), segment_len):
                     end = min(start + segment_len, len(states))
                     self.model.module.in_context_learn(
-                        None,
                         states[start:end],
+                        prompts[start:end],
+                        tags[start:end],
                         actions[start:end],
                         rewards[start:end],
                         single_batch=True,
@@ -261,26 +321,45 @@ class AnyMDPGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self):
+        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum"]
+        # Load opt model
         if self.config.env.lower().find("anymdp") >= 0:
-            self.env_benchmark  = self.env
-            model = AnyMDPSolverOpt(self.env_benchmark)
+            model = AnyMDPSolverOpt(self.env)
             def benchmark_model(state):
                 return model.policy(state)
-            self.benchmark_model = benchmark_model
-        elif self.config.env.lower().find("lake") >= 0 or self.config.env.lower().find("lander") >= 0:
-            self.env_benchmark  = self.env
-            model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
-            model_name = self.config.benchmark_model_name.lower()
-            if model_name not in model_classes:
-                raise ValueError("Unknown policy type: {}".format())
-            model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env_benchmark)
-            def benchmark_model(state):
-                action, _ = model.predict(state)
-                return int(action)
-            self.benchmark_model = benchmark_model
+            self.benchmark_opt_model = benchmark_model
+        elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
+            if self.config.run_benchmark.run_opt:
+                model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+                model_name = self.config.benchmark_model_name.lower()
+                if model_name not in model_classes:
+                    raise ValueError("Unknown policy type: {}".format())
+                model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
+                def benchmark_model(state):
+                    action, _ = model.predict(state)
+                    return int(action)
+                self.benchmark_opt_model = benchmark_model
         else:
             raise ValueError("Unsupported environment:", self.config.env)
         
+        def run_online_rl():
+            online_rl = OnlineRL(env=self.env, 
+                                 env_name=self.config.env.lower(),
+                                 model_name=self.config.benchmark_model_name.lower(),
+                                 max_trails=self.config.max_trails,
+                                 max_steps=self.config.max_steps,
+                                 downsample_trail=self.config.downsample_trail)
+            rew_stat, step_trail, success_rate = online_rl()
+            ds_step_trail = downsample(step_trail, self.config.downsample_trail)
+            ds_rewards = downsample(rew_stat, self.config.downsample_trail)
+            ds_success = downsample(success_rate, self.config.downsample_trail)
+            self.stat_online.gather(self.device,
+                                step=ds_step_trail,
+                                reward=ds_rewards,
+                                success_rate=ds_success)
+
+
+        # Function to run opt model or random model
         def run_benchmark(benchmark_model, logger_benchmark, stat_benchmark):
             rew_stat = []
             success_rate = []
@@ -293,29 +372,33 @@ class AnyMDPGenerator(GeneratorBase):
                 step = 0
                 trail_reward = 0.0
                 done = False
-                new_state, *_ = self.env_benchmark.reset()
+                new_state = self.reset_env()
                 
                 while not done:
                     action= benchmark_model(new_state)
-                    new_state, new_reward, done, *_ = self.env_benchmark.step(action)
+                    new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
+                    if self.config.env.lower().find("anymdp") >= 0:
+                        done = terminated
+                    else:
+                        if terminated or truncated:
+                            done = True
+                    shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
                     step += 1
-
+                    if step > self.max_steps:
+                        print("Reach max_steps, break trail.")
+                        done = True
                     if done:
                         # success rate
-                        succ_fail = self.is_success_fail(new_reward)
+                        succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
                         if trail + 1 < self.config.downsample_trail:
                             success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                         else:
                             success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
-                        rew_stat.append(trail_reward / step)
+                        rew_stat.append(trail_reward)
                         success_rate.append(success_rate_f)
                         step_trail.append(step)
-                    
-                    if step > self.max_steps:
-                        print("Reach max_steps, break trail.")
-                        break
                 
                 trail += 1
                 total_steps += step
@@ -334,17 +417,23 @@ class AnyMDPGenerator(GeneratorBase):
                                 reward=ds_rewards,
                                 success_rate=ds_success)
         
-        run_benchmark(self.benchmark_model, self.logger_benchmark, self.stat_benchmark)
-        def random_model(state):
-            return random.randint(0,self.config.action_clip - 1)
-        run_benchmark(random_model, self.logger_random, self.stat_random)
+        if self.config.run_benchmark.run_opt:
+            run_benchmark(self.benchmark_opt_model, self.logger_benchmark, self.stat_opt)
+        
+        if self.config.run_benchmark.run_online:
+            run_online_rl()
+
+        if self.config.run_benchmark.run_random:
+            def random_model(state):
+                return random.randint(0,self.config.action_clip - 1)
+            run_benchmark(random_model, self.logger_random, self.stat_random)
 
     def __call__(self, epoch_id):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
 
         if not self.config.run_icl:
-            if self.config.run_benchmark:
+            if self.config.run_benchmark.run_opt or self.config.run_benchmark.run_online or self.config.run_benchmark.run_random:
                 print("Run Benchmark Only.")
                 self.benchmark()
                 return
@@ -352,7 +441,7 @@ class AnyMDPGenerator(GeneratorBase):
                 print("run_icl & run_benchmark both False, please check config.")
                 return
         else:
-            if self.config.run_benchmark:
+            if self.config.run_benchmark.run_opt or self.config.run_benchmark.run_online or self.config.run_benchmark.run_random:
                 print("Run Benchmark & ICL")
                 self.benchmark()
             else:
@@ -373,7 +462,8 @@ class AnyMDPGenerator(GeneratorBase):
         total_step = 0
         pred_state_dist = None
 
-        self.model.eval()
+        interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
+        interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher()
@@ -384,24 +474,32 @@ class AnyMDPGenerator(GeneratorBase):
             trail_reward = 0.0
             trail_obs_loss = 0.0
             trail_reward_loss = 0.0
-            previous_state, _ = self.env.reset()
+            previous_state = self.reset_env()
             obs_arr.append(previous_state)
             if(pred_state_dist is not None):
                 trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             temp = self._scheduler(trail)
             
             while not done:
+                # Generate action, world model prediction
                 pred_state_dist, action, pred_reward = self.model.module.generate(
-                    None,
                     previous_state,
-                    temp=temp)
-                env_action = action % self.config.action_clip          
-                # interact with env
-                new_state, new_reward, done, *_ = self.env.step(env_action)
-
-                # Reward Shaping
-                if(done and new_reward < 0.5):
-                    new_reward = -0.2
+                    interactive_prompt,
+                    interactive_tag,
+                    temp=temp,
+                    need_numpy=True,
+                    single_batch=True,
+                    future_prediction=True)
+                env_action = action % self.config.action_clip 
+                # Interact with environment         
+                new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
+                if self.config.env.lower().find("anymdp") >= 0:
+                        done = terminated
+                else:
+                    if terminated or truncated:
+                        done = True
+                # Reward shaping
+                shaped_reward = self.reward_shaping(done, terminated, new_reward)
 
                 # collect data
                 act_arr.append(action)
@@ -409,45 +507,47 @@ class AnyMDPGenerator(GeneratorBase):
                 # world model reward prediction correct count:
                 # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
 
-                # start learning
+                # start learning        
                 self.model.module.in_context_learn(
-                    None,
                     previous_state,
+                    interactive_prompt,
+                    interactive_tag,
                     action,
-                    new_reward)
+                    shaped_reward)
 
                 obs_arr.append(new_state) 
                 previous_state = new_state
 
                 trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
                 trail_reward += new_reward
-                trail_reward_loss += (new_reward - pred_reward) ** 2
+                trail_reward_loss += (shaped_reward - pred_reward) ** 2
 
                 step += 1
+                if(step > self.max_steps):
+                    print("Reach max_steps, break trail.")
+                    done = True
                 if(done):
                     act_arr.append(self.action_dim)
                     rew_arr.append(0.0)
                     self.model.module.in_context_learn(
-                        None,
                         new_state,
+                        interactive_prompt,
+                        interactive_tag,
                         self.action_dim,
                         0.0)
                     # success rate
-                    succ_fail = self.is_success_fail(new_reward)
+                    succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
                     if trail + 1 < self.config.downsample_trail:
                         success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                     else:
                         success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
                     
-                    rew_stat.append(trail_reward / step)
+                    rew_stat.append(trail_reward)
                     state_error.append(trail_obs_loss / step)
-                    reward_error.append(trail_reward / step)
+                    reward_error.append(trail_reward_loss / step)
                     success_rate.append(success_rate_f)
                     step_trail.append(step)
 
-                if(step > self.max_steps):
-                    print("Reach max steps, break trial.")
-                    break
             trail += 1
             total_step += step
             self.logger(trail,
@@ -487,27 +587,38 @@ class AnyMDPGenerator(GeneratorBase):
                     with open(file_path, 'w') as f_model:
                         f_model.write(res_text)
 
-        # Final Result
-        final_results = self.stat()
-        self.logger("Final_Result",
-                    self.config.max_trails,
-                    final_results['step']['mean'],
-                    final_results['reward']['mean'],
-                    final_results['state_prediction']['mean'],
-                    final_results['reward_prediction']['mean'],
-                    final_results['success_rate']['mean'])
-        save_results(final_results, "result")
+        if self.config.run_icl:
+            # Final Result
+            final_results = self.stat()
+            self.logger("Final_Result",
+                        self.config.max_trails,
+                        final_results['step']['mean'],
+                        final_results['reward']['mean'],
+                        final_results['state_prediction']['mean'],
+                        final_results['reward_prediction']['mean'],
+                        final_results['success_rate']['mean'])
+            save_results(final_results, "result")
 
         # Benchmark Result
-        if self.config.run_benchmark:
-            benchmark_results = self.stat_benchmark()
+        if self.config.run_benchmark.run_opt:
+            # Benchmark Result
+            benchmark_results = self.stat_opt()
             self.logger_benchmark("Benchmark_Result",
                                 self.config.max_trails,
                                 benchmark_results['step']['mean'],
                                 benchmark_results['reward']['mean'],
                                 benchmark_results['success_rate']['mean'])
             save_results(benchmark_results, "benchmark_result")
-
+        if self.config.run_benchmark.run_online:
+            # Online Result
+            online_results = self.stat_online()
+            self.logger_benchmark("Online_Result",
+                                self.config.max_trails,
+                                online_results['step']['mean'],
+                                online_results['reward']['mean'],
+                                online_results['success_rate']['mean'])
+            save_results(online_results, "online_result")
+        if self.config.run_benchmark.run_random:
             # Random Result
             random_results = self.stat_random()
             self.logger_random("Random_Result",

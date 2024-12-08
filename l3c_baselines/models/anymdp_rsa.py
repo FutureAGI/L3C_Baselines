@@ -181,6 +181,8 @@ class AnyMDPRSA(OPTARDecisionModel):
         if(single_batch):
             if(pro_in is not None):
                 pro_in = pro_in.unsqueeze(0)
+            if(tag_in is not None):
+                tag_in = tag_in.unsqueeze(0)
             obs_in = obs_in.unsqueeze(0)
 
         if(self.r_included):
@@ -241,8 +243,9 @@ class AnyMDPRSA(OPTARDecisionModel):
 
         return state, act_out, reward
 
-    def in_context_learn(self, prompts,
-                    observation,
+    def in_context_learn(self, observation,
+                    prompts,
+                    tags,
                     action,
                     reward,
                     cache=None,
@@ -267,16 +270,21 @@ class AnyMDPRSA(OPTARDecisionModel):
                 return x.unsqueeze(1).to(device)
             return x.to(device)
 
-        pro_in = prompts
         obs_in = observation
+        pro_in = prompts
+        tag_in = tags
         act_in = action
         rew_in = reward
-        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
-            pro_in = torch.tensor(pro_in)
-        pro_in = proc(pro_in)
+
         if(not isinstance(obs_in, torch.Tensor)):
             obs_in = torch.tensor(obs_in)
         obs_in = proc(obs_in)
+        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
+            pro_in = torch.tensor(pro_in)
+        pro_in = proc(pro_in)
+        if(tag_in is not None and not isinstance(tag_in, torch.Tensor)):
+            tag_in = torch.tensor(tag_in)
+        tag_in = proc(tag_in)
         if(not isinstance(action, torch.Tensor)):
             act_in = torch.tensor(act_in)
         act_in = proc(act_in)
@@ -289,10 +297,11 @@ class AnyMDPRSA(OPTARDecisionModel):
         else:
             rew_in = rew_in.to(torch.int32)
 
-        # s, a, r = obs, act_pred, r_pred; update memory = true
+        # observation, prompt, tag, action, reward; update memory = true
         _, _, _, new_cache = self.forward(
-            pro_in,
             obs_in,
+            pro_in,
+            tag_in,
             act_in,
             rew_in,
             need_cache=need_cache,

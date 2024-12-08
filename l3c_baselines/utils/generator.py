@@ -30,9 +30,9 @@ class GeneratorBase(object):
         if(type is None):
             type = self.T_decay_type
         if(type.lower() == "linear"):
-            return self.T_ini + step * self.dT_linear
+            return self.T_ini + min(step, self.T_step) * self.dT_linear
         elif(type.lower() == "exponential"):
-            return self.T_ini * (self.dT_exp ** step)
+            return self.T_ini * (self.dT_exp ** min(step, self.T_step))
         else:
             log_fatal(f"Unknown decoder type {type}")
 
@@ -107,6 +107,8 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
     generator.preprocess()
     for epoch_id in range(config.generator_config.epoch_numbers):
         log_debug(f"GPU {rank} start processing epoch {epoch_id} ...")
+        model.module.reset()
+        model.eval()
         generator(epoch_id)
         log_debug(f"... GPU {rank} finishes processing epoch {epoch_id}")
     generator.postprocess()
