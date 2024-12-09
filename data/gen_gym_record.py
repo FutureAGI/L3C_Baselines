@@ -41,7 +41,8 @@ def create_env(args):
             env = DiscreteEnvWrapper(env=env,
                                     env_name=args.env_name.lower(),
                                     action_space=args.action_clip,
-                                    state_space=args.state_clip)
+                                    state_space=args.state_clip,
+                                    reward_shaping=True)
         return env
     else:
         raise ValueError("Unknown env name: {}".format(args.env_name))

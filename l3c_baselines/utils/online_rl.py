@@ -195,14 +195,16 @@ class MapActionToContinuous:
         return self.map_action_to_continuous_func(action)
     
 class DiscreteEnvWrapper(gym.Wrapper):
-    def __init__(self, env, env_name, action_space=5, state_space=64):
+    def __init__(self, env, env_name, action_space=5, state_space=64, reward_shaping = False):
         super(DiscreteEnvWrapper, self).__init__(env)
         self.env_name = env_name.lower()
         self.action_space = gym.spaces.Discrete(action_space)
         self.observation_space = gym.spaces.Discrete(state_space)
+        self.reward_shaping = reward_shaping
         self.map_state_to_discrete = MapStateToDiscrete(self.env_name).map_state_to_discrete
         self.map_action_to_continuous = MapActionToContinuous(self.env_name).map_action_to_continuous
 
+        self.last_speed = 0.0
     def reset(self, **kwargs):
         continuous_state, info = self.env.reset(**kwargs)
         discrete_state = self.map_state_to_discrete(continuous_state)
@@ -211,12 +213,15 @@ class DiscreteEnvWrapper(gym.Wrapper):
     def step(self, discrete_action):
         continuous_action = self.map_action_to_continuous(discrete_action)
         continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
-        #done = terminated or truncated
+        if self.reward_shaping:
+            if self.env_name.lower().find("mountaincar") >= 0:
+                reward = 0.1*reward + 10 * numpy.abs(continuous_state[1] - self.last_speed)
+                self.last_speed = continuous_state[1]
         discrete_state = self.map_state_to_discrete(continuous_state)
         return discrete_state, reward, terminated, truncated, info
 
-    def render(self, mode='rgb_array'):
-        return self.env.render(mode=mode)
+    def render(self):
+        return self.env.render()
     def close(self):
         return self.env.close()
 
