@@ -115,6 +115,7 @@ model_config:
       checkpoints_density: -1
       memory_type: MEM
       is_frozen: False
+      is_generate: False
 
   causal_block_bak_3:
       model_type: RWKV6
