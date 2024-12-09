@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from mamba_ssm import Mamba, Mamba2
 from mamba_ssm.utils.generation import InferenceParams
+from l3c_baselines.utils import log_warn
 
 class MambaBlock(nn.Module):
     def __init__(self,
@@ -34,6 +35,9 @@ class MambaBlock(nn.Module):
                 n_cache = InferenceParams(max_seqlen=self.max_position_encoding, max_batch_size=x.shape[0])
                 n_cache.key_value_memory_dict[self.layer_idx] = (cache[0].clone(), cache[1].clone())
                 cache = n_cache
+                log_warn("Attention!!! Mamba-ssm has bugs for chunk-wise inference")
+        else:
+            cache = None
 
         out = self.encoder(x, inference_params=cache)
 
