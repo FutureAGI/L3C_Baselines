@@ -9,11 +9,17 @@ class GLABlock(nn.Module):
     def __init__(self,
                 io_size: int=512,
                 num_heads: int=4,
-                layer_idx: int=0):
+                layer_idx: int=0,
+                is_generate: bool=False):
         super().__init__()
         self.hidden_size = io_size
         self.layer_idx = layer_idx
+        if(not is_generate):
+            mode = 'chunk'
+        else:
+            mode = 'fused_recurrent'
         self.encoder = GatedLinearAttention(
+                  mode=mode,
                   hidden_size=io_size,
                   num_heads=num_heads,
                   layer_idx=0)
@@ -38,11 +44,17 @@ class GSABlock(GLABlock):
                 num_heads: int=4,
                 num_slots: int=4,
                 gate_bound: float=50,
-                layer_idx: int=0):
+                layer_idx: int=0,
+                is_generate: bool=False):
         super().__init__()
         self.hidden_size = io_size
         self.layer_idx = layer_idx
+        if(not is_generate):
+            mode = 'chunk'
+        else:
+            mode = 'fused_recurrent'
         self.encoder = GatedSlotAttention(
+                  mode=mode,
                   hidden_size=io_size,
                   num_heads=num_heads,
                   num_slots=num_slots,

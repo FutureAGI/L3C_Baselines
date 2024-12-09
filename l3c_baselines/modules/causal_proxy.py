@@ -18,6 +18,11 @@ class CausalBlock(nn.Module):
         super().__init__()
         self.model_type = config.model_type.lower()
 
+        if(config.has_attr("is_generate")):
+            is_generate = config.is_generate
+        else:
+            is_generate = False
+
         if(self.model_type == "transformer"):
             main_encoder = ARTransformerEncoder(
                 config.num_layers, 
@@ -39,6 +44,7 @@ class CausalBlock(nn.Module):
                 gate_bound=config.gate_bound,
                 num_heads=config.nhead,
                 num_slots=config.memory_length,
+                is_generate=is_generate
             )
         elif(self.model_type == "gla"):
             main_encoder = MultiBlocks(
@@ -49,6 +55,7 @@ class CausalBlock(nn.Module):
                 fc_dropout=config.dropout,
                 io_size=config.hidden_size,
                 num_heads=config.nhead,
+                is_generate=is_generate
             )
         elif(self.model_type == "mamba"):
             main_encoder = MultiBlocks(
