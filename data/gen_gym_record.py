@@ -2,6 +2,7 @@ import argparse
 import os
 import multiprocessing
 import numpy as np
+import re
 
 import gymnasium as gym
 from gym.envs.toy_text.frozen_lake import generate_random_map
@@ -15,6 +16,16 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
+def extract_state_space_dimensions(env_name, name="pendulum"):
+        pattern = rf'^{name}(\d+)x(\d+)$'
+        match = re.match(pattern, env_name)
+        if not match:
+            raise ValueError(f"Invalid environment name format: {env_name}. Expected format: '{name}<digit>x<digit>'.")
+        state_space_dim1 = int(match.group(1))
+        state_space_dim2 = int(match.group(2))
+
+        return state_space_dim1, state_space_dim2
+
 def create_env(args):
     if(args.env_name.lower() == "lake"):
         if args.random_env:
@@ -27,21 +38,25 @@ def create_env(args):
         env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
                enable_wind=False, wind_power=15.0, turbulence_power=1.5)
         return env
-    elif(args.env_name.lower() == "pendulum"):
+    elif(args.env_name.lower().find("pendulum") >= 0):
         env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
         if args.map_env_to_discrete:
+            state_space_dim1, state_space_dim2 = extract_state_space_dimensions(args.env_name.lower(), "pendulum")
             env = DiscreteEnvWrapper(env=env,
                                     env_name=args.env_name.lower(),
                                     action_space=args.action_clip,
-                                    state_space=args.state_clip)
+                                    state_space_dim1=state_space_dim1,
+                                    state_space_dim2=state_space_dim2)
         return env
-    elif(args.env_name.lower() == "mountaincar"):
+    elif(args.env_name.lower().find("mountaincar") >= 0):
         env = gym.make("MountainCar-v0", render_mode="rgb_array")
         if args.map_env_to_discrete:
+            state_space_dim1, state_space_dim2 = extract_state_space_dimensions(args.env_name.lower(), "mountaincar")
             env = DiscreteEnvWrapper(env=env,
                                     env_name=args.env_name.lower(),
                                     action_space=args.action_clip,
-                                    state_space=args.state_clip,
+                                    state_space_dim1=state_space_dim1,
+                                    state_space_dim2=state_space_dim2,
                                     reward_shaping=True)
         return env
     else:
@@ -241,7 +256,6 @@ if __name__ == "__main__":
     parser.add_argument('--reward_done', type=float, default=0.0, help='Reward when left.')
     parser.add_argument('--map_env_to_discrete', type=str, default=0, help='Map env to discrete state.')
     parser.add_argument('--action_clip', type=int, default=5, help='Discrete env action_clip.')
-    parser.add_argument('--state_clip', type=int, default=64, help='Discrete env state_clip.')
 
     args = parser.parse_args()
     args.enable_load_model = args.enable_load_model.lower() == "true"
