@@ -127,6 +127,8 @@ class AnyMDPEpoch:
                     for loss in losses], dim=1)
             loss_pm = torch.cat([loss["pm"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
                     for loss in losses], dim=1)
+            loss_ent = torch.cat([loss["ent"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
+                    for loss in losses], dim=1)
             counts = torch.cat([loss["count_a"] for loss in losses], dim=1)
 
             bsz = loss_wm_s.shape[0]
@@ -134,6 +136,7 @@ class AnyMDPEpoch:
             loss_wm_s = downsample(loss_wm_s, self.downsample_length)
             loss_wm_r = downsample(loss_wm_r, self.downsample_length)
             loss_pm = downsample(loss_pm, self.downsample_length)
+            loss_ent = down_sample(loss_ent, self.downsample_length)
             counts = downsample(counts, self.downsample_length)
 
             for i in range(bsz):
@@ -141,6 +144,7 @@ class AnyMDPEpoch:
                         validation_state_pred=loss_wm_s[i], 
                         validation_reward_pred=loss_wm_r[i], 
                         validation_policy=loss_pm[i],
+                        validation_entropy=loss_ent[i],
                         count=counts[i])
             
     def epoch_end(self, epoch_id):
