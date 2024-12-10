@@ -51,7 +51,8 @@ class AnyMDPEpoch:
         else:
             self.logger_keys = ["validation_state_pred", 
                         "validation_reward_pred", 
-                        "validation_policy"]
+                        "validation_policy",
+                        "validation_entropy"]
             self.stat = DistStatistics()
             self.reduce = None
             if(self.config.has_attr("downsample_length")):
@@ -128,7 +129,7 @@ class AnyMDPEpoch:
                     for loss in losses], dim=1)
             loss_pm = torch.cat([loss["pm"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
                     for loss in losses], dim=1)
-            loss_ent = torch.cat([loss["ent"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
+            loss_ent = torch.cat([-loss["ent"] / torch.clamp_min(loss["count_a"], 1.0e-3) 
                     for loss in losses], dim=1)
             counts = torch.cat([loss["count_a"] for loss in losses], dim=1)
 
@@ -155,6 +156,7 @@ class AnyMDPEpoch:
                 self.logger(stat_res["validation_state_pred"]["mean"], 
                         stat_res["validation_reward_pred"]["mean"], 
                         stat_res["validation_policy"]["mean"],
+                        stat_res["validation_entropy"]["mean"],
                         epoch=epoch_id)
             if(self.extra_info is not None):
                 if(self.extra_info.lower() == 'validate' and self.main):
