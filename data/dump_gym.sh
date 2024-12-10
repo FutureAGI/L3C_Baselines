@@ -2,7 +2,7 @@
 
 # Run the gen_gym_record.py script
 
-ENV_NAME="LAKE" # Name of the gym environment, choices=['LAKE', 'LANDER', 'PENDULUM', 'MOUNTAINCAR'], default is LAKE,
+ENV_NAME="LAKE" # Name of the gym environment, choices=['LAKE', 'LANDER', 'PENDULUM8x8', 'MOUNTAINCAR8x8'], default is LAKE,
 SAVE_PATH="./gym_data" # Path to save the training data (without file extension)
 POLICY_NAME="PPO" # Policy type, default is DQN, can be DQN, TD3, A2C, or PPO. Note, TD3 is for continous problem.
 N_TOTAL_TIMESTEPS=20000 # Total number of epochs for training, default is 200000
@@ -17,7 +17,6 @@ ACTION_DONE=5 # Action when env return done, default is action_dim of env.
 REWARD_DONE=0.0 # Reward when env return done, default is 0.0
 MAP_ENV_TO_DISCRETE="True" # Whether to map the env to discrete space, default is True
 ACTION_CLIP=5 # Action discrete space, default is 5.
-STATE_CLIP=64 # State discrete space, default is 64.
 
 # Run the gen_gym_record.py script
 export CUDA_VISIBLE_DEVICES=0
@@ -36,5 +35,4 @@ python gen_gym_record.py \
     --action_done $ACTION_DONE \
     --reward_done $REWARD_DONE \
     --map_env_to_discrete $MAP_ENV_TO_DISCRETE \
-    --action_clip $ACTION_CLIP \
-    --state_clip $STATE_CLIP
+    --action_clip $ACTION_CLIP
