@@ -14,9 +14,11 @@ from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamm
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gym
+import imageio
 import numpy
 import pickle
 import random
+import re
 from gym.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -225,26 +227,45 @@ class AnyMDPGenerator(GeneratorBase):
             'FrozenLake-v1', 
             map_name=self.config.env.replace("lake", ""), 
             is_slippery=True, 
-            max_episode_steps=1000)
+            max_episode_steps=1000,
+            render_mode='rgb_array_list')
         return None
+    
+    def extract_state_space_dimensions(self, env_name, name="pendulum"):
+        pattern = rf'^{name}(\d+)x(\d+)$'
+        match = re.match(pattern, env_name)
+        if not match:
+            raise ValueError(f"Invalid environment name format: {env_name}. Expected format: '{name}<digit>x<digit>'.")
+        state_space_dim1 = int(match.group(1))
+        state_space_dim2 = int(match.group(2))
+
+        return state_space_dim1, state_space_dim2
+    
     def task_sampler_mountain_car(self, epoch_id=0):
-        env = gym.make("MountainCar-v0", render_mode="rgb_array")
+        env = gym.make("MountainCar-v0", render_mode="rgb_array_list", max_episode_steps=self.config.max_steps)  
         if self.config.map_env_discrete:
+            state_space_dim1, state_space_dim2 = self.extract_state_space_dimensions(self.config.env.lower(), "mountaincar")
             self.env = DiscreteEnvWrapper(env=env,
                                             env_name=self.config.env.lower(),
                                             action_space=self.config.action_clip,
-                                            state_space=self.config.state_clip)
+                                            state_space_dim1=state_space_dim1,
+                                            state_space_dim2=state_space_dim2,
+                                            reward_shaping=True,
+                                            skip_frame=self.config.skip_frame)
         else:
             self.env = env
         return None
     
     def task_sampler_pendulum(self, epoch_id=0):
-        env = gym.make("Pendulum-v1", render_mode="rgb_array", g=9.81)
+        env = gym.make("Pendulum-v1", render_mode="rgb_array_list", g=9.81, max_episode_steps=self.config.max_steps)
         if self.config.map_env_discrete:
+            state_space_dim1, state_space_dim2 = self.extract_state_space_dimensions(self.config.env.lower(), "pendulum")
             self.env = DiscreteEnvWrapper(env=env,
                                             env_name=self.config.env.lower(),
                                             action_space=self.config.action_clip,
-                                            state_space=self.config.state_clip)
+                                            state_space_dim1=state_space_dim1,
+                                            state_space_dim2=state_space_dim2,
+                                            skip_frame=self.config.skip_frame)
         else:
             self.env = env
         return None
@@ -259,7 +280,7 @@ class AnyMDPGenerator(GeneratorBase):
                 reward = 1.0
                 return reward
         elif(self.config.env.lower().find("pendulum") >= 0):
-            reward = reward / 10 + 0.3
+            reward = max(reward/4 + 1.0, -1.0)
         return reward
             
 
@@ -428,6 +449,24 @@ class AnyMDPGenerator(GeneratorBase):
                 return random.randint(0,self.config.action_clip - 1)
             run_benchmark(random_model, self.logger_random, self.stat_random)
 
+    def dym_interactive_tag(self, success_rate, trail_reward):
+        if self.config.env.lower().find("lake") >= 0:
+            if success_rate < 0.05:
+                self.interactive_tag = 6 # Random
+            elif success_rate < 0.4:
+                self.interactive_tag = 7 # 
+            else:
+                self.interactive_tag = 3 # Opt with gamma 0.994
+        elif self.config.env.lower().find("pendulum") >= 0:
+            if trail_reward < -700:
+                self.interactive_tag = 7 # Unknown
+            elif trail_reward < -400:
+                self.interactive_tag = 5 # Opt with noise
+            else:
+                self.interactive_tag = 3 # Opt with gamma 0.994
+        else:
+            return
+        
     def __call__(self, epoch_id):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
@@ -450,6 +489,7 @@ class AnyMDPGenerator(GeneratorBase):
         obs_arr = []
         act_arr = []
         rew_arr = []
+        frames = []
         
         reward_error = []
         state_error = []
@@ -463,12 +503,14 @@ class AnyMDPGenerator(GeneratorBase):
         pred_state_dist = None
 
         interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
-        interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
+        self.interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher()
 
         while trail < self.max_trails:
+            if self.config.use_dym_tag and trail > 0:
+                self.dym_interactive_tag(success_rate_f, trail_reward)
             step = 0
             done = False
             trail_reward = 0.0
@@ -479,13 +521,12 @@ class AnyMDPGenerator(GeneratorBase):
             if(pred_state_dist is not None):
                 trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             temp = self._scheduler(trail)
-            
             while not done:
                 # Generate action, world model prediction
                 pred_state_dist, action, pred_reward = self.model.module.generate(
                     previous_state,
                     interactive_prompt,
-                    interactive_tag,
+                    self.interactive_tag,
                     temp=temp,
                     need_numpy=True,
                     single_batch=True,
@@ -504,14 +545,18 @@ class AnyMDPGenerator(GeneratorBase):
                 # collect data
                 act_arr.append(action)
                 rew_arr.append(new_reward)
-                # world model reward prediction correct count:
-                # reward_correct_prob += reward_out_prob_list[0,0, int(new_reward)].item()
+                # collect gif frame
+                if (self.config.save_gif 
+                and trail % self.config.save_gif_gap == 0 
+                and self.config.env.lower().find("anymdp") < 0):
+                    frames.extend(self.env.render())
 
-                # start learning        
+
+                # start learning     
                 self.model.module.in_context_learn(
                     previous_state,
                     interactive_prompt,
-                    interactive_tag,
+                    self.interactive_tag,
                     action,
                     shaped_reward)
 
@@ -532,7 +577,7 @@ class AnyMDPGenerator(GeneratorBase):
                     self.model.module.in_context_learn(
                         new_state,
                         interactive_prompt,
-                        interactive_tag,
+                        self.interactive_tag,
                         self.action_dim,
                         0.0)
                     # success rate
@@ -558,6 +603,11 @@ class AnyMDPGenerator(GeneratorBase):
                         reward_error[-1],
                         success_rate[-1])
 
+        # Save gif
+        if self.config.save_gif and self.config.env.lower().find("anymdp") < 0:
+            gif_path = f'{self.config.output}/gym.gif'
+            imageio.mimsave(gif_path, [numpy.array(frame) for frame in frames], fps=30)
+        
         ds_state_err = downsample(state_error, self.config.downsample_trail)
         ds_reward_err = downsample(reward_error, self.config.downsample_trail)
         ds_rewards = downsample(rew_stat, self.config.downsample_trail)

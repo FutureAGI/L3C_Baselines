@@ -4,8 +4,10 @@ from stable_baselines3 import A2C, PPO, DQN, TD3
 import gym
 
 class MapStateToDiscrete:
-    def __init__(self, env_name):
+    def __init__(self, env_name, state_space_dim1, state_space_dim2):
         self.env_name = env_name.lower()
+        self.state_space_dim1 = state_space_dim1
+        self.state_space_dim2 = state_space_dim2
         
         if self.env_name.find("pendulum") >= 0:
             self.map_state_to_discrete_func = self._map_state_to_discrete_pendulum
@@ -63,14 +65,14 @@ class MapStateToDiscrete:
         
         # Define the range and number of intervals for theta
         theta_min, theta_max = 0, 2 * numpy.pi
-        n_interval_theta = 8
+        n_interval_theta = self.state_space_dim1
         
         # Use the helper function to map theta
         theta_discrete = self.map_to_discrete(theta, theta_min, theta_max, n_interval_theta)
         
         # Define the range and number of intervals for speed
         speed_min, speed_max = -8.0, 8.0
-        n_interval_speed = 8
+        n_interval_speed = self.state_space_dim2
         
         # Use the helper function to map speed
         speed_discrete = self.map_to_discrete(state[2], speed_min, speed_max, n_interval_speed)
@@ -92,10 +94,10 @@ class MapStateToDiscrete:
         """
         # Define the ranges and number of intervals for position and velocity
         position_min, position_max = -1.2, 0.6
-        n_interval_position = 8
+        n_interval_position = self.state_space_dim1
         
         velocity_min, velocity_max = -0.07, 0.07
-        n_interval_velocity = 8
+        n_interval_velocity = self.state_space_dim2
         
         # Use the helper function to map position and velocity
         position_discrete = self.map_to_discrete(state[0], position_min, position_max, n_interval_position)
@@ -195,28 +197,39 @@ class MapActionToContinuous:
         return self.map_action_to_continuous_func(action)
     
 class DiscreteEnvWrapper(gym.Wrapper):
-    def __init__(self, env, env_name, action_space=5, state_space=64):
+    def __init__(self, env, env_name, action_space=5, state_space_dim1=8, state_space_dim2=8, reward_shaping = False, skip_frame=0):
         super(DiscreteEnvWrapper, self).__init__(env)
         self.env_name = env_name.lower()
         self.action_space = gym.spaces.Discrete(action_space)
-        self.observation_space = gym.spaces.Discrete(state_space)
-        self.map_state_to_discrete = MapStateToDiscrete(self.env_name).map_state_to_discrete
+        self.observation_space = gym.spaces.Discrete(state_space_dim1 * state_space_dim2)
+        self.reward_shaping = reward_shaping
+        self.skip_frame = skip_frame
+        self.map_state_to_discrete = MapStateToDiscrete(self.env_name, state_space_dim1, state_space_dim2).map_state_to_discrete
         self.map_action_to_continuous = MapActionToContinuous(self.env_name).map_action_to_continuous
 
+        self.last_speed = 0.0
     def reset(self, **kwargs):
         continuous_state, info = self.env.reset(**kwargs)
         discrete_state = self.map_state_to_discrete(continuous_state)
         return discrete_state, info
         
     def step(self, discrete_action):
+        total_reward = 0.0
         continuous_action = self.map_action_to_continuous(discrete_action)
-        continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
-        #done = terminated or truncated
+        for _ in range(self.skip_frame + 1):
+            continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
+            if self.reward_shaping:
+                if self.env_name.lower().find("mountaincar") >= 0:
+                    reward = 0.1*reward + 10 * numpy.abs(continuous_state[1] - self.last_speed)
+                    self.last_speed = continuous_state[1]
+            total_reward += reward
+            if terminated or truncated:
+                break
         discrete_state = self.map_state_to_discrete(continuous_state)
-        return discrete_state, reward, terminated, truncated, info
+        return discrete_state, total_reward, terminated, truncated, info
 
-    def render(self, mode='rgb_array'):
-        return self.env.render(mode=mode)
+    def render(self):
+        return self.env.render()
     def close(self):
         return self.env.close()
 
