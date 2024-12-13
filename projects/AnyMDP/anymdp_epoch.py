@@ -8,8 +8,7 @@ from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_f
 from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
 from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
 from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.utils import DiscreteEnvWrapper
-from l3c_baselines.utils import OnlineRL
+from l3c_baselines.utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer
 from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
@@ -170,9 +169,13 @@ class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
         if(self.config.env.lower().find("lake") >= 0):
             self.task_sampler = self.task_sampler_lake
+        elif(self.config.env.lower().find("cliff") >= 0):
+            self.task_sampler = self.task_sampler_cliff
         elif(self.config.env.lower().find("anymdp") >= 0):
             self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
             self.task_sampler = self.task_sampler_anymdp
+            if self.config.save_gif:
+                self.drawer = AgentVisualizer(self.config.output, visualize_online=False, skip_episode=self.config.save_gif_gap)
         elif(self.config.env.lower().find("mountaincar") >= 0):
             self.task_sampler = self.task_sampler_mountain_car
         elif(self.config.env.lower().find("pendulum") >= 0):
@@ -231,6 +234,19 @@ class AnyMDPGenerator(GeneratorBase):
             render_mode='rgb_array_list')
         return None
     
+    def task_sampler_cliff(self, epoch_id=0):
+        env = gym.make(
+            'CliffWalking-v0',
+            render_mode='rgb_array_list')
+        # If fall into cliff, truncated is set to True and return to starting position.
+        # If reach goal, teminated is set to True.
+        self.env = DiscreteEnvWrapper(env=env,
+                                    env_name=self.config.env.lower(),
+                                    action_space=self.config.action_clip,
+                                    state_space_dim1=48,
+                                    state_space_dim2=1)
+        return None
+    
     def extract_state_space_dimensions(self, env_name, name="pendulum"):
         pattern = rf'^{name}(\d+)x(\d+)$'
         match = re.match(pattern, env_name)
@@ -270,21 +286,35 @@ class AnyMDPGenerator(GeneratorBase):
             self.env = env
         return None
 
-    def reward_shaping(self, done, terminated, reward):
+    def reward_shaping(self, done, terminated, reward, step):
         if(self.config.env.lower().find("lake") >= 0):
             if done and reward < 0.5:
                 reward = -1.0
                 return reward
         elif(self.config.env.lower().find("mountaincar") >= 0):
-            if terminated:
-                reward = 1.0
+            if done:
+                if terminated:
+                    reward = 1.0
+                else:
+                    reward = -1.0
                 return reward
         elif(self.config.env.lower().find("pendulum") >= 0):
             reward = max(reward/4 + 1.0, -1.0)
+        elif(self.config.env.lower().find("cliff") >=0):
+            if done:
+                if terminated:
+                    reward = 1.0
+                else:
+                    reward = -1.0
+            elif step+1 > self.max_steps:
+                reward = -1.0       
+            else:
+                reward = -0.03
+            
         return reward
             
 
-    def is_success_fail(self, reward, trail_reward, step):
+    def is_success_fail(self, reward, trail_reward, terminated):
         if(self.config.env.lower().find("lake") >= 0):
             if reward > 1.0e-3:
                 return 1
@@ -296,7 +326,12 @@ class AnyMDPGenerator(GeneratorBase):
             else:
                 return 0
         elif(self.config.env.lower().find("mountaincar") >= 0):
-            if step < self.max_steps:
+            if terminated:
+                return 1
+            else:
+                return 0
+        elif(self.config.env.lower().find("cliff") >= 0):
+            if terminated:
                 return 1
             else:
                 return 0
@@ -403,7 +438,7 @@ class AnyMDPGenerator(GeneratorBase):
                     else:
                         if terminated or truncated:
                             done = True
-                    shaped_reward = self.reward_shaping(done, terminated, new_reward)
+                    shaped_reward = self.reward_shaping(done, terminated, new_reward, step)
                     trail_reward += new_reward
 
                     step += 1
@@ -412,7 +447,7 @@ class AnyMDPGenerator(GeneratorBase):
                         done = True
                     if done:
                         # success rate
-                        succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
+                        succ_fail = self.is_success_fail(new_reward, trail_reward, step)
                         if trail + 1 < self.config.downsample_trail:
                             success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                         else:
@@ -540,16 +575,17 @@ class AnyMDPGenerator(GeneratorBase):
                     if terminated or truncated:
                         done = True
                 # Reward shaping
-                shaped_reward = self.reward_shaping(done, terminated, new_reward)
+                shaped_reward = self.reward_shaping(done, terminated, new_reward, step)
 
                 # collect data
                 act_arr.append(action)
                 rew_arr.append(new_reward)
                 # collect gif frame
-                if (self.config.save_gif 
-                and trail % self.config.save_gif_gap == 0 
-                and self.config.env.lower().find("anymdp") < 0):
-                    frames.extend(self.env.render())
+                if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
+                    if self.config.env.lower().find("anymdp") < 0:
+                        frames.extend(self.env.render())
+                    else:
+                        frames.append((previous_state, action, new_reward, new_state, done>0.1))
 
 
                 # start learning     
@@ -581,7 +617,7 @@ class AnyMDPGenerator(GeneratorBase):
                         self.action_dim,
                         0.0)
                     # success rate
-                    succ_fail = self.is_success_fail(shaped_reward, trail_reward, step)
+                    succ_fail = self.is_success_fail(new_reward, trail_reward, terminated)
                     if trail + 1 < self.config.downsample_trail:
                         success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                     else:
@@ -607,6 +643,10 @@ class AnyMDPGenerator(GeneratorBase):
         if self.config.save_gif and self.config.env.lower().find("anymdp") < 0:
             gif_path = f'{self.config.output}/gym.gif'
             imageio.mimsave(gif_path, [numpy.array(frame) for frame in frames], fps=30)
+        elif self.config.save_gif and self.config.env.lower().find("anymdp") >= 0:
+            print("start drawing")
+            self.drawer.draw(frames)
+            print("finish drawing")
         
         ds_state_err = downsample(state_error, self.config.downsample_trail)
         ds_reward_err = downsample(reward_error, self.config.downsample_trail)

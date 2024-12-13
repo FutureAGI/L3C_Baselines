@@ -15,7 +15,6 @@ class MapStateToDiscrete:
             self.map_state_to_discrete_func = self._map_state_to_discrete_mountaincar
         else:
             self.map_state_to_discrete_func = self._map_state_to_discrete_default # return origin state
-            raise ValueError(f"Unsupported environment: {env_name}")
     
     def map_to_discrete(self, value, min_val, max_val, n_interval):
         """
@@ -207,10 +206,11 @@ class DiscreteEnvWrapper(gym.Wrapper):
         self.map_state_to_discrete = MapStateToDiscrete(self.env_name, state_space_dim1, state_space_dim2).map_state_to_discrete
         self.map_action_to_continuous = MapActionToContinuous(self.env_name).map_action_to_continuous
 
-        self.last_speed = 0.0
     def reset(self, **kwargs):
         continuous_state, info = self.env.reset(**kwargs)
         discrete_state = self.map_state_to_discrete(continuous_state)
+        if self.env_name.lower().find("mountaincar") >= 0:
+            self.last_energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
         return discrete_state, info
         
     def step(self, discrete_action):
@@ -220,8 +220,17 @@ class DiscreteEnvWrapper(gym.Wrapper):
             continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
             if self.reward_shaping:
                 if self.env_name.lower().find("mountaincar") >= 0:
-                    reward = 0.1*reward + 10 * numpy.abs(continuous_state[1] - self.last_speed)
-                    self.last_speed = continuous_state[1]
+                    energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
+                    if energy > self.last_energy:
+                        reward = 0.01
+                    else:
+                        reward = -0.01
+                    self.last_energy = energy
+            
+            if self.env_name.lower().find("cliff") >= 0:
+                if reward < -50:
+                    truncated = True
+
             total_reward += reward
             if terminated or truncated:
                 break
@@ -257,13 +266,15 @@ class RolloutLogger(BaseCallback):
         self.episode_reward = 0
         self.episode_length = 0
 
-    def is_success_fail(self, reward, total_reward, step):
+    def is_success_fail(self, reward, total_reward, terminated):
         if "lake" in self.env_name:
             return int(reward > 1.0e-3)
         elif "lander" in self.env_name:
             return int(total_reward >= 200)
         elif "mountaincar" in self.env_name:
-            return int(step < self.max_steps)
+            return terminated
+        elif "cliff" in self.env_name:
+            return terminated
         else:
             return 0
 
@@ -275,10 +286,11 @@ class RolloutLogger(BaseCallback):
         # Accumulate the episode reward
         self.episode_reward += self.locals['rewards'][0]
         self.episode_length += 1
-
-        if self.locals['dones'][0]:
+        terminated = self.locals['terminated'][0]
+        truncated = self.locals['truncated'][0]
+        if terminated or truncated:
             # Episode is done, record the episode information
-            succ_fail = self.is_success_fail(self.locals['rewards'][0], self.episode_reward, self.episode_length)
+            succ_fail = self.is_success_fail(self.locals['rewards'][0], self.episode_reward, terminated)
             
             if self.current_rollout < self.downsample_trail:
                 self.success_rate_f = (1 - 1 / (self.current_rollout + 1)) * self.success_rate_f + succ_fail / (self.current_rollout + 1)
@@ -315,18 +327,7 @@ class RolloutLogger(BaseCallback):
         This event is triggered at the end of training.
         We can perform any final logging here if needed.
         """
-        # If there are remaining episode data, log it
-        if self.episode_length > 0:
-            succ_fail = self.is_success_fail(self.episode_reward, self.episode_reward, self.episode_length)
-            
-            if self.current_rollout < self.downsample_trail:
-                self.success_rate_f = (1 - 1 / (self.current_rollout + 1)) * self.success_rate_f + succ_fail / (self.current_rollout + 1)
-            else:
-                self.success_rate_f = (1 - 1 / self.downsample_trail) * self.success_rate_f + succ_fail / self.downsample_trail
-
-            self.reward_sums.append(self.episode_reward)
-            self.step_counts.append(self.episode_length)
-            self.success_rate.append(self.success_rate_f)
+        pass
 
 
 class OnlineRL:

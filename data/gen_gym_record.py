@@ -27,13 +27,21 @@ def extract_state_space_dimensions(env_name, name="pendulum"):
         return state_space_dim1, state_space_dim2
 
 def create_env(args):
-    if(args.env_name.lower() == "lake"):
+    if(args.env_name.lower().find("lake") >= 0):
         if args.random_env:
             env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
             return env
         else:
             env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
             return env
+    if(args.env_name.lower().find("cliff") >= 0):
+        env = gym.make('CliffWalking-v0')
+        env = DiscreteEnvWrapper(env=env,
+                                env_name=args.env_name.lower(),
+                                action_space=args.action_clip,
+                                state_space_dim1=48,
+                                state_space_dim2=1)
+        return env
     elif(args.env_name.lower() == "lander"):
         env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
                enable_wind=False, wind_power=15.0, turbulence_power=1.5)
@@ -127,6 +135,16 @@ def produce_data(args, worker_id, shared_list, seg_len):
                 reward = -1.0
             elif args.env_name.lower().find("pendulum") >=0:
                 reward = reward / 10 + 0.3
+            elif args.env_name.lower().find("cliff") >=0:
+                if done:
+                    if terminated:
+                        reward = 1.0
+                    else:
+                        reward = -1.0
+                elif step - step_trail_start + 1 > args.n_max_steps:
+                    reward = -1.0
+                else:
+                    reward = -0.03
 
             # Record state, action, and reward
             state_list.append(state)  # Append current state
@@ -155,8 +173,16 @@ def produce_data(args, worker_id, shared_list, seg_len):
             if trail_reward > 200:
                 success_count += 1
                 total_action_count += step - step_trail_start
+        elif(args.env_name.lower() == "mountaincar"):
+            if terminated:
+                success_count += 1
+                total_action_count += step - step_trail_start
+        elif(args.env_name.lower() == "cliff"):
+            if reward > 0:
+                success_count += 1
+                total_action_count += step - step_trail_start
 
-    if(args.env_name.lower() == "lake" or args.env_name.lower() == "lander"):
+    if(success_count>0):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
     prompt_array = np.full(len(state_list), 3, dtype=int)
@@ -241,7 +267,7 @@ def generate_records(args, task_id):
 if __name__ == "__main__":
     # Use argparse to parse command line arguments
     parser = argparse.ArgumentParser(description="Train a Q-learning agent in a gym environment.")
-    parser.add_argument('--env_name', choices=['LAKE', 'LANDER', 'PENDULUM', 'MOUNTAINCAR'], default='LAKE', help="The name of the gym environment")
+    parser.add_argument('--env_name' , type=str, default='LAKE', help="The name of the gym environment")
     parser.add_argument('--save_path', type=str, required=True, help='The path to save the training data (without file extension).')
     parser.add_argument('--policy_name', choices=['DQN', 'A2C', 'TD3', 'PPO'], default='DQN', help="Policy Type")
     parser.add_argument('--n_total_timesteps', type=int, default=200000, help='Total number of epochs for training.')
