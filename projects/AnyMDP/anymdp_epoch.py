@@ -138,7 +138,7 @@ class AnyMDPEpoch:
             loss_wm_s = downsample(loss_wm_s, self.downsample_length)
             loss_wm_r = downsample(loss_wm_r, self.downsample_length)
             loss_pm = downsample(loss_pm, self.downsample_length)
-            loss_ent = down_sample(loss_ent, self.downsample_length)
+            loss_ent = downsample(loss_ent, self.downsample_length)
             counts = downsample(counts, self.downsample_length)
 
             for i in range(bsz):
