@@ -12,7 +12,7 @@ N_MAX_STEPS=200 # Maximum number of steps per trail, for PENDULUM & MOUNTAINCAR 
 N_WORKERS=10 # Number of parallel workers for segment data generation, default is 10
 ENABLE_LOAD_MODEL="False" # Whether to load a pre-trained model, default is False
 RANDOM_ENV="False" # Whether to use random environment, default is False
-PROMPT=3 # Prompt. 3 for opt with gramma 0.994. 4 for opt with noise. 5 for q-learning with noise.
+TAG=3 # Tag. 3 for opt with gramma 0.994. 4 for opt with noise. 5 for q-learning with noise.
 ACTION_DONE=5 # Action when env return done, default is action_dim of env.
 REWARD_DONE=0.0 # Reward when env return done, default is 0.0
 MAP_ENV_TO_DISCRETE="True" # Whether to map the env to discrete space, default is True
@@ -31,7 +31,7 @@ python gen_gym_record.py \
     --n_workers $N_WORKERS \
     --enable_load_model $ENABLE_LOAD_MODEL \
     --random_env $RANDOM_ENV \
-    --prompt $PROMPT \
+    --tag $TAG \
     --action_done $ACTION_DONE \
     --reward_done $REWARD_DONE \
     --map_env_to_discrete $MAP_ENV_TO_DISCRETE \
