@@ -198,7 +198,7 @@ generator_config:
     decoding_strategy:
         T_ini: 1.0
         T_fin: 0.1
-        T_step: 1000
+        T_step: 10000
         decay_type: Linear  # Exponential
     max_trails: 1000 # will top either with max_trails or max_steps
     max_steps: 200 # max steps for each trails
