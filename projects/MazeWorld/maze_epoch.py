@@ -84,14 +84,14 @@ class MazeEpochVAE:
                     _sigma=sigma)
             losses.append(loss)
             if(self.is_training):
-                syn_loss = loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]
+                syn_loss = (loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]) / loss["count"]
                 if(self.scaler is not None):
                     self.scaler.scale(syn_loss).backward()
                 else:
                     syn_loss.backward()
                 self.stat.gather(self.device,
-                    reconstruction_error = loss["Reconstruction-Error"],
-                    kl_divergence = loss["KL-Divergence"],
+                    reconstruction_error = loss["Reconstruction-Error"] / loss["count"],
+                    kl_divergence = loss["KL-Divergence"] / loss["count"],
                     count = loss["count"])
         if(self.is_training):
             stat_res = self.stat()
@@ -108,8 +108,8 @@ class MazeEpochVAE:
             self.lambda_scheduler.step()
         else:
             self.stat.gather(self.device,
-                    reconstruction_error=loss["Reconstruction-Error"], 
-                    kl_divergence=loss["KL-Divergence"], 
+                    reconstruction_error=loss["Reconstruction-Error"] / loss["count"], 
+                    kl_divergence=loss["KL-Divergence"] / loss["count"], 
                     count=loss["count"])
             
         
