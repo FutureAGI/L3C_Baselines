@@ -81,7 +81,6 @@ train_config:
     epoch_vae_stop: 2
     epoch_causal_start: -1
 
-    seq_len: 16000
     seq_len_vae: 16000
     seq_len_causal: 16000
     seg_len_vae: 100
@@ -91,8 +90,8 @@ train_config:
     lr_causal: 5.0e-4
     lr_vae_decay_interval: 1000
     lr_causal_decay_interval: 1000
-    lr_vae_start_step: 50000
-    lr_causal_start_step: 50000
+    lr_vae_start_step: 1000
+    lr_causal_start_step: 1000
 
     data_path: [PATH]
     save_model_path: "./checkpoints"
@@ -121,7 +120,8 @@ train_config:
         - 1.0e-6
 
 test_config:
-    batch_size: 1
+    batch_size_vae: 4
+    batch_size_causal: 4
     data_path: [PATH]
     epoch_vae_stop: 2
     epoch_causal_start: -1
