@@ -69,6 +69,7 @@ class MazeEpochVAE:
             assert self.optimizer is not None, "optimizer is required for training"
 
         losses = []
+        seq_len = self.config.seq_len_vae
         for sub_idx, seg_obs in segment_iterator(
                             self.config.seq_len_vae, self.config.seg_len_vae,
                             self.device, obs_arr):
@@ -81,7 +82,8 @@ class MazeEpochVAE:
                 sigma = 0
             loss = self.model.module.vae_loss(
                     seg_obs,
-                    _sigma=sigma)
+                    _sigma=sigma,
+                    seq_len=seq_len)
             losses.append(loss)
             if(self.is_training):
                 syn_loss = (loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]) / loss["count"]
