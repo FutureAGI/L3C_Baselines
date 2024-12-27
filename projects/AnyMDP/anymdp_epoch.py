@@ -453,7 +453,7 @@ class AnyMDPGenerator(GeneratorBase):
                         done = True
                     if done:
                         # success rate
-                        succ_fail = self.is_success_fail(new_reward, trail_reward, step)
+                        succ_fail = self.is_success_fail(new_reward, trail_reward, terminated)
                         if trail + 1 < self.config.downsample_trail:
                             success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
                         else:

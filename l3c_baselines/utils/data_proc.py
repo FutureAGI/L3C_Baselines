@@ -41,6 +41,7 @@ def sa_dropout(x, p=0.15, replacement=None):
         return x
     else:
         mask = (torch.rand(*x.shape[:-1]) > p).to(device)
+        mask = mask.unsqueeze(-1).expand_as(x)
         if(replacement == None):
             replacement = torch.zeros_like(x).to(device)
         else:

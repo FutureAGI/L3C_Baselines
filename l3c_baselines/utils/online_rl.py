@@ -286,8 +286,19 @@ class RolloutLogger(BaseCallback):
         # Accumulate the episode reward
         self.episode_reward += self.locals['rewards'][0]
         self.episode_length += 1
-        terminated = self.locals['terminated'][0]
-        truncated = self.locals['truncated'][0]
+        
+        if 'terminated' in self.locals:
+            terminated = self.locals['terminated'][0]
+        elif 'dones' in self.locals:  # Fallback to 'done' flag
+            done = self.locals['dones'][0]
+            terminated = done  # Assuming 'done' means the episode has ended, either successfully or due to failure
+
+        if 'truncated' in self.locals:
+            truncated = self.locals['truncated'][0]
+        elif 'infos' in self.locals and len(self.locals['infos']) > 0:
+            info = self.locals['infos'][0]
+            truncated = info.get('TimeLimit.truncated', False)
+
         if terminated or truncated:
             # Episode is done, record the episode information
             succ_fail = self.is_success_fail(self.locals['rewards'][0], self.episode_reward, terminated)
