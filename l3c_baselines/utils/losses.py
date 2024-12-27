@@ -66,7 +66,7 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         assert reduce_dim in [0, 1], "reduce_dim should be either None, 0 or 1."
         if(loss_wht is None): # if loss_wht is None, then all samples are AVERAGED
             # Sum over dimension 0
-            counts = torch.full((loss_array.shape[1],), loss_array.shape[0], 
+            counts = torch.full((loss_array.shape[1],), 1.0, 
                     dtype=loss_array.dtype, device=loss_array.device)
             mean_loss = torch.mean(loss_array, dim=[0])
 
