@@ -138,7 +138,7 @@ def EpochManager(cls):
 
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
-            if(self.config.has_attr("manual_config")):
+            if(self.config.has_attr("manual_sync")):
                 manual_sync = self.config.manual_sync
             else:
                 manual_sync = False
@@ -156,12 +156,12 @@ def EpochManager(cls):
                                   *batch_data, 
                                   epoch_id=epoch_id, 
                                   batch_id=batch_id)
-                    if(self.manual_sync):
+                    if(manual_sync):
                         for param in self.model.parameters():
                             if(param.grad is not None):
                                 dist.all_reduce(param.grad)
                                 param.grad.div_(self.world_size)
-                    # log_sum_parameters_grad(self.model, self.rank)
+                    #log_sum_parameters_grad(self.model, self.rank)
                     apply_gradient_safely(self.model, self.optimizer, scaler=self.scaler)
                     self.lr_scheduler.step()
                 else:
