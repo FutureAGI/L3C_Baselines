@@ -84,7 +84,7 @@ class MazeEpochVAE:
                     _sigma=sigma)
             losses.append(loss)
             if(self.is_training):
-                syn_loss = loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]
+                syn_loss = (loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]) / loss["count"]
                 if(self.scaler is not None):
                     self.scaler.scale(syn_loss).backward()
                 else:
@@ -149,7 +149,7 @@ class MazeEpochCausal:
             self.reduce_dim = None
             
     def valid_epoch(self, epoch_id): # Add epoch control for VAE training
-        if(self.config.has_attr('epoch_causal_stop')):
+        if(self.config.has_attr('epoch_causal_start')):
             if(epoch_id < self.config.epoch_causal_start):
                 return False
         return True
