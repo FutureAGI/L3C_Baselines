@@ -65,11 +65,11 @@ class E2EObjNavSA(nn.Module):
 
         return z_rec, z_pred, a_pred, new_cache
 
-    def vae_loss(self, observations, _sigma=1.0):
+    def vae_loss(self, observations, _sigma=1.0, seq_len=None):
         self.vae.requires_grad_(True)
         self.img_encoder.requires_grad_(True)
         self.img_decoder.requires_grad_(True)
-        return self.vae.loss(img_pro(observations), _sigma=_sigma)
+        return self.vae.loss(img_pro(observations), _sigma=_sigma, seq_len=seq_len)
 
     def reset(self):
         self.decision_model.reset()

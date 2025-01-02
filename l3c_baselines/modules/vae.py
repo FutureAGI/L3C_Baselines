@@ -44,9 +44,10 @@ class VAE(nn.Module):
         reconstruction_loss, cnt = weighted_loss(outputs, loss_type="mse", gt=inputs, reduce_dim=1, need_cnt=True)
 
         if(seq_len is None):
-            normal_factor = 1.0 / cnt
+            normal_factor = 1.0
         else:
             normal_factor = 1.0 / seq_len
+
         reconstruction_loss *= normal_factor
         kl_loss *= normal_factor
         cnt *= normal_factor
