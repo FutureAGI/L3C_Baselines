@@ -130,28 +130,28 @@ def produce_data(args, worker_id, shared_list, seg_len):
                     done = True
             # Reward shaping
             if args.env_name.lower().find("mountaincar") >=0 and terminated:
-                reward = 1.0
+                shaped_reward = 1.0
             elif args.env_name.lower().find("lake") >=0 and done and reward < 0.5:
-                reward = -1.0
+                shaped_reward = -1.0
             elif args.env_name.lower().find("pendulum") >=0:
-                reward = reward / 10 + 0.3
+                shaped_reward = max(reward/30 + 0.1, -0.1)
             elif args.env_name.lower().find("cliff") >=0:
                 if done:
                     if terminated:
-                        reward = 1.0
+                        shaped_reward = 1.0
                     else:
-                        reward = -1.0
+                        shaped_reward = -1.0
                 elif step - step_trail_start + 1 > args.n_max_steps:
-                    reward = -1.0
+                    shaped_reward = -1.0
                 else:
-                    reward = -0.03
+                    shaped_reward = -0.03
 
             # Record state, action, and reward
             state_list.append(state)  # Append current state
             
             act_list.append(action)    # Append action taken
 
-            reward_list.append(reward) # Append reward received
+            reward_list.append(shaped_reward) # Append reward received
             
             trail_reward += reward
             state = next_state
