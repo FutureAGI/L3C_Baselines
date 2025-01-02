@@ -45,7 +45,8 @@ model_config:
 train_config:
   batch_size: 4
   file_size: 500
-  
+
+  manual_sync: True
   seq_len: 4096
   seg_len: 1024
   max_epochs: 10

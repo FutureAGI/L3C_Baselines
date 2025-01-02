@@ -80,6 +80,7 @@ train_config:
     batch_size_causal: 1
     epoch_vae_stop: 2
     epoch_causal_start: -1
+    manual_sync: True
 
     seq_len_vae: 16000
     seq_len_causal: 16000
