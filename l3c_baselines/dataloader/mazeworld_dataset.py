@@ -21,7 +21,6 @@ class MazeDataSet(Dataset):
             self.file_list.extend([os.path.join(d, file) for file in file_list])
             
         self.time_step = time_step
-        self.reset()
 
         if(verbose):
             print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
