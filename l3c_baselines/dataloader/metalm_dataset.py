@@ -23,7 +23,6 @@ class LMDataSet(Dataset):
         self.data_list = []
         for file in self.file_list:
             self.data_list.extend([(file, i) for i in range(self.file_size)])
-        self.reset()
         if(verbose):
             print("...finished initializing data set, number of samples: %s\n" % len(self.index_inverse_list))
 
