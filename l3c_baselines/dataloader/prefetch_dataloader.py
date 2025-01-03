@@ -17,6 +17,7 @@ class BaseDataLoader(DataLoader):
         self.collate_fn = collate_fn
         self.rank = rank
         self.world_size = world_size
+        self.iter = 12345
         self.index = 0
         self.local_index = 0
         self.data_volume = len(self.dataset)
@@ -25,6 +26,10 @@ class BaseDataLoader(DataLoader):
     def __iter__(self):
         self.index = self.rank
         self.local_index = 0
+        # Set the random shuffler for the data loader
+        self.iter += 1
+        torch.manual_seed(self.iter)
+        self.index_shuffler = torch.randperm(self.data_volume).tolist()
         return self
 
     def __next__(self):
@@ -47,7 +52,7 @@ class BaseDataLoader(DataLoader):
         return self.collate_fn(data)
 
     def get(self):
-        item = self.dataset[self.index]
+        item = self.dataset[self.index_shuffler[self.index]]
         self.index += self.world_size
         return item
 
@@ -69,10 +74,10 @@ def worker_fn(dataset, length, index_queue, output_queue):
         else:
             real_idx = index
         try:
-            output_queue.put((index, dataset[real_idx]))
+            output_queue.put((real_idx, dataset[real_idx]))
         except Exception as e:
             log_warn(f"DataLoader:unexpected error when getting {real_idx}:{e}")
-            output_queue.put((index, None))
+            output_queue.put((real_idx, None))
 
 class PrefetchDataLoader(BaseDataLoader):
     def __init__(
@@ -110,22 +115,27 @@ class PrefetchDataLoader(BaseDataLoader):
             self.index_queues.append(index_queue)
 
     def prefetch(self):
+        """
+        Index shuffler introduced at prefetch stage
+        """
         while (self.prefetch_index < self.index + self.prefetch_batches * self.batch_size * self.world_size):
-            self.index_queues[next(self.worker_cycle)].put(self.prefetch_index)
+            real_prefetch_index = self.index_shuffler[self.prefetch_index % self.data_volume]
+            self.index_queues[next(self.worker_cycle)].put(real_prefetch_index)
             self.prefetch_index += self.world_size
 
     def get(self):
         self.prefetch()
         sys.stdout.flush()
-        if self.index in self.cache:
-            item = self.cache.pop(self.index)
+        real_index = self.index_shuffler[self.index % self.data_volume]
+        if real_index in self.cache:
+            item = self.cache.pop(real_index)
         else:
             try:
-                (index, data) = self.output_queue.get(timeout=60)
-                if index == self.index:
+                (fetch_index, data) = self.output_queue.get(timeout=60)
+                if real_index == fetch_index:
                     item = data
                 else:
-                    self.cache[index] = data
+                    self.cache[fetch_index] = data
                     return self.get()
             except queue.Empty:
                 raise StopIteration("Data fetch timeout from the output queue.")
@@ -138,6 +148,12 @@ class PrefetchDataLoader(BaseDataLoader):
         self.local_index = 0
         self.index = self.rank
         self.prefetch_index = self.rank
+
+        # Set the random shuffler for the data loader
+        self.iter += 1
+        torch.manual_seed(self.iter)
+        self.index_shuffler = torch.randperm(self.data_volume).tolist()
+
         self.cache = {}
         self.prefetch()
         return self

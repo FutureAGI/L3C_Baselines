@@ -20,28 +20,19 @@ class LMDataSet(Dataset):
         for d in directories:
             file_list = os.listdir(d)
             self.file_list.extend([os.path.join(d, file) for file in file_list])
-
-        self.reset()
+        self.data_list = []
+        for file in self.file_list:
+            self.data_list.extend([(file, i) for i in range(self.file_size)])
         if(verbose):
             print("...finished initializing data set, number of samples: %s\n" % len(self.index_inverse_list))
 
-    def reset(self):
-        random.shuffle(self.file_list)
-        self.index_inverse_list = []
-        for file in self.file_list:
-            self.index_inverse_list.extend([(file, i) for i in range(self.file_size)])
-
     def __getitem__(self, index):
-        path, sub_index = self.index_inverse_list[index]
+        path, sub_index = self.data_list[index]
         data = np.load(path)
-
         return torch.from_numpy(data[sub_index][:-1]).to(torch.int64), torch.from_numpy(data[sub_index][1:]).to(torch.int64)
-        # Old Generations
-        #return torch.from_numpy(data[0][sub_index]).to(torch.int64), torch.from_numpy(data[1][sub_index]).to(torch.int64)
 
     def __len__(self):
-        return len(self.index_inverse_list)
-
+        return len(self.data_list)
 
 # Test Maze Data Set
 if __name__=="__main__":
