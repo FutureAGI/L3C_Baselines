@@ -26,11 +26,6 @@ class MazeDataSet(Dataset):
         if(verbose):
             print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
 
-    def reset(self, seed=0):
-        random.seed(seed)
-        random.shuffle(self.file_list)
-
-
     def __getitem__(self, index):
         path = self.file_list[index]
 
