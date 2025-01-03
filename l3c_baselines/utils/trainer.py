@@ -134,7 +134,6 @@ def EpochManager(cls):
                 return
             
             acc_iter = 0
-            self.dataloader.dataset.reset()
 
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
