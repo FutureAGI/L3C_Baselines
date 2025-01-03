@@ -11,6 +11,17 @@ from restools.configure import Configure
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def log_sum_parameters_grad(model, rank=None):
+    l1 = 0.0
+    l2 = 0.0
+
+    for p in model.parameters():
+        if(p.grad is not None):
+            l2 += torch.sqrt(torch.sum(p.grad**2)).item()
+            l1 += torch.sum(torch.abs(p.grad)).item()
+
+    log_debug(f"parameter grad for {rank}: l1={l1}, l2={l2}")
+
 def safety_check(tensor, replacement=None, msg=None, on=True):
     has_inf = torch.isinf(tensor)
     has_nan = torch.isnan(tensor)

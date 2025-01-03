@@ -13,7 +13,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.amp import autocast, GradScaler
 from l3c_baselines.dataloader.prefetch_dataloader import PrefetchDataLoader
-from .tools import Configure, Logger, log_progress, log_debug, log_warn, log_fatal
+from .tools import Configure, Logger, log_progress, log_debug, log_warn, log_fatal, log_sum_parameters_grad
 from .tools import count_parameters, check_model_validity, model_path, safety_check, apply_gradient_safely, custom_load_model
 from .scheduler import noam_scheduler
 
@@ -138,7 +138,10 @@ def EpochManager(cls):
 
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
-
+            if(self.config.has_attr("manual_sync")):
+                manual_sync = self.config.manual_sync
+            else:
+                manual_sync = False
             data_length = len(self.dataloader)
             for batch_id, batch_data in enumerate(self.dataloader):
                 acc_iter += 1
@@ -153,6 +156,12 @@ def EpochManager(cls):
                                   *batch_data, 
                                   epoch_id=epoch_id, 
                                   batch_id=batch_id)
+                    if(manual_sync):
+                        for param in self.model.parameters():
+                            if(param.grad is not None):
+                                dist.all_reduce(param.grad)
+                                param.grad.div_(self.world_size)
+                    #log_sum_parameters_grad(self.model, self.rank)
                     apply_gradient_safely(self.model, self.optimizer, scaler=self.scaler)
                     self.lr_scheduler.step()
                 else:
@@ -195,8 +204,6 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                 model_type, train_objects, evaluate_objects, extra_info):
     """
     """
-
-
     if use_gpu:
         torch.cuda.set_device(rank)  # Set the current GPU to be used
         device = torch.device(f'cuda:{rank}')
@@ -295,7 +302,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
             epoch += 1
             for train_object in train_list:
                 train_object._epoch_start(epoch)
-                for need_evaluate in train_object.run(epoch, device, device_type):
+                for need_evaluate in train_object.run(epoch, device, device_type):                        
                     if(need_evaluate):
                         evaluate_epoch(epoch)
                 train_object._epoch_end(epoch)

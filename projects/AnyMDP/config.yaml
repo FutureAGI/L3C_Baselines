@@ -160,6 +160,8 @@ train_config:
     seq_len: 16000
     seg_len: 4000
 
+    manual_sync: True
+
     lr: 2.0e-4
     lr_decay_interval: 2000
     lr_start_step: 8000
