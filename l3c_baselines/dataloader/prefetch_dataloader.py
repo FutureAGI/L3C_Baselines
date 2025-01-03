@@ -131,11 +131,11 @@ class PrefetchDataLoader(BaseDataLoader):
             item = self.cache.pop(real_index)
         else:
             try:
-                (real_index, data) = self.output_queue.get(timeout=60)
-                if real_index == self.index:
+                (fetch_index, data) = self.output_queue.get(timeout=60)
+                if real_index == fetch_index:
                     item = data
                 else:
-                    self.cache[real_index] = data
+                    self.cache[fetch_index] = data
                     return self.get()
             except queue.Empty:
                 raise StopIteration("Data fetch timeout from the output queue.")
