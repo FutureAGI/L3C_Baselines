@@ -74,10 +74,10 @@ def worker_fn(dataset, length, index_queue, output_queue):
         else:
             real_idx = index
         try:
-            output_queue.put((index, dataset[real_idx]))
+            output_queue.put((real_idx, dataset[real_idx]))
         except Exception as e:
             log_warn(f"DataLoader:unexpected error when getting {real_idx}:{e}")
-            output_queue.put((index, None))
+            output_queue.put((real_idx, None))
 
 class PrefetchDataLoader(BaseDataLoader):
     def __init__(
@@ -126,15 +126,16 @@ class PrefetchDataLoader(BaseDataLoader):
     def get(self):
         self.prefetch()
         sys.stdout.flush()
-        if self.index in self.cache:
-            item = self.cache.pop(self.index)
+        real_index = self.index_shuffler[self.index % self.data_volume]
+        if real_index in self.cache:
+            item = self.cache.pop(real_index)
         else:
             try:
-                (index, data) = self.output_queue.get(timeout=60)
-                if index == self.index:
+                (real_index, data) = self.output_queue.get(timeout=60)
+                if real_index == self.index:
                     item = data
                 else:
-                    self.cache[index] = data
+                    self.cache[real_index] = data
                     return self.get()
             except queue.Empty:
                 raise StopIteration("Data fetch timeout from the output queue.")
