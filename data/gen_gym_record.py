@@ -108,6 +108,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
     act_list = []
     reward_list = []
     trail_reward_list = []
+    tag_list = []
+    prompt_list = []
 
     task_count = 0
     success_count = 0
@@ -152,6 +154,10 @@ def produce_data(args, worker_id, shared_list, seg_len):
             act_list.append(action)    # Append action taken
 
             reward_list.append(shaped_reward) # Append reward received
+
+            tag_list.append(args.tag)
+
+            prompt_list.append(3)
             
             trail_reward += reward
             state = next_state
@@ -162,6 +168,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
                 state_list.append(next_state)  # Append next state
                 act_list.append(np.array(args.action_done))    # Append action flag
                 reward_list.append(np.array(args.reward_done)) # Append reward zero
+                tag_list.append(7)
+                prompt_list.append(7)
                 trail_reward_list.append(trail_reward) # Append trail reward
             
         task_count += 1
@@ -185,12 +193,10 @@ def produce_data(args, worker_id, shared_list, seg_len):
     if(success_count>0):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
-    prompt_array = np.full(len(state_list), 3, dtype=int)
-    tag_array = np.full(len(state_list), int(args.tag), dtype=int)
     result = {
         "states": np.squeeze(np.array(state_list)),
-        "prompts": prompt_array,
-        "tags": tag_array,
+        "prompts": np.squeeze(np.array(prompt_list)),
+        "tags": np.squeeze(np.array(tag_list)),
         "actions": np.squeeze(np.array(act_list)),
         "rewards": np.squeeze(np.array(reward_list)),
         "trail_reward": np.squeeze(np.array(trail_reward_list))

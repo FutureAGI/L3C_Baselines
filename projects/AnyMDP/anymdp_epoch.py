@@ -175,6 +175,7 @@ class AnyMDPEpoch:
 # use gamma_vocabulary and tag_vocabulary
 class AnyMDPGenerator(GeneratorBase):
     def preprocess(self):
+        self.mult_anymdp_task = False
         if(self.config.env.lower().find("lake") >= 0):
             self.task_sampler = self.task_sampler_lake
         elif(self.config.env.lower().find("cliff") >= 0):
@@ -313,9 +314,7 @@ class AnyMDPGenerator(GeneratorBase):
                 if terminated:
                     reward = 1.0
                 else:
-                    reward = -1.0
-            elif step+1 > self.max_steps:
-                reward = -0.1      
+                    reward = -1.0    
             else:
                 reward = -0.03
             
@@ -355,16 +354,45 @@ class AnyMDPGenerator(GeneratorBase):
             state, *_ = self.env.reset()
         return state
 
+    def calculate_average_total_reward(self, reward_file_path, prompt_file_path):
+
+        rewards = numpy.load(reward_file_path)
+        prompts = numpy.load(prompt_file_path)
+
+        episode_ranges = []
+        current_episode_start = 0
+
+        for i, prompt in enumerate(prompts):
+            if prompt == 7:
+                episode_ranges.append((current_episode_start, i))
+                current_episode_start = i + 1
+
+        if current_episode_start < len(prompts):
+            episode_ranges.append((current_episode_start, len(prompts)))
+
+        reward_sums = []
+        for start, end in episode_ranges:
+            episode_rewards = rewards[start:end]
+            reward_sum = numpy.sum(episode_rewards)
+            reward_sums.append(reward_sum)
+
+        total_reward_sum = sum(reward_sums)
+        episode_num = len(episode_ranges)
+        average_total_reward = total_reward_sum / episode_num if episode_num > 0 else 0
+        return average_total_reward
+    
     def nomalize_anymdp_reward(self, epoch_id):
         task_num = len(self.tasks)
         task_id = (epoch_id * self.world_size + self.rank) % task_num
         dirname = Path(self.config.data_root).parent
         oracle_path = os.path.join(dirname, "oracle", f"record-{task_id:06d}")
         random_path = os.path.join(dirname, "random", f"record-{task_id:06d}")
-        oracle_rewards = numpy.load(os.path.join(oracle_path, 'rewards.npy'))
-        random_rewards = numpy.load(os.path.join(random_path, 'rewards.npy'))
-        oracle_mean = numpy.mean(oracle_rewards)
-        random_mean = numpy.mean(random_rewards)
+        oracle_rewards_path = os.path.join(oracle_path, 'rewards.npy')
+        oracle_prompts_path = os.path.join(oracle_path, 'prompts.npy')
+        random_rewards_path = os.path.join(random_path, 'rewards.npy')
+        random_prompts_path = os.path.join(random_path, 'prompts.npy')
+        oracle_mean = self.calculate_average_total_reward(oracle_rewards_path, oracle_prompts_path)
+        random_mean = self.calculate_average_total_reward(random_rewards_path, random_prompts_path)
         self.reward_nomalize_factor = 1 / (oracle_mean - random_mean)
         self.reward_nomalize_constant = - random_mean * self.reward_nomalize_factor
         print("task id:", task_id, "oracle mean:", oracle_mean, "random mean:", random_mean, "factor:", self.reward_nomalize_factor, "constant:", self.reward_nomalize_constant)
@@ -411,7 +439,7 @@ class AnyMDPGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self, epoch_id):
-        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum"]
+        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
         # Load opt model
         if self.config.env.lower().find("anymdp") >= 0:
             model = AnyMDPSolverOpt(self.env)
@@ -491,7 +519,7 @@ class AnyMDPGenerator(GeneratorBase):
                             success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
                         
                         if self.mult_anymdp_task:
-                            trail_reward = (self.reward_nomalize_factor * (trail_reward / step) + self.reward_nomalize_constant)
+                            trail_reward = self.reward_nomalize_factor * trail_reward + self.reward_nomalize_constant
                         
                         rew_stat.append(trail_reward)
                         success_rate.append(success_rate_f)
@@ -524,24 +552,6 @@ class AnyMDPGenerator(GeneratorBase):
             def random_model(state):
                 return random.randint(0,self.config.action_clip - 1)
             run_benchmark(random_model, self.logger_random, self.stat_random, epoch_id)
-
-    def dym_interactive_tag(self, success_rate, trail_reward):
-        if self.config.env.lower().find("lake") >= 0:
-            if success_rate < 0.05:
-                self.interactive_tag = 6 # Random
-            elif success_rate < 0.4:
-                self.interactive_tag = 7 # 
-            else:
-                self.interactive_tag = 3 # Opt with gamma 0.994
-        elif self.config.env.lower().find("pendulum") >= 0:
-            if trail_reward < -700:
-                self.interactive_tag = 7 # Unknown
-            elif trail_reward < -400:
-                self.interactive_tag = 5 # Opt with noise
-            else:
-                self.interactive_tag = 3 # Opt with gamma 0.994
-        else:
-            return
         
     def in_context_learn_with_tag(self, trail_reward, step, trail_state_arr, trail_action_arr, trail_reward_arr):
         if self.config.env.lower().find("pendulum") >= 0:
@@ -571,9 +581,12 @@ class AnyMDPGenerator(GeneratorBase):
             if trail_reward < -100:
                 return
             elif trail_reward < -50:
+                trail_tag_arr = numpy.full(len(trail_state_arr), 4, dtype=numpy.int32)
+                trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
+            elif trail_reward < -35:
                 trail_tag_arr = numpy.full(len(trail_state_arr), 5, dtype=numpy.int32)
                 trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
-            elif trail_reward < -20:
+            else:
                 trail_tag_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
                 trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
         else:
@@ -634,8 +647,6 @@ class AnyMDPGenerator(GeneratorBase):
             self.nomalize_anymdp_reward(epoch_id)
 
         while trail < self.max_trails:
-            if self.config.use_dym_tag and trail > 0:
-                self.dym_interactive_tag(success_rate_f, trail_reward)
             step = 0
             done = False
             trail_reward = 0.0
@@ -718,7 +729,8 @@ class AnyMDPGenerator(GeneratorBase):
                         self.interactive_tag,
                         self.action_dim,
                         0.0)
-                    self.in_context_learn_with_tag(trail_reward, step, trail_state_arr, trail_action_arr, trail_reward_arr)
+                    if self.config.use_dym_tag:
+                        self.in_context_learn_with_tag(trail_reward, step, trail_state_arr, trail_action_arr, trail_reward_arr)
                     # success rate
                     succ_fail = self.is_success_fail(new_reward, trail_reward, terminated)
                     if trail + 1 < self.config.downsample_trail:
@@ -727,7 +739,7 @@ class AnyMDPGenerator(GeneratorBase):
                         success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
                     
                     if self.mult_anymdp_task:
-                        trail_reward = (self.reward_nomalize_factor * (trail_reward / step) + self.reward_nomalize_constant)
+                        trail_reward = self.reward_nomalize_factor * trail_reward + self.reward_nomalize_constant
                     
                     rew_stat.append(trail_reward)
                     state_error.append(trail_obs_loss / step)
