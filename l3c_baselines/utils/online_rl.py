@@ -2,6 +2,7 @@ import numpy
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
 import gym
+from ma_gym.envs.switch import Switch
 
 class MapStateToDiscrete:
     def __init__(self, env_name, state_space_dim1, state_space_dim2):
@@ -395,3 +396,45 @@ if __name__ == "__main__":
     print("Reward Sums:", reward_sums)
     print("Step Counts:", step_counts)
     print("Success Rate:", success_rate)
+
+class Switch2(Switch):
+    def init_mapping(self):
+        position_to_state = {}
+        state_counter = 0
+        
+        for i in range(self._full_obs.shape[0]):
+            for j in range(self._full_obs.shape[1]):
+                if self._full_obs[i, j] != -1:
+                    position_to_state[(i, j)] = state_counter
+                    state_counter += 1  
+        self.position_to_state = position_to_state
+        for position, state in position_to_state.items():
+            print(f"Position {position} -> State {state}")
+
+    def get_agent_obs(self):
+        _obs = []
+        _obs_1dim = []
+        for agent_i in range(0, self.n_agents):
+            pos = self.agent_pos[agent_i]
+            _agent_i_obs = pos
+            _obs.append(_agent_i_obs)
+
+        agent1_state = self.position_to_state[tuple(self.agent_pos[0])]
+        agent2_state = self.position_to_state[tuple(self.agent_pos[1])]
+        agent1_x = self.agent_pos[0][0]
+        agent2_x = self.agent_pos[1][0]
+        if self.full_observable:
+            _obs_1dim.append(agent2_x * 15 + agent1_state)
+            _obs_1dim.append(agent1_x * 15 + agent2_state)
+        else:
+            _obs_1dim.append(agent1_state)
+            _obs_1dim.append(agent2_state)
+        return _obs_1dim
+    
+    def render(self, mode='rgb_array'):
+        if mode == 'human':
+            super().render(mode=mode)
+        elif mode == 'rgb_array':
+            return super().render(mode=mode)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}")
