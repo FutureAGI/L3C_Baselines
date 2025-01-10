@@ -398,6 +398,12 @@ if __name__ == "__main__":
     print("Success Rate:", success_rate)
 
 class Switch2(Switch):
+
+    def __init__(self, full_observable: bool = False, step_cost: float = 0, n_agents: int = 4, max_steps: int = 50,
+                 clock: bool = True):
+        super().__init__(full_observable, step_cost, n_agents, max_steps, clock)
+        self.init_mapping()
+
     def init_mapping(self):
         position_to_state = {}
         state_counter = 0

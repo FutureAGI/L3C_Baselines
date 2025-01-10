@@ -21,6 +21,9 @@ class GeneratorBase(object):
         self.T_step = self.config.decoding_strategy.T_step
         self.max_steps = self.config.max_steps
         self.max_trails = self.config.max_trails
+        self.max_total_steps = self.config.max_total_steps
+
+        self.agent_num = self.config.agent_num
 
         self.dT_linear = (self.T_fin - self.T_ini) / self.T_step
         self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.T_step)
@@ -70,45 +73,63 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
     if(main):
         log_debug("Main gpu", rank, device)
 
-    # Create model and move it to GPU with id `gpu`
+    model_num = config.generator_config.agent_num
+    models = []
     model = model_type(config.model_config, verbose=main)
-    model = model.to(device)
-
-    if use_gpu:
-        model = DDP(model, device_ids=[rank])
-    else:
-        model = DDP(model)
-
-    # Load the model if specified in the configuration
-    if(config.has_attr("load_model_path") and 
-            config.load_model_path is not None and 
-            config.load_model_path.lower() != 'none'):
-        if(config.has_attr("load_model_parameter_blacklist")):
-            black_list = config.load_model_parameter_blacklist
+    for model_idx in range(model_num):
+        # Create model and move it to GPU with id `gpu`
+        models.append(model)
+        models[model_idx] = models[model_idx].to(device)
+        
+        if use_gpu:
+            models[model_idx] = DDP(models[model_idx], device_ids=[rank])   
         else:
-            black_list = []
-        model = custom_load_model(model, f'{config.load_model_path}/model.pth', 
-                                  black_list=black_list,
-                                  verbose=main, 
-                                  strict_check=False)
-    else:
-        log_warn("No model is loaded as `load_model_path` is not found in config or is None", on=main)
+            models[model_idx] = DDP(models[model_idx])
 
-    generator=generator_class(run_name=config.run_name, 
-                            model=model, 
-                            config=config.generator_config,
-                            action_dim=config.model_config.action_dim,
-                            rank=rank,
-                            world_size=world_size,
-                            device_type=device_type,
-                            device=device,
-                            main=main,
-                            extra_info=extra_info)
+        # Load the model if specified in the configuration
+        if(config.has_attr("load_model_path") and 
+                config.load_model_path is not None and 
+                config.load_model_path.lower() != 'none'):
+            if(config.has_attr("load_model_parameter_blacklist")):
+                black_list = config.load_model_parameter_blacklist
+            else:
+                black_list = []
+            models[model_idx] = custom_load_model(models[model_idx], f'{config.load_model_path}/model.pth', 
+                                    black_list=black_list,
+                                    verbose=main, 
+                                    strict_check=False)
+            print(f"Load model {model_idx} from {config.load_model_path} for GPU {rank}")
+        else:
+            log_warn("No model is loaded as `load_model_path` is not found in config or is None", on=main)
+    if model_num < 2:
+        generator=generator_class(run_name=config.run_name, 
+                                model=models[0], 
+                                config=config.generator_config,
+                                action_dim=config.model_config.action_dim,
+                                rank=rank,
+                                world_size=world_size,
+                                device_type=device_type,
+                                device=device,
+                                main=main,
+                                extra_info=extra_info)
+    else:
+        generator=generator_class(run_name=config.run_name, 
+                                model=models, 
+                                config=config.generator_config,
+                                action_dim=config.model_config.action_dim,
+                                rank=rank,
+                                world_size=world_size,
+                                device_type=device_type,
+                                device=device,
+                                main=main,
+                                extra_info=extra_info)
+        
     generator.preprocess()
     for epoch_id in range(config.generator_config.epoch_numbers):
         log_debug(f"GPU {rank} start processing epoch {epoch_id} ...")
-        model.module.reset()
-        model.eval()
+        for model_idx in range(model_num):
+            models[model_idx].module.reset()
+            models[model_idx].eval()
         generator(epoch_id)
         log_debug(f"... GPU {rank} finishes processing epoch {epoch_id}")
     generator.postprocess()
