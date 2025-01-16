@@ -1,7 +1,7 @@
 import numpy
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
-import gym
+import gymnasium
 from ma_gym.envs.switch import Switch
 
 class MapStateToDiscrete:
@@ -196,12 +196,12 @@ class MapActionToContinuous:
         """
         return self.map_action_to_continuous_func(action)
     
-class DiscreteEnvWrapper(gym.Wrapper):
+class DiscreteEnvWrapper(gymnasium.Wrapper):
     def __init__(self, env, env_name, action_space=5, state_space_dim1=8, state_space_dim2=8, reward_shaping = False, skip_frame=0):
         super(DiscreteEnvWrapper, self).__init__(env)
         self.env_name = env_name.lower()
-        self.action_space = gym.spaces.Discrete(action_space)
-        self.observation_space = gym.spaces.Discrete(state_space_dim1 * state_space_dim2)
+        self.action_space = gymnasium.spaces.Discrete(action_space)
+        self.observation_space = gymnasium.spaces.Discrete(state_space_dim1 * state_space_dim2)
         self.reward_shaping = reward_shaping
         self.skip_frame = skip_frame
         self.map_state_to_discrete = MapStateToDiscrete(self.env_name, state_space_dim1, state_space_dim2).map_state_to_discrete
@@ -212,6 +212,7 @@ class DiscreteEnvWrapper(gym.Wrapper):
         discrete_state = self.map_state_to_discrete(continuous_state)
         if self.env_name.lower().find("mountaincar") >= 0:
             self.last_energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
+            self.last_gamma_vel = 0.0
         return discrete_state, info
         
     def step(self, discrete_action):
@@ -226,6 +227,9 @@ class DiscreteEnvWrapper(gym.Wrapper):
                         reward = 0.01
                     else:
                         reward = -0.01
+                    gamma = 0.66
+                    reward = -0.01 + 10*(continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel)
+                    self.last_gamma_vel = continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel
                     self.last_energy = energy
             
             if self.env_name.lower().find("cliff") >= 0:
@@ -386,7 +390,7 @@ if __name__ == "__main__":
     downsample_trail = 10
 
     if env_name == "lake":
-        env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
+        env = gymnasium.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
     else:
         raise ValueError(f"Unknown environment: {env_name}")
 
@@ -427,14 +431,52 @@ class Switch2(Switch):
 
         agent1_state = self.position_to_state[tuple(self.agent_pos[0])]
         agent2_state = self.position_to_state[tuple(self.agent_pos[1])]
-        agent1_x = self.agent_pos[0][0]
-        agent2_x = self.agent_pos[1][0]
+        agent1_x = self.agent_pos[0][1]
+        agent1_y = self.agent_pos[0][0]
+        agent2_x = self.agent_pos[1][1]
+        agent2_y = self.agent_pos[1][0]
         if self.full_observable:
-            _obs_1dim.append(agent2_x * 15 + agent1_state)
-            _obs_1dim.append(agent1_x * 15 + agent2_state)
+            # method 1: another agent's x pos (0~6)
+            # method 2: relative x position when y1 = y2 & abs(x1-x2)<=2 (0~4)
+            # method 3: another agent's area, left \ bridge \ right  (0~2)
+            # method 4: another agent on bridge & (x > x_another -> 1 or x < x_another -> 2), else 0
+            method = 1 
+            if method == 1:
+                _obs_1dim.append(agent2_x * 15 + agent1_state)
+                _obs_1dim.append(agent1_x * 15 + agent2_state)
+            elif method == 2:
+                def get_idx(agent_x, another_agent_x):
+                    x_diff = agent_x - another_agent_x
+                    mapping = {2: 1, 1: 2, -1: 3, -2: 4}
+                    return mapping.get(x_diff, 0) 
+
+                if agent1_y != agent2_y:
+                    _obs_1dim.append(agent1_state)
+                    _obs_1dim.append(agent2_state)
+                else:
+                    _obs_1dim.append(get_idx(agent1_x, agent2_x) * 15 + agent1_state)
+                    _obs_1dim.append(get_idx(agent2_x, agent1_x) * 15 + agent2_state)
+            elif method == 3:
+                def get_area(another_agent_x):
+                    return 0 if another_agent_x < 2 else (1 if another_agent_x < 5 else 2)
+                _obs_1dim.append(get_area(agent2_x) * 15 + agent1_state)
+                _obs_1dim.append(get_area(agent1_x) * 15 + agent2_state)
+            elif method == 4:
+                def get_bridge_relative(agent_x, another_agent_x):
+                    if another_agent_x in range(2, 5):
+                        return 1 if agent_x > another_agent_x else 2
+                    return 0
+                _obs_1dim.append(get_bridge_relative(agent1_x, agent2_x) * 15 + agent1_state)
+                _obs_1dim.append(get_bridge_relative(agent2_x, agent1_x) * 15 + agent2_state)
+
         else:
             _obs_1dim.append(agent1_state)
             _obs_1dim.append(agent2_state)
+
+        # append original observation
+        _obs_1dim.append(self.agent_pos[0])
+        _obs_1dim.append(self.agent_pos[1])
+        
         return _obs_1dim
     
     def render(self, mode='rgb_array'):

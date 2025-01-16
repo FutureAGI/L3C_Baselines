@@ -304,7 +304,7 @@ class AnyMDPGenerator(GeneratorBase):
         self.env = Switch2(n_agents=2, full_observable=True, max_steps=self.config.max_steps)
         return None
 
-    def reward_shaping(self, done, terminated, reward, step):
+    def reward_shaping(self, done, terminated, reward):
         if(self.config.env.lower().find("lake") >= 0):
             if done and reward < 0.5:
                 reward = -1.0
@@ -322,12 +322,6 @@ class AnyMDPGenerator(GeneratorBase):
                     reward = -1.0    
             else:
                 reward = -0.03
-        elif(self.config.env.lower().find("switch") >=0):
-            for i in range(len(done)):
-                if not done[i]:
-                    reward[i] = -0.005
-                else:
-                    reward[i] = 1.0 if reward[i] > 0.0 else -0.01
             
         return reward
             
@@ -365,31 +359,50 @@ class AnyMDPGenerator(GeneratorBase):
             state, *_ = self.env.reset()
         return state
 
-    def check_task(self, reward_file_path, prompt_file_path, threshold = 1.0):
-        rewards = numpy.load(reward_file_path)
-        prompts = numpy.load(prompt_file_path)
-        episode_ranges = []
-        current_episode_start = 0
+    def check_task(self, oracle_reward_file, oracle_prompt_file, random_reward_file, random_prompt_file, threshold = 1.0):
+        def get_reward(reward_file_path, prompt_file_path):
+            rewards = numpy.load(reward_file_path)
+            prompts = numpy.load(prompt_file_path)
+            episode_ranges = []
+            current_episode_start = 0
 
-        for i, prompt in enumerate(prompts):
-            if prompt == 7:
-                episode_ranges.append((current_episode_start, i))
-                current_episode_start = i + 1
+            for i, prompt in enumerate(prompts):
+                if prompt == 7:
+                    episode_ranges.append((current_episode_start, i))
+                    current_episode_start = i + 1
 
-        if current_episode_start < len(prompts):
-            episode_ranges.append((current_episode_start, len(prompts)))
+            if current_episode_start < len(prompts):
+                episode_ranges.append((current_episode_start, len(prompts)))
 
-        reward = []
-        for start, end in episode_ranges:
-            episode_rewards = rewards[start:end]
-            for value in rewards[start:end]:
-                reward.append(value)
-        bar = numpy.var(reward)/numpy.mean(reward)
-        if bar < threshold:
-            return True
+            reward_sums = []
+            for start, end in episode_ranges:
+                episode_rewards = rewards[start:end]
+                reward_sum = numpy.sum(episode_rewards)
+                reward_sums.append(reward_sum)
+            return reward_sums
+        
+        oracle_episode_reward = get_reward(oracle_reward_file, oracle_prompt_file)
+        random_episode_reward = get_reward(random_reward_file, random_prompt_file)
+        oracle_mean = numpy.mean(oracle_episode_reward)
+        random_mean = numpy.mean(random_episode_reward)
+
+        if abs(oracle_mean - random_mean) < 0.0001:
+            print(f"Task transition has problem, reward all equal to 0.0, oracle mean = {oracle_mean}, random mean = {random_mean}")
+            return False, oracle_mean, random_mean
+
+        self.reward_nomalize_factor = 1 / (oracle_mean - random_mean)
+        self.reward_nomalize_constant = - random_mean * self.reward_nomalize_factor
+        oracle_episode_reward_normalized = self.reward_nomalize_factor * numpy.array(oracle_episode_reward) + self.reward_nomalize_constant 
+        bar = numpy.var(oracle_episode_reward_normalized)
+        if self.reward_nomalize_factor < 0:
+            print("Random episode reward larger than oracle reward, ", oracle_mean - random_mean)
+            return False, oracle_mean, random_mean
+        elif bar < threshold:
+            print("Reward variance < threshold, ", bar)
+            return True, oracle_mean, random_mean
         else:
             print("Reward variance is too high, ", bar)
-            return False
+            return False, oracle_mean, random_mean
         
     def calculate_average_total_reward(self, reward_file_path, prompt_file_path, average = True):
 
@@ -434,13 +447,13 @@ class AnyMDPGenerator(GeneratorBase):
         oracle_prompts_path = os.path.join(oracle_path, 'prompts.npy')
         random_rewards_path = os.path.join(random_path, 'rewards.npy')
         random_prompts_path = os.path.join(random_path, 'prompts.npy')
-        if not self.check_task(oracle_rewards_path, oracle_prompts_path, 1.0):
+
+        pass_test, oracle_mean, random_mean = self.check_task(
+            oracle_rewards_path, oracle_prompts_path, random_rewards_path, random_prompts_path, threshold=0.3)
+        if not pass_test:
             return False
-        # trail
-        oracle_mean = self.calculate_average_total_reward(oracle_rewards_path, oracle_prompts_path)
-        random_mean = self.calculate_average_total_reward(random_rewards_path, random_prompts_path)
-        self.reward_nomalize_factor = 1 / (oracle_mean - random_mean)
-        self.reward_nomalize_constant = - random_mean * self.reward_nomalize_factor
+
+        
         # step
         oracle_step_mean = self.calculate_average_total_reward(oracle_rewards_path, oracle_prompts_path, average=False)
         random_step_mean = self.calculate_average_total_reward(random_rewards_path, random_prompts_path, average=False)
@@ -484,7 +497,7 @@ class AnyMDPGenerator(GeneratorBase):
                                 exp_q += t_mat[s,a,sn] * numpy.mean(cur_vm[sn])
                         cur_vm[s,a] = numpy.dot(r_mat[s,a], t_mat[s,a]) + gamma * exp_q
                 diff = numpy.sqrt(numpy.mean((old_vm - cur_vm)**2))
-            return numpy.mean(cur_vm)
+            return numpy.mean(cur_vm) 
         
         exp_q_opt = get_q(t_mat, r_mat,True)
         exp_q_random = get_q(t_mat, r_mat,False)
@@ -602,7 +615,7 @@ class AnyMDPGenerator(GeneratorBase):
                     else:
                         if terminated or truncated:
                             done = True
-                    shaped_reward = self.reward_shaping(done, terminated, new_reward, step)
+                    shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
                     step += 1
@@ -658,10 +671,10 @@ class AnyMDPGenerator(GeneratorBase):
                 trail_tag_arr = numpy.full(len(trail_state_arr), 6, dtype=numpy.int32)
                 trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
             elif trail_reward < -600:
-                trail_tag_arr = numpy.full(len(trail_state_arr), 7, dtype=numpy.int32)
+                trail_tag_arr = numpy.full(len(trail_state_arr), 5, dtype=numpy.int32)
                 trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
             elif trail_reward < -400:
-                trail_tag_arr = numpy.full(len(trail_state_arr), 5, dtype=numpy.int32)
+                trail_tag_arr = numpy.full(len(trail_state_arr), 2, dtype=numpy.int32)
                 trail_prompt_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
             else:
                 trail_tag_arr = numpy.full(len(trail_state_arr), 3, dtype=numpy.int32)
@@ -708,9 +721,9 @@ class AnyMDPGenerator(GeneratorBase):
         if self.mult_anymdp_task:
             skip_task = not self.nomalize_anymdp_reward(task_id)
             self.get_exp_q()
-        if skip_task:
-            print("Skip task: ", task_id)
-            return
+            if skip_task:
+                print("Skip task: ", task_id)
+                return
 
         if not self.config.run_icl:
             if self.config.run_benchmark.run_opt or self.config.run_benchmark.run_online or self.config.run_benchmark.run_random:
@@ -786,7 +799,7 @@ class AnyMDPGenerator(GeneratorBase):
                     if terminated or truncated:
                         done = True
                 # Reward shaping
-                shaped_reward = self.reward_shaping(done, terminated, new_reward, step)
+                shaped_reward = self.reward_shaping(done, terminated, new_reward)
 
                 # collect data
                 trail_action_arr.append(action)
@@ -972,6 +985,28 @@ class MultiAgentGenerator(AnyMDPGenerator):
                             use_tensorboard=False)
             self.stats.append(stat)
             self.loggers.append(logger)
+
+    def reward_shaping(self, done, reward, last_obs, obs):
+        if(self.config.env.lower().find("switch") >=0):
+            for i in range(len(done)):
+                goal_pos = self.env.final_agent_pos[i]
+                last_pos = last_obs[self.agent_num + i]
+                current_pos = obs[self.agent_num + i]
+
+                def distance_to_goal(pos, goal_pos):
+                    return abs(goal_pos[0]-pos[0]) + abs(goal_pos[1]-pos[1])
+                
+                if distance_to_goal(current_pos,goal_pos) < distance_to_goal(last_pos,goal_pos):
+                    rew = 0
+                else:
+                    rew = -0.005
+
+                if not done[i]:
+                    reward[i] = rew
+                else:
+                    reward[i] = 1.0 if reward[i] > 0.0 else rew
+                    
+        return reward
         
     def __call__(self, epoch_id):
 
@@ -1059,7 +1094,7 @@ class MultiAgentGenerator(AnyMDPGenerator):
                 # Interact with environment         
                 new_state, new_reward, done, *_ = self.env.step(env_action)
                 # Reward shaping
-                shaped_reward = self.reward_shaping(done, False, new_reward, 1)
+                shaped_reward = self.reward_shaping(done, new_reward, previous_state, new_state)
                 # Collect gif frame
                 if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
                     if self.config.env.lower().find("anymdp") < 0:
