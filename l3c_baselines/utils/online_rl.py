@@ -1,7 +1,8 @@
 import numpy
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
-import gym
+import gymnasium
+from ma_gym.envs.switch import Switch
 
 class MapStateToDiscrete:
     def __init__(self, env_name, state_space_dim1, state_space_dim2):
@@ -15,7 +16,6 @@ class MapStateToDiscrete:
             self.map_state_to_discrete_func = self._map_state_to_discrete_mountaincar
         else:
             self.map_state_to_discrete_func = self._map_state_to_discrete_default # return origin state
-            raise ValueError(f"Unsupported environment: {env_name}")
     
     def map_to_discrete(self, value, min_val, max_val, n_interval):
         """
@@ -196,21 +196,23 @@ class MapActionToContinuous:
         """
         return self.map_action_to_continuous_func(action)
     
-class DiscreteEnvWrapper(gym.Wrapper):
+class DiscreteEnvWrapper(gymnasium.Wrapper):
     def __init__(self, env, env_name, action_space=5, state_space_dim1=8, state_space_dim2=8, reward_shaping = False, skip_frame=0):
         super(DiscreteEnvWrapper, self).__init__(env)
         self.env_name = env_name.lower()
-        self.action_space = gym.spaces.Discrete(action_space)
-        self.observation_space = gym.spaces.Discrete(state_space_dim1 * state_space_dim2)
+        self.action_space = gymnasium.spaces.Discrete(action_space)
+        self.observation_space = gymnasium.spaces.Discrete(state_space_dim1 * state_space_dim2)
         self.reward_shaping = reward_shaping
         self.skip_frame = skip_frame
         self.map_state_to_discrete = MapStateToDiscrete(self.env_name, state_space_dim1, state_space_dim2).map_state_to_discrete
         self.map_action_to_continuous = MapActionToContinuous(self.env_name).map_action_to_continuous
 
-        self.last_speed = 0.0
     def reset(self, **kwargs):
         continuous_state, info = self.env.reset(**kwargs)
         discrete_state = self.map_state_to_discrete(continuous_state)
+        if self.env_name.lower().find("mountaincar") >= 0:
+            self.last_energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
+            self.last_gamma_vel = 0.0
         return discrete_state, info
         
     def step(self, discrete_action):
@@ -220,8 +222,20 @@ class DiscreteEnvWrapper(gym.Wrapper):
             continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
             if self.reward_shaping:
                 if self.env_name.lower().find("mountaincar") >= 0:
-                    reward = 0.1*reward + 10 * numpy.abs(continuous_state[1] - self.last_speed)
-                    self.last_speed = continuous_state[1]
+                    energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
+                    if energy > self.last_energy:
+                        reward = 0.01
+                    else:
+                        reward = -0.01
+                    gamma = 0.66
+                    reward = -0.01 + 10*(continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel)
+                    self.last_gamma_vel = continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel
+                    self.last_energy = energy
+            
+            if self.env_name.lower().find("cliff") >= 0:
+                if reward < -50:
+                    truncated = True
+
             total_reward += reward
             if terminated or truncated:
                 break
@@ -257,13 +271,15 @@ class RolloutLogger(BaseCallback):
         self.episode_reward = 0
         self.episode_length = 0
 
-    def is_success_fail(self, reward, total_reward, step):
+    def is_success_fail(self, reward, total_reward, terminated):
         if "lake" in self.env_name:
             return int(reward > 1.0e-3)
         elif "lander" in self.env_name:
             return int(total_reward >= 200)
         elif "mountaincar" in self.env_name:
-            return int(step < self.max_steps)
+            return terminated
+        elif "cliff" in self.env_name:
+            return terminated
         else:
             return 0
 
@@ -275,10 +291,22 @@ class RolloutLogger(BaseCallback):
         # Accumulate the episode reward
         self.episode_reward += self.locals['rewards'][0]
         self.episode_length += 1
+        
+        if 'terminated' in self.locals:
+            terminated = self.locals['terminated'][0]
+        elif 'dones' in self.locals:  # Fallback to 'done' flag
+            done = self.locals['dones'][0]
+            terminated = done  # Assuming 'done' means the episode has ended, either successfully or due to failure
 
-        if self.locals['dones'][0]:
+        if 'truncated' in self.locals:
+            truncated = self.locals['truncated'][0]
+        elif 'infos' in self.locals and len(self.locals['infos']) > 0:
+            info = self.locals['infos'][0]
+            truncated = info.get('TimeLimit.truncated', False)
+
+        if terminated or truncated:
             # Episode is done, record the episode information
-            succ_fail = self.is_success_fail(self.locals['rewards'][0], self.episode_reward, self.episode_length)
+            succ_fail = self.is_success_fail(self.locals['rewards'][0], self.episode_reward, terminated)
             
             if self.current_rollout < self.downsample_trail:
                 self.success_rate_f = (1 - 1 / (self.current_rollout + 1)) * self.success_rate_f + succ_fail / (self.current_rollout + 1)
@@ -315,18 +343,7 @@ class RolloutLogger(BaseCallback):
         This event is triggered at the end of training.
         We can perform any final logging here if needed.
         """
-        # If there are remaining episode data, log it
-        if self.episode_length > 0:
-            succ_fail = self.is_success_fail(self.episode_reward, self.episode_reward, self.episode_length)
-            
-            if self.current_rollout < self.downsample_trail:
-                self.success_rate_f = (1 - 1 / (self.current_rollout + 1)) * self.success_rate_f + succ_fail / (self.current_rollout + 1)
-            else:
-                self.success_rate_f = (1 - 1 / self.downsample_trail) * self.success_rate_f + succ_fail / self.downsample_trail
-
-            self.reward_sums.append(self.episode_reward)
-            self.step_counts.append(self.episode_length)
-            self.success_rate.append(self.success_rate_f)
+        pass
 
 
 class OnlineRL:
@@ -373,7 +390,7 @@ if __name__ == "__main__":
     downsample_trail = 10
 
     if env_name == "lake":
-        env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
+        env = gymnasium.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
     else:
         raise ValueError(f"Unknown environment: {env_name}")
 
@@ -383,3 +400,89 @@ if __name__ == "__main__":
     print("Reward Sums:", reward_sums)
     print("Step Counts:", step_counts)
     print("Success Rate:", success_rate)
+
+class Switch2(Switch):
+
+    def __init__(self, full_observable: bool = False, step_cost: float = 0, n_agents: int = 4, max_steps: int = 50,
+                 clock: bool = True):
+        super().__init__(full_observable, step_cost, n_agents, max_steps, clock)
+        self.init_mapping()
+
+    def init_mapping(self):
+        position_to_state = {}
+        state_counter = 0
+        
+        for i in range(self._full_obs.shape[0]):
+            for j in range(self._full_obs.shape[1]):
+                if self._full_obs[i, j] != -1:
+                    position_to_state[(i, j)] = state_counter
+                    state_counter += 1  
+        self.position_to_state = position_to_state
+        for position, state in position_to_state.items():
+            print(f"Position {position} -> State {state}")
+
+    def get_agent_obs(self):
+        _obs = []
+        _obs_1dim = []
+        for agent_i in range(0, self.n_agents):
+            pos = self.agent_pos[agent_i]
+            _agent_i_obs = pos
+            _obs.append(_agent_i_obs)
+
+        agent1_state = self.position_to_state[tuple(self.agent_pos[0])]
+        agent2_state = self.position_to_state[tuple(self.agent_pos[1])]
+        agent1_x = self.agent_pos[0][1]
+        agent1_y = self.agent_pos[0][0]
+        agent2_x = self.agent_pos[1][1]
+        agent2_y = self.agent_pos[1][0]
+        if self.full_observable:
+            # method 1: another agent's x pos (0~6)
+            # method 2: relative x position when y1 = y2 & abs(x1-x2)<=2 (0~4)
+            # method 3: another agent's area, left \ bridge \ right  (0~2)
+            # method 4: another agent on bridge & (x > x_another -> 1 or x < x_another -> 2), else 0
+            method = 1 
+            if method == 1:
+                _obs_1dim.append(agent2_x * 15 + agent1_state)
+                _obs_1dim.append(agent1_x * 15 + agent2_state)
+            elif method == 2:
+                def get_idx(agent_x, another_agent_x):
+                    x_diff = agent_x - another_agent_x
+                    mapping = {2: 1, 1: 2, -1: 3, -2: 4}
+                    return mapping.get(x_diff, 0) 
+
+                if agent1_y != agent2_y:
+                    _obs_1dim.append(agent1_state)
+                    _obs_1dim.append(agent2_state)
+                else:
+                    _obs_1dim.append(get_idx(agent1_x, agent2_x) * 15 + agent1_state)
+                    _obs_1dim.append(get_idx(agent2_x, agent1_x) * 15 + agent2_state)
+            elif method == 3:
+                def get_area(another_agent_x):
+                    return 0 if another_agent_x < 2 else (1 if another_agent_x < 5 else 2)
+                _obs_1dim.append(get_area(agent2_x) * 15 + agent1_state)
+                _obs_1dim.append(get_area(agent1_x) * 15 + agent2_state)
+            elif method == 4:
+                def get_bridge_relative(agent_x, another_agent_x):
+                    if another_agent_x in range(2, 5):
+                        return 1 if agent_x > another_agent_x else 2
+                    return 0
+                _obs_1dim.append(get_bridge_relative(agent1_x, agent2_x) * 15 + agent1_state)
+                _obs_1dim.append(get_bridge_relative(agent2_x, agent1_x) * 15 + agent2_state)
+
+        else:
+            _obs_1dim.append(agent1_state)
+            _obs_1dim.append(agent2_state)
+
+        # append original observation
+        _obs_1dim.append(self.agent_pos[0])
+        _obs_1dim.append(self.agent_pos[1])
+        
+        return _obs_1dim
+    
+    def render(self, mode='rgb_array'):
+        if mode == 'human':
+            super().render(mode=mode)
+        elif mode == 'rgb_array':
+            return super().render(mode=mode)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}")

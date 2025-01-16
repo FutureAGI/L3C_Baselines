@@ -2,7 +2,7 @@
 
 # Run the gen_gym_record.py script
 
-ENV_NAME="LAKE" # Name of the gym environment, choices=['LAKE', 'LANDER', 'PENDULUM8x8', 'MOUNTAINCAR8x8'], default is LAKE,
+ENV_NAME="LAKE" # Name of the gym environment, i.e. 'LAKE', 'CLIFF', 'LANDER', 'PENDULUM8x8', 'MOUNTAINCAR8x8', default is LAKE,
 SAVE_PATH="./gym_data" # Path to save the training data (without file extension)
 POLICY_NAME="PPO" # Policy type, default is DQN, can be DQN, TD3, A2C, or PPO. Note, TD3 is for continous problem.
 N_TOTAL_TIMESTEPS=20000 # Total number of epochs for training, default is 200000

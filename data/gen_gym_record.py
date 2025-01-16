@@ -27,13 +27,21 @@ def extract_state_space_dimensions(env_name, name="pendulum"):
         return state_space_dim1, state_space_dim2
 
 def create_env(args):
-    if(args.env_name.lower() == "lake"):
+    if(args.env_name.lower().find("lake") >= 0):
         if args.random_env:
             env = gym.make('FrozenLake-v1', desc=generate_random_map(size=4), is_slippery=True)
             return env
         else:
             env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
             return env
+    if(args.env_name.lower().find("cliff") >= 0):
+        env = gym.make('CliffWalking-v0')
+        env = DiscreteEnvWrapper(env=env,
+                                env_name=args.env_name.lower(),
+                                action_space=args.action_clip,
+                                state_space_dim1=48,
+                                state_space_dim2=1)
+        return env
     elif(args.env_name.lower() == "lander"):
         env = gym.make("LunarLander-v3", continuous=False, gravity=-10.0,
                enable_wind=False, wind_power=15.0, turbulence_power=1.5)
@@ -100,6 +108,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
     act_list = []
     reward_list = []
     trail_reward_list = []
+    tag_list = []
+    prompt_list = []
 
     task_count = 0
     success_count = 0
@@ -122,18 +132,32 @@ def produce_data(args, worker_id, shared_list, seg_len):
                     done = True
             # Reward shaping
             if args.env_name.lower().find("mountaincar") >=0 and terminated:
-                reward = 1.0
+                shaped_reward = 1.0
             elif args.env_name.lower().find("lake") >=0 and done and reward < 0.5:
-                reward = -1.0
+                shaped_reward = -1.0
             elif args.env_name.lower().find("pendulum") >=0:
-                reward = reward / 10 + 0.3
+                shaped_reward = max(reward/30 + 0.1, -0.1)
+            elif args.env_name.lower().find("cliff") >=0:
+                if done:
+                    if terminated:
+                        shaped_reward = 1.0
+                    else:
+                        shaped_reward = -1.0
+                elif step - step_trail_start + 1 > args.n_max_steps:
+                    shaped_reward = -1.0
+                else:
+                    shaped_reward = -0.03
 
             # Record state, action, and reward
             state_list.append(state)  # Append current state
             
             act_list.append(action)    # Append action taken
 
-            reward_list.append(reward) # Append reward received
+            reward_list.append(shaped_reward) # Append reward received
+
+            tag_list.append(args.tag)
+
+            prompt_list.append(3)
             
             trail_reward += reward
             state = next_state
@@ -144,6 +168,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
                 state_list.append(next_state)  # Append next state
                 act_list.append(np.array(args.action_done))    # Append action flag
                 reward_list.append(np.array(args.reward_done)) # Append reward zero
+                tag_list.append(7)
+                prompt_list.append(7)
                 trail_reward_list.append(trail_reward) # Append trail reward
             
         task_count += 1
@@ -155,16 +181,22 @@ def produce_data(args, worker_id, shared_list, seg_len):
             if trail_reward > 200:
                 success_count += 1
                 total_action_count += step - step_trail_start
+        elif(args.env_name.lower() == "mountaincar"):
+            if terminated:
+                success_count += 1
+                total_action_count += step - step_trail_start
+        elif(args.env_name.lower() == "cliff"):
+            if reward > 0:
+                success_count += 1
+                total_action_count += step - step_trail_start
 
-    if(args.env_name.lower() == "lake" or args.env_name.lower() == "lander"):
+    if(success_count>0):
       print(f"Worker {worker_id}: average action count when success = {total_action_count/success_count}, success rate = {success_count/task_count}")
 
-    prompt_array = np.full(len(state_list), 3, dtype=int)
-    tag_array = np.full(len(state_list), int(args.tag), dtype=int)
     result = {
         "states": np.squeeze(np.array(state_list)),
-        "prompts": prompt_array,
-        "tags": tag_array,
+        "prompts": np.squeeze(np.array(prompt_list)),
+        "tags": np.squeeze(np.array(tag_list)),
         "actions": np.squeeze(np.array(act_list)),
         "rewards": np.squeeze(np.array(reward_list)),
         "trail_reward": np.squeeze(np.array(trail_reward_list))
@@ -241,7 +273,7 @@ def generate_records(args, task_id):
 if __name__ == "__main__":
     # Use argparse to parse command line arguments
     parser = argparse.ArgumentParser(description="Train a Q-learning agent in a gym environment.")
-    parser.add_argument('--env_name', choices=['LAKE', 'LANDER', 'PENDULUM', 'MOUNTAINCAR'], default='LAKE', help="The name of the gym environment")
+    parser.add_argument('--env_name' , type=str, default='LAKE', help="The name of the gym environment")
     parser.add_argument('--save_path', type=str, required=True, help='The path to save the training data (without file extension).')
     parser.add_argument('--policy_name', choices=['DQN', 'A2C', 'TD3', 'PPO'], default='DQN', help="Policy Type")
     parser.add_argument('--n_total_timesteps', type=int, default=200000, help='Total number of epochs for training.')

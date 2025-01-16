@@ -7,5 +7,6 @@ from .tools import model_path, safety_check, count_parameters,  format_cache, me
 from .tools import Configure, Logger, log_warn, log_debug, log_progress, log_fatal
 from .trainer import EpochManager, Runner
 from .generator import GeneratorRunner, GeneratorBase
-from .online_rl import MapStateToDiscrete, MapActionToContinuous, DiscreteEnvWrapper, OnlineRL
+from .online_rl import MapStateToDiscrete, MapActionToContinuous, DiscreteEnvWrapper, OnlineRL, Switch2
 from .vocab import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
+from .visualization import AgentVisualizer
