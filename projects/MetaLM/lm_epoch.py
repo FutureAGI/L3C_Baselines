@@ -2,12 +2,12 @@ import os
 import torch
 import torch.optim as optim
 
-from l3c_baselines.dataloader import segment_iterator
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
-from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import Configure, DistStatistics, rewards2go
-from l3c_baselines.utils import EpochManager
-from l3c_baselines.dataloader import LMDataSet
+from airsoul.dataloader import segment_iterator
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
+from airsoul.utils import Configure, DistStatistics, rewards2go
+from airsoul.utils import EpochManager
+from airsoul.dataloader import LMDataSet
 
 def string_mean_var(downsample_length, res):
     string=""

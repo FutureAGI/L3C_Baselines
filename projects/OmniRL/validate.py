@@ -1,10 +1,10 @@
 import os
 import sys
-from airsoul.models import LanguageModel
+from airsoul.models import OmniRL
 from airsoul.utils import Runner
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lm_epoch import LMEpoch
+from omnirl_epoch import OmniRLEpoch
 
 if __name__ == "__main__":
     runner=Runner()
-    runner.start(LanguageModel, [], LMEpoch, extra_info='validate')
+    runner.start(OmniRL, [], OmniRLEpoch, extra_info='validate')

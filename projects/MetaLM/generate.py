@@ -11,11 +11,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
-from dataloader import LMDataSet
-from utils import custom_load_model, noam_scheduler, LinearScheduler
-from utils import show_bar, count_parameters, model_path
-from utils import Configure
-from models import LMBase
+from airsoul.dataloader import LMDataSet
+from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
+from airsoul.utils import log_progress, count_parameters, model_path
+from airsoul.utils import Configure
+from airsoul.models import LanguageModel
 
 os.environ['MASTER_ADDR'] = 'localhost'  # Example IP address, replace with your master node's IP
 os.environ['MASTER_PORT'] = '12340'        # Example port, choose an available port
@@ -73,7 +73,7 @@ def main_epoch(rank, use_gpu, config, datas):
     tokenizer = Tokenizer(vocab)
 
     # Create model and move it to GPU with id `gpu`
-    model = LMBase(config.model_config)
+    model = LanguageModel(config.model_config)
     model = model.to(device)
     load_model_path = config.demo_config.load_model_path
 
