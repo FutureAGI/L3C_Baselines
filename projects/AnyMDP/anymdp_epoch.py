@@ -833,8 +833,9 @@ class AnyMDPGenerator(GeneratorBase):
                 trail_reward_shaped += shaped_reward
                 trail_reward_loss += (shaped_reward - pred_reward) ** 2
 
-                step += 1
+                step += 1 + self.config.skip_frame
                 if(step > self.max_steps):
+                    step = self.max_steps
                     print("Reach max_steps, break trail.")
                     done = True
                 if(done):
@@ -1095,6 +1096,11 @@ class MultiAgentGenerator(AnyMDPGenerator):
                 new_state, new_reward, done, *_ = self.env.step(env_action)
                 # Reward shaping
                 shaped_reward = self.reward_shaping(done, new_reward, previous_state, new_state)
+                if not agents_info[0]['stop_learning'] and not agents_info[1]['stop_learning']:
+                    sum_reward = sum(shaped_reward)
+                    shaped_reward[0] = sum_reward
+                    shaped_reward[1] = sum_reward
+
                 # Collect gif frame
                 if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
                     if self.config.env.lower().find("anymdp") < 0:
