@@ -14,14 +14,14 @@ You may download the datasets and models from [here]().
 OmniRL is completely trained on synthetic MDPs and can generalize to various environments.
 
 <div style="height: 320; overflow: hidden;">
-  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/AnyMDP_Visualization.png" alt="OmniRL Train" style="height: 320px;">
+  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/AnyMDP_Visualization.png" alt="OmniRL Train" style="width: 320px;">
 </div>
 
 <div style="height: 320; overflow: hidden;">
-  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo1.gif" alt="OmniRL Demo" style="height: 320px;">
-  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo2.gif" alt="OmniRL Demo" style="height: 320px;">
-  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo3.gif" alt="OmniRL Demo" style="height: 320px;">
-  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo4.gif" alt="OmniRL Demo" style="height: 320px;">
+  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo1.gif" alt="OmniRL Demo" style="height: 128px;">
+  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo2.gif" alt="OmniRL Demo" style="height: 128px;">
+  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo3.gif" alt="OmniRL Demo" style="height: 128px;">
+  <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRLDemo4.gif" alt="OmniRL Demo" style="height: 128px;">
 </div>
 
 Performance of OmniRL on Lake benchmarks and its capability to ICL from any trajectory:
