@@ -1,5 +1,5 @@
-# L3C_Baselines
-Implementations of baselines for [L3C](https://github.com/FutureAGI/L3C)
+# AIRSoul
+AIRSoul embeds foundation models for embodied AI agents. It features general-purpose in-context learning (GPICL) agents with the capability of generalizing to novel out-of-distribution tasks.
 
 # Motivations
 Generative models presents promising capability to generalize and adapt to different tasks. The so-called "In-Context Learning" (ICL) can efficiently adapt to new tasks without tuning the parameters with high sample efficiency. We try build foundation models for learning to learn with ICL, covering the domain of language modeling, world modeling, and decision modeling.
@@ -11,7 +11,7 @@ Generative models presents promising capability to generalize and adapt to diffe
 
 - `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
 
-- `l3c_baselines`: contains the building blocks and utils of different models
+- `airsoul`: contains the building blocks and utils of different models
     - `modules`: contains the basic blocks
     - `utils`: contains the utils for building networks, training, and evaluation
     - `models`: contains higher-level models built from basic blocks

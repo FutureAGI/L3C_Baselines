@@ -8,7 +8,6 @@ from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go, downsample
 from airsoul.utils import EpochManager, GeneratorBase, Logger
-from airsoul.utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
 from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from airsoul.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
@@ -20,6 +19,7 @@ import pickle
 from pathlib import Path
 import random
 import re
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
