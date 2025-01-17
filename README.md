@@ -1,4 +1,4 @@
-# AIRSoul : Towards the Next Generation Foundation Model for Embodied AI Agents
+# AIRSoul : Towards the Next Generation Foundation Model for Embodied Agents
 Embodied AI faces key challenges in generalization and adaptation to different environments, cross-embodiments, and variant tasks. We believe in-weight learning (IWL) and scaling laws alone can not efficiently solve these problems. 
 
 AIRSoul is towarding building general-purpose in-context learning (ICL) agents featured with the following characteristics:
