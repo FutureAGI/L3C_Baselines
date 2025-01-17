@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='l3c_baselines',  
-    version='0.1.0',  
+    name='airsoul',  
+    version=airsoul.__version__,  
     packages=find_packages(),  
     package_dir={'': '.'},  
     install_requires=[
