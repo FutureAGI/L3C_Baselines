@@ -7,7 +7,7 @@ AIRSoul is towarding building general-purpose in-context learning (ICL) agents f
 - Continual Learning in ICL: Learning and switching among a wide range of tasks without catastrophic forgetting.
 
 # Directory Structure
-- [projects](./projects): implementations of model training and validating for different projects in L3C.
+- [projects](./projects): implementations of model training and validating for different benchmarks and projects.
     - [MetaLM](./projects/MetaLM) foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
     - [MazeWorld](./projects/MazeWorld) foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
     - [OmniRL](./projects/OmniRL) foundation model for [L3C AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp)
