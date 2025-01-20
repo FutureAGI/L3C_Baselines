@@ -1,17 +1,20 @@
-# L3C_Baselines
-Implementations of baselines for [L3C](https://github.com/FutureAGI/L3C)
+# AIRSoul : Towards the Next Generation Foundation Model for Embodied Agents
+Embodied AI faces key challenges in generalization and adaptation to different environments, cross-embodiments, and variant tasks. We believe in-weight learning (IWL) and scaling laws alone can not efficiently solve these problems. 
 
-# Motivations
-Generative models presents promising capability to generalize and adapt to different tasks. The so-called "In-Context Learning" (ICL) can efficiently adapt to new tasks without tuning the parameters with high sample efficiency. We try build foundation models for learning to learn with ICL, covering the domain of language modeling, world modeling, and decision modeling.
+AIRSoul is towarding building general-purpose in-context learning (ICL) agents featured with the following characteristics:
+- Generalized ICL: Ability to address novel tasks with reinforcement learning, imitation learning, and self-supervised learning.
+- Long-horizon ICL: Ability to complex tasks requiring a huge number of steps at minimum.
+- Continual Learning in ICL: Learning and switching among a wide range of tasks without catastrophic forgetting.
 
 # Directory Structure
-- [projects](./projects): implementations of model training and validating for different projects in L3C.
+- [projects](./projects): implementations of model training and validating for different benchmarks and projects.
     - [MetaLM](./projects/MetaLM) foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
     - [MazeWorld](./projects/MazeWorld) foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
+    - [OmniRL](./projects/OmniRL) foundation model for [L3C AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp)
 
 - `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
 
-- `l3c_baselines`: contains the building blocks and utils of different models
+- `airsoul`: contains the building blocks and utils of different models
     - `modules`: contains the basic blocks
     - `utils`: contains the utils for building networks, training, and evaluation
     - `models`: contains higher-level models built from basic blocks
@@ -22,9 +25,7 @@ Generative models presents promising capability to generalize and adapt to diffe
 ## Install Requirements
 To train a model run
 ```bash
-git clone https://github.com/FutureAGI/L3C_Baselines
-cd L3C_Baselines
-pip install -e .
+pip install airsoul
 ```
 
 ## Generate Datasets
@@ -45,7 +46,7 @@ Basically you need to modify the configuration file to start the training. The c
 
 To train a model run
 ```bash
-cd L3C_Baselines/projects/xxx
+cd ./projects/PROJECT_NAME/
 python train.py config.yaml
 ```
 
@@ -60,6 +61,5 @@ python validate.py config.yaml --configs key1=value1 key2=value2 ...
 ```
 
 ### Validating with interaction
-Under development.
-
+The repo is under active development.
 Feel free to submit a pull request.

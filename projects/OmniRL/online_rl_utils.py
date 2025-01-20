@@ -1,7 +1,7 @@
 import numpy
+import gymnasium
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
-import gymnasium
 from ma_gym.envs.switch import Switch
 
 class MapStateToDiscrete:

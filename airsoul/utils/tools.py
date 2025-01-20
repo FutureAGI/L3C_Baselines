@@ -11,6 +11,18 @@ from restools.configure import Configure
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def create_folder(folder_path):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+def import_with_caution(module_name):
+    try:
+        module = __import__(module_name)
+    except ImportError:
+        module = None
+        print(f'Warning: module {module_name} does not exist')
+    return module
+
 def log_sum_parameters_grad(model, rank=None):
     l1 = 0.0
     l2 = 0.0

@@ -25,10 +25,10 @@ TaskConfig = namedtuple("TaskConfig", ["start", "cell_landmarks", "cell_walls", 
     "cell_size", "wall_height", "agent_height", "initial_life", "max_life",
     "step_reward", "goal_reward", "landmarks_rewards", "landmarks_coordinates", "landmarks_refresh_interval", "commands_sequence"])
 
-from models import MazeModelXL
-from utils import create_folder, VideoWriter
-from utils import Configure
-from utils import img_pro, custom_load_model
+from airsoul.models import E2EObjNavSA
+from airsoul.utils import create_folder, VideoWriter
+from airsoul.utils import Configure
+from airsoul.utils import img_pro, custom_load_model
 
 
 def postprocess_image(img, cell_size, scale_factor, actions):
@@ -221,7 +221,7 @@ if __name__=='__main__':
     run_random = demo_config.run_random
 
     if(run_model):
-        model = MazeModelXL(config.model_config)
+        model = E2EObjNavSA(config.model_config)
         use_gpu = torch.cuda.is_available()
         if(use_gpu):
             device = torch.device(f'cuda:0')

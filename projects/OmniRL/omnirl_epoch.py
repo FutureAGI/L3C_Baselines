@@ -3,14 +3,13 @@ import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 
-from l3c_baselines.dataloader import segment_iterator
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
-from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import Configure, DistStatistics, rewards2go, downsample
-from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
-from l3c_baselines.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
-from l3c_baselines.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
+from airsoul.dataloader import segment_iterator
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
+from airsoul.utils import Configure, DistStatistics, rewards2go, downsample
+from airsoul.utils import EpochManager, GeneratorBase, Logger
+from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
+from airsoul.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gymnasium 
 import gym
@@ -20,6 +19,7 @@ import pickle
 from pathlib import Path
 import random
 import re
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -37,7 +37,7 @@ def string_mean_var(downsample_length, res):
     return string
 
 @EpochManager
-class AnyMDPEpoch:
+class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
@@ -172,9 +172,8 @@ class AnyMDPEpoch:
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
 
-# TODO: ADAPT Generator To OPTAR @PENGTAO
 # use gamma_vocabulary and tag_vocabulary
-class AnyMDPGenerator(GeneratorBase):
+class OmniRLGenerator(GeneratorBase):
     def preprocess(self):
         self.mult_anymdp_task = False
         if(self.config.env.lower().find("lake") >= 0):
@@ -967,7 +966,7 @@ class AnyMDPGenerator(GeneratorBase):
                                 random_results['success_rate']['mean'])
             self.save_results(random_results, "random_result")
 
-class MultiAgentGenerator(AnyMDPGenerator):
+class MultiAgentGenerator(OmniRLGenerator):
 
     # Mult-Agent Generator
     def preprocess(self):

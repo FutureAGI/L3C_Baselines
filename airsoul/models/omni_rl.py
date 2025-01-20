@@ -14,7 +14,7 @@ from l3c_baselines.utils import log_debug, log_warn, log_fatal
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
 from .decision_model import OPTARDecisionModel
 
-class AnyMDPRSA(OPTARDecisionModel):
+class OmniRL(OPTARDecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 
