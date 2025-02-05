@@ -1142,7 +1142,7 @@ class MultiAgentGenerator(OmniRLGenerator):
                 # Collect gif frame
                 if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
                     if self.config.env.lower().find("anymdp") < 0:
-                        frames.extend(self.env.render())
+                        frames.append(self.env.render(mode='rgb_array'))
 
                 for agent_index in range(self.agent_num):
                     agents_info[agent_index]['done'] = done[agent_index]
