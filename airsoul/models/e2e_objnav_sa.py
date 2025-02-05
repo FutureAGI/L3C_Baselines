@@ -8,9 +8,9 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import weighted_loss, img_pro, img_post
-from l3c_baselines.utils import parameters_regularization, count_parameters
-from l3c_baselines.modules import ImageEncoder, ImageDecoder, VAE
+from airsoul.utils import weighted_loss, img_pro, img_post
+from airsoul.utils import parameters_regularization, count_parameters
+from airsoul.modules import ImageEncoder, ImageDecoder, VAE
 from .decision_model import SADecisionModel
 
 class E2EObjNavSA(nn.Module):

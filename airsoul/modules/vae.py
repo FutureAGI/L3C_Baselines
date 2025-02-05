@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from l3c_baselines.utils import weighted_loss
+from airsoul.utils import weighted_loss
 
 class VAE(nn.Module):
     def __init__(

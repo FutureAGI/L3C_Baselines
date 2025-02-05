@@ -2,11 +2,11 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
-from l3c_baselines.utils import format_cache
-from l3c_baselines.utils import weighted_loss
-from l3c_baselines.utils import count_parameters
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
+from airsoul.utils import format_cache
+from airsoul.utils import weighted_loss
+from airsoul.utils import count_parameters
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 class LanguageModel(nn.Module):
     """
@@ -94,7 +94,7 @@ class LanguageModel(nn.Module):
 
 if __name__=='__main__':
     import sys
-    from l3c_baselines.utils import Configure
+    from airsoul.utils import Configure
     config = Configure()
     config.from_yaml(sys.argv[1])
     LM = LanguageModel(config.model_config)

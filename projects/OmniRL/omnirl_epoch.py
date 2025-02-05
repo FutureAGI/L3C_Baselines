@@ -19,7 +19,8 @@ import pickle
 from pathlib import Path
 import random
 import re
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
+from airsoul.utils import AgentVisualizer
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -997,9 +998,11 @@ class MultiAgentGenerator(OmniRLGenerator):
                     return abs(goal_pos[0]-pos[0]) + abs(goal_pos[1]-pos[1])
                 
                 if distance_to_goal(current_pos,goal_pos) < distance_to_goal(last_pos,goal_pos):
-                    rew = 0
+                    rew = 0.08
+                elif distance_to_goal(current_pos,goal_pos) > distance_to_goal(last_pos,goal_pos):
+                    rew = -0.12
                 else:
-                    rew = -0.005
+                    rew = -0.04
 
                 if not done[i]:
                     reward[i] = rew
@@ -1007,7 +1010,39 @@ class MultiAgentGenerator(OmniRLGenerator):
                     reward[i] = 1.0 if reward[i] > 0.0 else rew
                     
         return reward
-        
+    
+    def in_context_learn_from_teacher(self, epoch_id):
+        # Task ID: retrieve the correpsonding teacher trajectory with task ID
+        for agent_index in range(self.agent_num):
+            for folder in os.listdir(self.config.data_root):
+                folder_path = os.path.join(self.config.data_root, folder)
+
+                if os.path.isdir(folder_path):
+                    states = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_observations.npy'))
+                    prompts = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_prompts.npy'))
+                    tags = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_tags.npy'))
+                    actions = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_actions_behavior.npy'))
+                    rewards = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_rewards.npy'))
+                    states = states.astype(numpy.int32)
+                    prompts = prompts.astype(numpy.int32)
+                    tags = tags.astype(numpy.int32)
+                    actions = actions.astype(numpy.int32)
+                    rewards = rewards.astype(numpy.float32)
+                    segment_len = 1000
+                    for start in range(0, len(states), segment_len):
+                        end = min(start + segment_len, len(states))
+                        self.model[agent_index].module.in_context_learn(
+                            states[start:end],
+                            prompts[start:end],
+                            tags[start:end],
+                            actions[start:end],
+                            rewards[start:end],
+                            single_batch=True,
+                            single_step=False)
+                else:
+                    log_warn(f"Folder {folder_path} does not exist.")
+        print("Finish Learning.")
+
     def __call__(self, epoch_id):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
@@ -1026,6 +1061,10 @@ class MultiAgentGenerator(OmniRLGenerator):
                 self.benchmark(epoch_id)
             else:
                 print("Run ICL Only.")
+
+        if self.config.learn_from_data:
+            self.in_context_learn_from_teacher(epoch_id)
+
         # Start ICL
         obs_arrs = [[] for _ in range(self.agent_num)]
         act_arrs = [[] for _ in range(self.agent_num)]

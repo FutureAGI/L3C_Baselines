@@ -8,10 +8,10 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import weighted_loss, sa_dropout, img_pro, img_post
-from l3c_baselines.utils import parameters_regularization, count_parameters
-from l3c_baselines.utils import log_debug, log_warn, log_fatal
-from l3c_baselines.modules import ImageEncoder, ImageDecoder
+from airsoul.utils import weighted_loss, sa_dropout, img_pro, img_post
+from airsoul.utils import parameters_regularization, count_parameters
+from airsoul.utils import log_debug, log_warn, log_fatal
+from airsoul.modules import ImageEncoder, ImageDecoder
 from .decision_model import OPTARDecisionModel
 
 class OmniRL(OPTARDecisionModel):
@@ -75,6 +75,9 @@ class OmniRL(OPTARDecisionModel):
         # Calculate the loss information
         loss = dict()
         # Mask out the invalid actions
+        if(self.loss_weight.shape[0] < pe):
+            log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
+                    f" than sequence length {pe}")
         loss_weight_s = None
         loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
                     self.loss_weight.dtype)

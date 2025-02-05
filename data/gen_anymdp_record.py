@@ -14,7 +14,7 @@ from numpy import random
 import l3c
 from packaging import version
 assert version.parse(l3c.__version__) >= version.parse('0.2.1.19')
-from l3c_baselines.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
+from airsoul.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt

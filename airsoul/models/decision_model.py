@@ -2,8 +2,8 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
-from l3c_baselines.utils import format_cache, log_fatal
+from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
+from airsoul.utils import format_cache, log_fatal
 
 class SADecisionModel(nn.Module):
     """
@@ -251,7 +251,7 @@ class OPTARDecisionModel(nn.Module):
 
 if __name__=='__main__':
     import sys
-    from l3c_baselines.utils import Configure
+    from airsoul.utils import Configure
     config = Configure()
     config.from_yaml(sys.argv[1])
     RSADM = SADecisionModel(config.model_config.decision_block)
