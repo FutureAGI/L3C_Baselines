@@ -33,3 +33,41 @@ Performance of OmniRL on Lake benchmarks and its capability to ICL from random t
 <div style="height: 320; overflow: hidden;">
   <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRL_Figure.png" alt="OmniRL Performance" style="width: 320px;">
 </div>
+
+## Configuration
+
+The `config.yaml` file contains all the necessary configuration for running OmniRL. Below is a detailed explanation of each field.
+
+### General Configuration
+
+Settings for general configuration.
+
+
+### Log Configuration
+
+Settings for logging and saving models.
+
+
+### Model Configuration
+
+Configuration for the overall model architecture and components, including encoders, decoders, and causal blocks. It defines the structure and behavior of the model during training and inference.
+
+- **max_position**: Defines the maximum sequence length that the model can handle.
+
+- **context_warmup**: The number of warm-up steps for the model at the beginning of training.
+
+- **rsa_type**: Specifies the way the model processes the input data.If adding a new category is needed, modify `rsa_choice` field in `decision_model`
+
+- **causal_block**: This module is used for handling causal relationships in the model. Setting `model_type`  is recommended for standard transformer architectures. Other options include `GSA`, `GLA`, `MAMBA`, and `RWKV6`, each offering different mechanisms for handling causal dependencies.Continue setting other model parameters after choosing `model_type`.
+
+### Training Configuration
+
+Settings for training the model.
+
+- **seq_len**: Sequence length for training, better not less than `max_steps` while generating data.
+
+### Test Configuration
+
+Similar to the training setup above.
+
+**Parameters not explicitly shown above may retain their default values as per the recommended configuration. Custom adjustments are available when aligned with specific application requirements.**
