@@ -36,38 +36,70 @@ Performance of OmniRL on Lake benchmarks and its capability to ICL from random t
 
 ## Configuration
 
-The `config.yaml` file contains all the necessary configuration for running OmniRL. Below is a detailed explanation of each field.
+The `config.yaml` file contains all the necessary configuration for running OmniRL. Each configuration item is composed of multiple keys and sub-keys, can be over-written by commandline arguments. For instance, 
+```yaml
+model_config:
+    state_encode:
+        input_type: "Discrete"
+```
+can be over-written by commandline arguments as follows:
+```bash
+python train.py config.yaml --model_config.state_encode.input_type "Continuous"
+```
+Below we explain key configuration items in detail.
 
 ### General Configuration
 
-Settings for general configuration.
+- **run_name**:  # Names airsoul will use to discrimate the run from the others in the logs
 
+- **master_port**: # A port used for connecting to the master node
+
+- **load_model_path**: # Set to none in a cold start, or set to a path to load the model from a checkpoint
 
 ### Log Configuration
 
-Settings for logging and saving models.
+Specify the log path and whether to use tensorboard.
 
+- **use_tensorboard**
 
-### Model Configuration
+- **tensorboard_log
+
+- **training_log
+
+- **evaluation_log
+
+### Model Configuration (model_config)
 
 Configuration for the overall model architecture and components, including encoders, decoders, and causal blocks. It defines the structure and behavior of the model during training and inference.
 
-- **max_position**: Defines the maximum sequence length that the model can handle.
+- **max_position_loss_weighting**: Defines the maximum sequence length that the model can handle.
 
-- **context_warmup**: The number of warm-up steps for the model at the beginning of training.
+- **context_warmup**: specify a increasing loss weighting with the context length, as shown in Appendices of [EPRNN]{https://arxiv.org/pdf/2109.03554}.
 
-- **rsa_type**: Specifies the way the model processes the input data.If adding a new category is needed, modify `rsa_choice` field in `decision_model`
+- **rsa_type**: Specifies how states, actions, rewards, prompts are encoded. Options include `sa`, `sar`, `psar`, `star` etc. OmniRL uses `star` by default.
 
-- **causal_block**: This module is used for handling causal relationships in the model. Setting `model_type`  is recommended for standard transformer architectures. Other options include `GSA`, `GLA`, `MAMBA`, and `RWKV6`, each offering different mechanisms for handling causal dependencies.Continue setting other model parameters after choosing `model_type`.
+- **causal_block**:  Options include `Transformer`, `GSA`, `GLA`, `MAMBA`, and `RWKV6`. OmniRL automatically use causal masks for `Transformer` and `RWKV6`, and employ a chunk-wise forward and backward pass. E.g., `Transformer` is automatically set to sliding window attention mode by setting train_config.seg_len.
 
-### Training Configuration
+- **state_encode**, **state_decode**, **action_encode**, ...: specify the encoder and decoder for states, actions, rewards etc.
+
+
+### Training Configuration (train_config)
 
 Settings for training the model.
 
-- **seq_len**: Sequence length for training, better not less than `max_steps` while generating data.
+- **seq_len**: Specify the sequence length loaded into the memory when training.
 
-### Test Configuration
+- **seg_len**: Specify the segment length used in chunk-wise forward and backward pass.
 
-Similar to the training setup above.
+- **lr**, **lr_decay_interval**, **lr_start_step**: OmniRL apply noam decay with the warmup step specified by `lr_decay_interval`, use `lr_start_step` in cases of warm start.
+
+
+### Test Configuration (test_config)
+
+specify the configurations used for valiations between episodes or during static testing.
+
+### Evaluation Configuration (generator_config)
+
+specify the configurations for auto-regressive interaction with the environment during dynamic evaluation.
 
 **Parameters not explicitly shown above may retain their default values as per the recommended configuration. Custom adjustments are available when aligned with specific application requirements.**
