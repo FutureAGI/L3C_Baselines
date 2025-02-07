@@ -2,8 +2,8 @@ OmniRL (Omnipotent-Reinforcement-Leanring) is an in-context reinforcement learni
 
 ## Features of OmniRL
 - **Generalized In-context Learning**: OmniRL can learn a novel MDP task by in-context learning using imitation learning, reinforce learning, and offline-RL.
-- **Long Trajectory Learning**: Can reasoning over trajectories as long as 1 million steps.
-- **Generalization**: OmniRL can generalize to unseen MDPs and environments, including Cliff, Lake, MountainCar, Pendulum etc.
+- **Long-horizon In-Context Learning**: Can reasoning over trajectories as long as 1 million steps.
+- **Highly Generalizable**: OmniRL can generalize to unseen MDPs and environments, including Cliff, Lake, MountainCar, Pendulum etc.
 
 ## Datasets and Models
 
@@ -60,26 +60,14 @@ Below we explain key configuration items in detail.
 
 Specify the log path and whether to use tensorboard.
 
-- **use_tensorboard**
-
-- **tensorboard_log
-
-- **training_log
-
-- **evaluation_log
-
 ### Model Configuration (model_config)
 
 Configuration for the overall model architecture and components, including encoders, decoders, and causal blocks. It defines the structure and behavior of the model during training and inference.
 
 - **max_position_loss_weighting**: Defines the maximum sequence length that the model can handle.
-
 - **context_warmup**: specify a increasing loss weighting with the context length, as shown in Appendices of [EPRNN](https://arxiv.org/pdf/2109.03554).
-
 - **rsa_type**: Specifies how states, actions, rewards, prompts are encoded. Options include `sa`, `sar`, `psar`, `star` etc. OmniRL uses `star` by default.
-
 - **causal_block**:  Options include `Transformer`, `GSA`, `GLA`, `MAMBA`, and `RWKV6`. OmniRL automatically use causal masks for `Transformer` and `RWKV6`, and employ a chunk-wise forward and backward pass. E.g., `Transformer` is automatically set to sliding window attention mode by setting train_config.seg_len.
-
 - **state_encode**, **state_decode**, **action_encode**, ...: specify the encoder and decoder for states, actions, rewards etc.
 
 
@@ -88,11 +76,8 @@ Configuration for the overall model architecture and components, including encod
 Settings for training the model.
 
 - **seq_len**: Specify the sequence length loaded into the memory when training.
-
 - **seg_len**: Specify the segment length used in chunk-wise forward and backward pass.
-
 - **lr**, **lr_decay_interval**, **lr_start_step**: OmniRL apply noam decay with the warmup step specified by `lr_decay_interval`, use `lr_start_step` in cases of warm start.
-
 
 ### Test Configuration (test_config)
 
