@@ -44,7 +44,7 @@ model_config:
 ```
 can be over-written by commandline arguments as follows:
 ```bash
-python train.py config.yaml --model_config.state_encode.input_type "Continuous"
+python train.py config.yaml --model_config.state_encode.input_type="Continuous"
 ```
 Below we explain key configuration items in detail.
 
@@ -74,7 +74,7 @@ Configuration for the overall model architecture and components, including encod
 
 - **max_position_loss_weighting**: Defines the maximum sequence length that the model can handle.
 
-- **context_warmup**: specify a increasing loss weighting with the context length, as shown in Appendices of [EPRNN]{https://arxiv.org/pdf/2109.03554}.
+- **context_warmup**: specify a increasing loss weighting with the context length, as shown in Appendices of [EPRNN](https://arxiv.org/pdf/2109.03554).
 
 - **rsa_type**: Specifies how states, actions, rewards, prompts are encoded. Options include `sa`, `sar`, `psar`, `star` etc. OmniRL uses `star` by default.
 
