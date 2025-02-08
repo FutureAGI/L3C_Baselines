@@ -5,10 +5,6 @@ OmniRL (Omnipotent-Reinforcement-Leanring) is an in-context reinforcement learni
 - **Long-horizon In-Context Learning**: Can reasoning over trajectories as long as 1 million steps.
 - **Highly Generalizable**: OmniRL can generalize to unseen MDPs and environments, including Cliff, Lake, MountainCar, Pendulum etc.
 
-## Datasets and Models
-
-You may download the datasets and models from [here]().
-
 ## Performances
 
 A sketch of the structure of OmniRL
@@ -33,6 +29,16 @@ Performance of OmniRL on Lake benchmarks and its capability to ICL from random t
 <div style="height: 320; overflow: hidden;">
   <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRL_Figure.png" alt="OmniRL Performance" style="width: 320px;">
 </div>
+
+## Play with OmniRL
+
+A trained stage-3 version of OmniRL can be downloaded from [here](https://pan.baidu.com/s/1y_a1I0xFQLt6ZQlc2RQp4g?pwd=vg5k).
+
+You main play the model to interact with any discrete-space environments by 
+
+```bash
+python generator.py config_xxx.yaml
+'''
 
 ## Configuration
 
