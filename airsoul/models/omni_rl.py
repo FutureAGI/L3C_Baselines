@@ -67,11 +67,11 @@ class OmniRL(OPTARDecisionModel):
         pe = ps + seq_len
         o_in = sa_dropout(observations[:, :-1].clone())
         # Predict the latent representation of action and next frame (World Model)
-        s_pred, a_pred, r_pred, _ = self.forward(
+        wm_out, pm_out, _ = self.forward(
                 o_in, prompts, tags, behavior_actions, rewards,
                 cache=None, need_cache=False,
                 update_memory=update_memory)
-
+        s_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out)
         # Calculate the loss information
         loss = dict()
         # Mask out the invalid actions
@@ -86,7 +86,14 @@ class OmniRL(OPTARDecisionModel):
             loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
 
         # World Model Loss - States and Rewards
-        if self.state_dtype == "Continuous":
+        if self.state_dtype == "Discrete":
+            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                        gt=observations[:, 1:], 
+                                        loss_type="ce",
+                                        loss_wht=loss_weight_s, 
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
+        elif self.state_dtype == "Continuous" and not self.config.state_diffusion.enable:
             if observations.dim() == 2:
                 gt = observations[:, 1:].view(*observations.shape, -1)
             else:
@@ -97,13 +104,21 @@ class OmniRL(OPTARDecisionModel):
                                         loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
-        else:
-            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
-                                        gt=observations[:, 1:], 
-                                        loss_type="ce",
-                                        loss_wht=loss_weight_s, 
-                                        reduce_dim=reduce_dim,
-                                        need_cnt=True)
+        
+        elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
+            if not self.config.state_decode.frozen:
+                loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=observations[:, 1:],
+                                            cond=wm_out,
+                                            mask=loss_weight_s,
+                                            reduce_dim=reduce_dim,
+                                            need_cnt=True)
+            else:
+                loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]),
+                                            cond=wm_out,
+                                            mask=loss_weight_s,
+                                            reduce_dim=reduce_dim,
+                                            need_cnt=True)
+                
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
                                      loss_type="mse",
@@ -111,7 +126,14 @@ class OmniRL(OPTARDecisionModel):
                                      reduce_dim=reduce_dim)
 
         # Policy Model
-        if self.action_dtype == "Continuous":
+        if self.action_dtype == "Discrete":
+            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                    gt=label_actions, 
+                                    loss_type="ce",
+                                    loss_wht=loss_weight_a, 
+                                    reduce_dim=reduce_dim,
+                                    need_cnt=True)
+        elif self.action_dtype == "Continuous" and not self.config.action_diffusion.enable:
             if label_actions.dim() == 2:
                 gt = label_actions.view(*rewards.shape, 1)
             else:
@@ -122,13 +144,12 @@ class OmniRL(OPTARDecisionModel):
                                        loss_wht=loss_weight_a, 
                                        reduce_dim=reduce_dim,
                                        need_cnt=True)
-        else:
-            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
-                                    gt=label_actions, 
-                                    loss_type="ce",
-                                    loss_wht=loss_weight_a, 
-                                    reduce_dim=reduce_dim,
-                                    need_cnt=True)
+        elif self.action_dtype == "Continuous" and self.config.action_diffusion.enable:
+            loss["pm"], loss["count_a"] = self.a_diffusion.loss_DDPM(x0=label_actions,
+                                        cond=pm_out,
+                                        mask=loss_weight_a,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
         # Entropy Loss
         loss["ent"] = weighted_loss(a_pred, 
                                     loss_type="ent", 
@@ -194,7 +215,7 @@ class OmniRL(OPTARDecisionModel):
             default_r = None
         default_a = self.default_a.to(device)
 
-        o_pred, a_pred, r_pred, _ = self.forward(
+        wm_out, pm_out, _ = self.forward(
             obs_in,
             pro_in,
             tag_in,
@@ -203,6 +224,8 @@ class OmniRL(OPTARDecisionModel):
             T=temp,
             update_memory=False,
             need_cache=False)
+        
+        o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
         
         if(self.a_discrete):
             act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
@@ -219,7 +242,7 @@ class OmniRL(OPTARDecisionModel):
                 act_out = act_out.item()
 
         if(future_prediction):
-            o_pred, a_pred, r_pred, _ = self.forward(
+            wm_out, pm_out, _ = self.forward(
                 obs_in,
                 pro_in,
                 tag_in,
@@ -228,6 +251,8 @@ class OmniRL(OPTARDecisionModel):
                 T=temp,
                 update_memory=False,
                 need_cache=False)
+            
+            o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
             
             state = o_pred.detach().cpu().squeeze()
             reward = r_pred.detach().cpu().squeeze()
@@ -301,7 +326,7 @@ class OmniRL(OPTARDecisionModel):
             rew_in = rew_in.to(torch.int32)
 
         # observation, prompt, tag, action, reward; update memory = true
-        _, _, _, new_cache = self.forward(
+        _, _, new_cache = self.forward(
             obs_in,
             pro_in,
             tag_in,
@@ -319,7 +344,7 @@ if __name__=="__main__":
     config=Configure()
     config.from_yaml(sys.argv[1])
 
-    model = AnyMDPRSA(config.model_config)
+    model = OmniRL(config.model_config)
 
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 

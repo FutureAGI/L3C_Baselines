@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
+from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock, DiffusionLayers
 from airsoul.utils import format_cache, log_fatal
 
 class SADecisionModel(nn.Module):
@@ -115,6 +115,11 @@ class OPTARDecisionModel(nn.Module):
         self.s_decoder = ResidualMLPDecoder(config.state_decode)
         self.a_decoder = ResidualMLPDecoder(config.action_decode)
         self.r_decoder = ResidualMLPDecoder(config.reward_decode)
+
+        if(config.action_diffusion.enable):
+            self.a_diffusion = DiffusionLayers(config.action_diffusion)
+        if(config.state_diffusion.enable):
+            self.s_diffusion = DiffusionLayers(config.state_diffusion)
 
         if(self.config.state_encode.input_type == "Discrete"):
             self.s_discrete = True
@@ -236,15 +241,23 @@ class OPTARDecisionModel(nn.Module):
 
         # Extract world models outputs
         wm_out = outputs[:, :, self.wm_pos]
-        # Predict s_1, s_2, ..., s_{t+1}
-        obs_output = self.s_decoder(wm_out)
-        # Predict r_0, r_1, ..., r_t
-        rew_output = self.r_decoder(wm_out)
+        pm_out = outputs[:, :, self.pm_pos]
 
-        # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, self.pm_pos], T=T)
+        return wm_out, pm_out, new_cache
+    
+    def post_decoder(self, wm_out, pm_out, T=1.0):
+        obs_output, act_output, rew_output = None, None, None
+        if(not self.config.state_diffusion.enable):
+            # Predict s_1, s_2, ..., s_{t+1}
+            obs_output = self.s_decoder(wm_out)
 
-        return obs_output, act_output, rew_output, new_cache
+        if(not self.config.action_diffusion.enable):
+            # Predict a_0, a_1, ..., a_t
+            act_output = self.a_decoder(pm_out, T=T)
+        
+        rew_output = self.r_decoder(pm_out)
+        
+        return obs_output, act_output, rew_output
 
     def reset(self):
         self.causal_model.reset()

@@ -4,26 +4,29 @@ from torch.nn import functional as F
 from airsoul.utils import weighted_loss
 
 class DiffusionLayers(nn.Module):
-    def __init__(self, T, hidden_size, condition_size, inner_hidden_size, beta=(0.05, 0.20)):
+    # def __init__(self, T, hidden_size, condition_size, inner_hidden_size, beta=(0.05, 0.20)):
+    def __init__(self, config):
         super().__init__()
-        self.betas = torch.linspace(beta[0], beta[1], T)
+        self.betas = torch.linspace(config.beta[0], config.beta[1], T)
+        # this schedule is very specific to the latent diffusion model.
+        # self.betas = torch.linspace(beta[0]**0.5, beta[1]**0.5, T, dtype=torch.float32) ** 2
         self.betas = torch.cat([torch.tensor([0.0]), self.betas], dim=0)
         self.alphas = 1 - self.betas
         self._alphas = torch.cumprod(self.alphas, axis=0, dtype=torch.float)
 
-        self.condition_size = condition_size
-        self.hidden_size = hidden_size
-        self.input_size = 2 * hidden_size + condition_size
+        self.condition_size = config.condition_size
+        self.hidden_size = config.hidden_size
+        self.input_size = 2 * config.hidden_size + config.condition_size
         self.pre_diffusion_norm = nn.LayerNorm(self.hidden_size, eps=1.0e-5)
         self.diffusion_layers_1 = nn.Sequential(
-            nn.Linear(self.input_size, inner_hidden_size), 
+            nn.Linear(self.input_size, config.inner_hidden_size), 
             nn.GELU(),
             nn.Dropout(0.10),
-            nn.Linear(inner_hidden_size, hidden_size),
+            nn.Linear(config.inner_hidden_size, config.hidden_size),
             nn.GELU()) 
-        self.diffusion_layers_2 = nn.Linear(hidden_size, hidden_size)
-        self.T = T
-        self.t_embedding = nn.Embedding(T, hidden_size)
+        self.diffusion_layers_2 = nn.Linear(config.hidden_size, config.hidden_size)
+        self.T = config.T
+        self.t_embedding = nn.Embedding(config.T, config.hidden_size)
 
     def step_forward(self, xt, t, cond):
         """
@@ -39,15 +42,19 @@ class DiffusionLayers(nn.Module):
 
         return outputs
     
-    def loss_DDPM(self, x0, cond, mask=None, reduce_dim=1, t=None):
+    def loss_DDPM(self, x0, cond, mask=None, reduce_dim=1, t=None, need_cnt=False):
         if(t is None):
             _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
         else:
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
         x_t, eps, _ = self.diffusion_forward(x0, _t)
         eps_t = self.step_forward(x_t, _t, cond)
-        loss = weighted_loss(eps_t, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim)
-        return loss
+        if  need_cnt:
+            loss,loss_count_s = weighted_loss(eps_t, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
+            return loss, loss_count_s
+        else:
+            loss = weighted_loss(eps_t, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
+            return loss
 
     def forward(self, x0, cond, mask=None, reduce_dim=1, t=None):
         """
