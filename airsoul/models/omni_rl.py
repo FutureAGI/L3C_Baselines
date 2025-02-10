@@ -220,13 +220,16 @@ class OmniRL(OPTARDecisionModel):
         
         o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
         
-        if(self.a_discrete):
-            act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
-            act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
-            act_out = act_in.squeeze()
+        if not self.config.action_diffusion.enable:
+            if(self.a_discrete):
+                act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
+                act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
+                act_out = act_in.squeeze()
+            else:
+                act_in = a_pred
+                act_out = act_in.squeeze()
         else:
-            act_in = a_pred
-            act_out = act_in.squeeze()
+            act_out = self.a_diffusion.inference(pm_out)[-1]
 
         act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
@@ -247,7 +250,12 @@ class OmniRL(OPTARDecisionModel):
             
             o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
             
-            state = o_pred.detach().cpu().squeeze()
+            if not self.config.state_diffusion.enable:
+                state = o_pred.detach().cpu().squeeze()
+            else:
+                o_pred = self.s_diffusion.inference(wm_out)[-1]
+                state = o_pred.detach().cpu().squeeze()
+                
             reward = r_pred.detach().cpu().squeeze()
 
             if(need_numpy):
