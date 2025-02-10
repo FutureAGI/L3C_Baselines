@@ -26,6 +26,10 @@ class SADecisionModel(nn.Module):
         self.a_encoder = MLPEncoder(config.action_encode)
         self.s_decoder = ResidualMLPDecoder(config.state_decode)
         self.a_decoder = ResidualMLPDecoder(config.action_decode)
+        if(config.action_diffusion.enable):
+            self.a_diffusion = DiffusionLayers(config.action_diffusion)
+        if(config.state_diffusion.enable):
+            self.s_diffusion = DiffusionLayers(config.state_diffusion)
 
     def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
@@ -71,13 +75,18 @@ class SADecisionModel(nn.Module):
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
 
-        # Predict s_1, s_2, ..., s_{t+1}
-        obs_output = self.s_decoder(outputs[:, :, 1])
+        wm_out = outputs[:, :, 1]
+        pm_out = outputs[:, :, 0]
 
-        # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, 0], T=T)
+        return wm_out, pm_out, new_cache
 
-        return obs_output, act_output, new_cache
+    def post_decoder(self, wm_out, pm_out, T=1.0):
+        obs_output, act_output = None, None
+        if not self.config.state_diffusion.enable:
+            obs_output = self.s_decoder(wm_out)
+        if not self. config.action_diffusion.enable:
+            obs_output = self.a_decoder(pm_out, T=T)
+        return obs_output, act_output
 
     def reset(self):
         self.causal_model.reset()

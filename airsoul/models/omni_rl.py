@@ -106,18 +106,11 @@ class OmniRL(OPTARDecisionModel):
                                         need_cnt=True)
         
         elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
-            if not self.config.state_decode.frozen:
-                loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=observations[:, 1:],
-                                            cond=wm_out,
-                                            mask=loss_weight_s,
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
-            else:
-                loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]),
-                                            cond=wm_out,
-                                            mask=loss_weight_s,
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
+            loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=observations[:, 1:],
+                                        cond=wm_out,
+                                        mask=loss_weight_s,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
                 
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
