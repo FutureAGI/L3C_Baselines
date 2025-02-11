@@ -230,8 +230,6 @@ class E2EObjNavSA(nn.Module):
                 wm_out, pm_out, _ = self.decision_model.forward(z_rec, n_act, cache=updated_cache, need_cache=True)
                 _, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
 
-                if self.config.state_diffusion.enable:
-                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
                 if self.config.action_diffusion.enable:
                     action = self.decision_model.a_diffusion.inference(pm_out)[-1]
                 else:

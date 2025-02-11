@@ -7,7 +7,7 @@ class DiffusionLayers(nn.Module):
     # def __init__(self, T, hidden_size, condition_size, inner_hidden_size, beta=(0.05, 0.20)):
     def __init__(self, config):
         super().__init__()
-        self.betas = torch.linspace(config.beta[0], config.beta[1], T)
+        self.betas = torch.linspace(config.beta[0], config.beta[1], config.T)
         # this schedule is very specific to the latent diffusion model.
         # self.betas = torch.linspace(beta[0]**0.5, beta[1]**0.5, T, dtype=torch.float32) ** 2
         self.betas = torch.cat([torch.tensor([0.0]), self.betas], dim=0)
