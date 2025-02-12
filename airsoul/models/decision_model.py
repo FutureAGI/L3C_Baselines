@@ -85,7 +85,7 @@ class SADecisionModel(nn.Module):
         if not self.config.state_diffusion.enable:
             obs_output = self.s_decoder(wm_out)
         if not self. config.action_diffusion.enable:
-            obs_output = self.a_decoder(pm_out, T=T)
+            act_output = self.a_decoder(pm_out, T=T)
         return obs_output, act_output
 
     def reset(self):

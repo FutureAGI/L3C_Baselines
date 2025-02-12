@@ -115,7 +115,7 @@ class E2EObjNavSA(nn.Module):
         else:
             loss_weight = None
 
-        if not self.config.state_diffusion.enable:
+        if not self.config.decision_block.state_diffusion.enable:
             # World Model Loss - Latent Space
             loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                             loss_type="mse",
@@ -140,7 +140,7 @@ class E2EObjNavSA(nn.Module):
             loss["wm-raw"] = 0.0
 
         # Decision Model Loss
-        if not self.config.action_diffusion.enable:
+        if not self.config.decision_block.action_diffusion.enable:
             if(self.policy_loss == 'crossentropy'):
                 assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
                 loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
@@ -230,7 +230,7 @@ class E2EObjNavSA(nn.Module):
                 wm_out, pm_out, _ = self.decision_model.forward(z_rec, n_act, cache=updated_cache, need_cache=True)
                 _, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
 
-                if self.config.action_diffusion.enable:
+                if self.config.decision_block.action_diffusion.enable:
                     action = self.decision_model.a_diffusion.inference(pm_out)[-1]
                 else:
                     action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
@@ -248,9 +248,9 @@ class E2EObjNavSA(nn.Module):
                 
                 z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
 
-                if self.config.state_diffusion.enable:
+                if self.config.decision_block.state_diffusion.enable:
                     z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
-                if self.config.action_diffusion.enable:
+                if self.config.decision_block.action_diffusion.enable:
                     action = self.decision_model.a_diffusion.inference(pm_out)[-1]
                 else:
                     action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
