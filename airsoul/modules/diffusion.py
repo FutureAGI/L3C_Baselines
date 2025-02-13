@@ -82,7 +82,7 @@ class DiffusionLayers(nn.Module):
         return torch.sqrt(a_0 / a_t) * x_t + (torch.sqrt((1 - a_0) / a_0) - torch.sqrt((1 - a_t) / a_t)) * eps_t
 
     def diffusion_forward(self, x0, t):
-        x0  = x0.to(torch.float)
+        # x0  = x0.to(torch.float)
         eps = torch.randn_like(x0).to(x0.device)
         a_t = torch.take(self._alphas.to(x0.device), t).unsqueeze(-1)
         x_t = torch.sqrt(a_t) * x0 + torch.sqrt(1 - a_t) * eps

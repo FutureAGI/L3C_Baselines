@@ -133,12 +133,27 @@ class E2EObjNavSA(nn.Module):
                                         loss_wht=loss_weight, 
                                         reduce_dim=reduce_dim)
         else:
-            loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
-                                            cond=wm_out,
-                                            mask=loss_weight,
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
-            loss["wm-raw"] = 0.0
+            if self.config.decision_block.state_diffusion.is_training:
+                loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
+                                                cond=wm_out,
+                                                mask=loss_weight,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+                loss["wm-raw"] = 0.0
+            else:
+                z_pred = self.decision_model.s_diffusion.inference(cond=wm_out)
+                loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
+                                                loss_type="mse",
+                                                gt=z_rec_l[:, 1:], 
+                                                loss_wht=loss_weight, 
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+                obs_pred = self.vae.decoding(z_pred)
+                loss["wm-raw"] = weighted_loss(obs_pred, 
+                                            loss_type="mse",
+                                            gt=inputs[:, 1:], 
+                                            loss_wht=loss_weight, 
+                                            reduce_dim=reduce_dim)
 
         # Decision Model Loss
         if not self.config.decision_block.action_diffusion.enable:
@@ -168,30 +183,29 @@ class E2EObjNavSA(nn.Module):
             else:
                 log_fatal(f"no such policy loss type: {self.policy_loss}")
         else:
-            label_actions_tensor = self.expand_tensor_to_one_hot(label_actions, self.config.decision_block.action_encode.input_size)
-            loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions_tensor,
-                                    cond=pm_out,
-                                    mask=loss_weight,
-                                    reduce_dim=reduce_dim,
-                                    need_cnt=True)
+            if self.config.decision_block.action_encode.input_type == "Discrete":
+                label_actions_tensor = self.expand_discrete_action(label_actions, self.config.decision_block.action_encode.input_size)
+                loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions_tensor,
+                                        cond=pm_out,
+                                        mask=loss_weight,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
+            else:
+                loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions,
+                                        cond=pm_out,
+                                        mask=loss_weight,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
             
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
         return loss
         
-    def expand_tensor_to_one_hot(self, tensor, num_classes=17):
-  
+    def expand_discrete_action(self, tensor, num_classes=17):
         tensor = tensor.long()  
-        batch_size, seq_len = tensor.size()
-        
-
         one_hot_matrix = torch.eye(num_classes, device=tensor.device)
-        
-
         one_hot_tensor = one_hot_matrix[tensor.squeeze(0)] 
-        
-        one_hot_tensor = one_hot_tensor.unsqueeze(0)  
-        
+        one_hot_tensor = one_hot_tensor.unsqueeze(0).to(torch.float)  
         return one_hot_tensor
 
     def inference_step_by_step(self, observations, actions, 
