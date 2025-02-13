@@ -80,7 +80,8 @@ class E2EObjNavSA(nn.Module):
                         update_memory=True,
                         use_loss_weight=True,
                         reduce_dim=1):
-        
+                        
+        # print("label_actions  ",label_actions.size())
         self.img_encoder.requires_grad_(False)
         self.img_decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -167,7 +168,8 @@ class E2EObjNavSA(nn.Module):
             else:
                 log_fatal(f"no such policy loss type: {self.policy_loss}")
         else:
-            loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions,
+            label_actions_tensor = self.expand_tensor_to_one_hot(label_actions, self.config.decision_block.action_encode.input_size)
+            loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions_tensor,
                                     cond=pm_out,
                                     mask=loss_weight,
                                     reduce_dim=reduce_dim,
@@ -176,6 +178,21 @@ class E2EObjNavSA(nn.Module):
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
         return loss
+        
+    def expand_tensor_to_one_hot(self, tensor, num_classes=17):
+  
+        tensor = tensor.long()  
+        batch_size, seq_len = tensor.size()
+        
+
+        one_hot_matrix = torch.eye(num_classes, device=tensor.device)
+        
+
+        one_hot_tensor = one_hot_matrix[tensor.squeeze(0)] 
+        
+        one_hot_tensor = one_hot_tensor.unsqueeze(0)  
+        
+        return one_hot_tensor
 
     def inference_step_by_step(self, observations, actions, 
                                temp, start_position, device, 
@@ -230,6 +247,8 @@ class E2EObjNavSA(nn.Module):
                 wm_out, pm_out, _ = self.decision_model.forward(z_rec, n_act, cache=updated_cache, need_cache=True)
                 _, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
 
+                if self.config.decision_block.state_diffusion.enable:
+                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
                 if self.config.decision_block.action_diffusion.enable:
                     action = self.decision_model.a_diffusion.inference(pm_out)[-1]
                 else:
@@ -269,6 +288,8 @@ class E2EObjNavSA(nn.Module):
                 z_rec = z_pred
 
         return pred_obs_list, pred_act_list, valid_cache
+        
+        
         
 
 if __name__=="__main__":
