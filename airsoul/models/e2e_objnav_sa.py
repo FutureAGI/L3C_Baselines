@@ -141,7 +141,7 @@ class E2EObjNavSA(nn.Module):
                                                 need_cnt=True)
                 loss["wm-raw"] = 0.0
             else:
-                z_pred = self.decision_model.s_diffusion.inference(cond=wm_out)
+                z_pred = self.decision_model.s_diffusion.inference(cond=wm_out)[-1]
                 loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                                 loss_type="mse",
                                                 gt=z_rec_l[:, 1:], 
@@ -284,8 +284,9 @@ class E2EObjNavSA(nn.Module):
                 if self.config.decision_block.state_diffusion.enable:
                     z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
                 if self.config.decision_block.action_diffusion.enable:
-                    action = self.decision_model.a_diffusion.inference(pm_out)[-1]
-                else:
+                    a_pred = self.decision_model.a_diffusion.inference(pm_out)[-1]
+
+                if self.config.decision_block.action_encoder.input_type == "Discrete":
                     action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
 
                 # Only the first step uses the ground truth
@@ -363,11 +364,15 @@ class E2EObjNavSA(nn.Module):
                 
                 action_input = actions_gt[:, step:step+1]
 
-                z_pred, a_pred, updated_cache = self.decision_model(z_rec, action_input, 
+                wm_out, pm_out, updated_cache = self.decision_model.forward(z_rec, action_input, 
                         cache=updated_cache, need_cache=True, 
                         update_memory=False)
                 
-                
+                z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
+
+                if self.config.decision_block.state_diffusion.enable:
+                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
+
                 # Decode the prediction
                 pred_obs = self.vae.decoding(z_pred)
                 pred_obs = img_post(pred_obs)
