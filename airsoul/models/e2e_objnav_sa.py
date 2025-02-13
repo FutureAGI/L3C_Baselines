@@ -288,7 +288,83 @@ class E2EObjNavSA(nn.Module):
                 z_rec = z_pred
 
         return pred_obs_list, pred_act_list, valid_cache
+
+
+    def generate_step_by_step(self, observations, actions, actions_gt,
+                              temp, drop_out, device, 
+                              in_context_len, len_causal,
+                              n_step=1, cache=None, verbose=True
+                              ):
+        """
+        Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
+               observations: s_{tc}, ... s_{t}
+               actions: a_{tc}, ..., a_{t-1}
+               actions_gt: a_{t},...a_{t+n}
+        Returns:
+            obs_pred: numpy.array [n, W, H, C], s_{t+1}, ..., s_{t+n}
+            new_cache: torch.array caches up to s_0, a_0, ..., s_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
+        """
+        obss = numpy.array(observations, dtype=numpy.float32)
+        acts = numpy.array(actions, dtype=numpy.int64)
+        Nobs, W, H, C = obss.shape
+        (No,) = acts.shape
+
+        assert Nobs == No + 1
+
+        valid_obs = torch.from_numpy(img_pro(obss)).float().to(device)
+        valid_obs = valid_obs.permute(0, 3, 1, 2).unsqueeze(0)
+
+        if(No < 1):
+            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        else:
+            valid_act = torch.from_numpy(acts).int()
+            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+
+        # Update the cache first
+        # Only use ground truth
+        cache = None
         
+        if(Nobs > 1):
+            with torch.no_grad():
+                z_rec, z_pred, a_pred, valid_cache  = self.forward(
+                        valid_obs[:, :-1], valid_act[:, :-1], 
+                        cache=cache, need_cache=True,
+                        update_memory=True)
+        else:
+            valid_cache = cache
+
+        pred_obs_list = []
+        updated_cache = valid_cache
+        
+        actions_gt =  numpy.array(actions_gt, dtype=numpy.int64)
+        actions_gt = torch.from_numpy(actions_gt).int().to(device)
+        actions_gt = actions_gt.unsqueeze(0)
+
+        ob = valid_obs[:, -1:]
+        z_rec, _ = self.vae(ob)
+
+        for step in range(n_step):
+            with torch.no_grad():
+                # Temporal Encoders
+                
+                action_input = actions_gt[:, step:step+1]
+
+                z_pred, a_pred, updated_cache = self.decision_model(z_rec, action_input, 
+                        cache=updated_cache, need_cache=True, 
+                        update_memory=False)
+                
+                
+                # Decode the prediction
+                pred_obs = self.vae.decoding(z_pred)
+                pred_obs = img_post(pred_obs)
+
+                pred_obs_list.append(pred_obs.squeeze(1).squeeze(0).permute(1, 2, 0).cpu().numpy())
+
+                # Do auto-regression for n_step
+                z_rec = z_pred
+                
+
+        return pred_obs_list    
         
         
 

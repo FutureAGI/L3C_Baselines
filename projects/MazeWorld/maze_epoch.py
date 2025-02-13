@@ -257,3 +257,76 @@ class MazeEpochCausal:
                             os.remove(file_path)
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
+
+
+class MAZEGenerator(GeneratorBase):
+
+    def __call__(self, epoch_id):
+    
+        folder_count = 0
+
+        for folder in os.listdir(self.config.data_root):
+            folder_path = os.path.join(self.config.data_root, folder)
+            
+            if os.path.isdir(folder_path):
+                states = np.load(os.path.join(folder_path, 'observations.npy'))
+                actions = np.load(os.path.join(folder_path, 'actions_behavior_id.npy'))
+
+                in_context_len = self.config.in_context_len
+                pred_len = self.config.pred_len
+                start = self.config.start_position
+                temp = self.config.temp
+                drop_out = self.config.drop_out
+                len_causal = self.config.seg_len_causal
+                output_folder = self.config.output
+                
+                end = min(start + in_context_len, len(states))
+
+                pred_obs_list = self.model.module.generate_step_by_step(
+                    observations=states[start:end+1],
+                    actions=actions[start:end],
+                    actions_gt=actions[end:end+pred_len],
+                    temp=temp,
+                    drop_out = drop_out,
+                    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                    in_context_len = in_context_len,
+                    len_causal = len_causal,
+                    n_step=pred_len
+                )
+
+                real = [states[i] for i in range(end+1, end + 1 + pred_len)] 
+
+                pred_obs_list_with_initial = pred_obs_list
+                
+                
+                video_folder = os.path.join(output_folder, f'video_{folder_count}')
+                if not os.path.exists(video_folder):
+                    os.makedirs(video_folder)
+
+                video_filename = os.path.join(video_folder, f"pred_obs_video_{folder_count}.avi")
+                fourcc = cv2.VideoWriter_fourcc(*'XVID') 
+                frame_height, frame_width = pred_obs_list_with_initial[0].shape[:2]
+                video_writer = cv2.VideoWriter(video_filename, fourcc, 10.0, (frame_width * 2, frame_height))
+
+                for real_frame, pred_frame in zip(real, pred_obs_list_with_initial):
+                    rotated_real = cv2.rotate(real_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    rotated_pred = cv2.rotate(pred_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+                    concatenated_img = np.hstack((rotated_real, rotated_pred))
+
+                    img = np.clip(concatenated_img, 0, 255).astype(np.uint8)
+                    video_writer.write(img)
+
+                video_writer.release() 
+
+                print(f"Saved video with {len(real)} frames to {video_filename}")
+
+                
+                updated_cache = None
+                print(f"Cache cleared after generating {len(real)} frames.")
+
+                folder_count += 1  
+
+                if folder_count >= 16:
+                    print("Processed 16 folders. Stopping.")
+                    break 
