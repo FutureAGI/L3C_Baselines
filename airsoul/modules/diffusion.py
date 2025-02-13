@@ -16,7 +16,7 @@ class DiffusionLayers(nn.Module):
 
         self.condition_size = config.condition_size
         self.hidden_size = config.hidden_size
-        self.input_size = 2 * config.hidden_size + config.condition_size
+        self.input_size = 2 * config.hidden_size +  config.condition_size
         self.pre_diffusion_norm = nn.LayerNorm(self.hidden_size, eps=1.0e-5)
         self.diffusion_layers_1 = nn.Sequential(
             nn.Linear(self.input_size, config.inner_hidden_size), 
@@ -34,8 +34,17 @@ class DiffusionLayers(nn.Module):
         t: [B, NT], int
         cond: [B, NT, HC], float
         """
+        
+        """
+        print("cond.shape[:2]  ",cond.shape[:2])
+        print("xt.shape[:2]  ",xt.shape[:2])
+        print("self.condition_size  ",self.condition_size)
+        print("cond.shape[2]  ",cond.shape[2])
+        """ 
+        
         assert cond.shape[:2] == xt.shape[:2] and cond.shape[2] == self.condition_size
         t_emb = self.pre_diffusion_norm(self.t_embedding(t - 1))
+        # print("t_emb",t_emb.size())
         outputs = torch.cat([xt, t_emb, cond], dim=-1)
         outputs = self.diffusion_layers_1(outputs) + xt
         outputs = self.diffusion_layers_2(outputs)
@@ -73,6 +82,7 @@ class DiffusionLayers(nn.Module):
         return torch.sqrt(a_0 / a_t) * x_t + (torch.sqrt((1 - a_0) / a_0) - torch.sqrt((1 - a_t) / a_t)) * eps_t
 
     def diffusion_forward(self, x0, t):
+        x0  = x0.to(torch.float)
         eps = torch.randn_like(x0).to(x0.device)
         a_t = torch.take(self._alphas.to(x0.device), t).unsqueeze(-1)
         x_t = torch.sqrt(a_t) * x0 + torch.sqrt(1 - a_t) * eps
