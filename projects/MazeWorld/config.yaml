@@ -67,17 +67,19 @@ model_config:
           inner_hidden_size: 4096
           beta: [0.05, 0.20]
           dropout: 0.0
-          is_training: True
+          cond_layer_norm: True
+          inference_sample_steps: 5
   
       state_diffusion:
           enable: True
-          T: 200
+          T: 400
           hidden_size: 1024
           condition_size: 1024
           inner_hidden_size: 4096
-          beta: [0.05, 0.20]
+          beta: [0.0001, 0.10]
           dropout: 0.0
-          is_training: True
+          cond_layer_norm: True
+          inference_sample_steps: 5
 
       causal_block_trans:
           model_type: TRANSFORMER

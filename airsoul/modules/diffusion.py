@@ -18,15 +18,21 @@ class DiffusionLayers(nn.Module):
         self.hidden_size = config.hidden_size
         self.input_size = 2 * config.hidden_size +  config.condition_size
         self.pre_diffusion_norm = nn.LayerNorm(self.hidden_size, eps=1.0e-5)
+        if(config.cond_layer_norm):
+            self.cond_layer_norm = nn.LayerNorm(self.condition_size, eps=1.0e-5)
+        else:
+            self.cond_layer_norm = nn.Identity()
         self.diffusion_layers_1 = nn.Sequential(
             nn.Linear(self.input_size, config.inner_hidden_size), 
             nn.GELU(),
-            nn.Dropout(0.10),
+            nn.Dropout(config.dropout),
             nn.Linear(config.inner_hidden_size, config.hidden_size),
             nn.GELU()) 
         self.diffusion_layers_2 = nn.Linear(config.hidden_size, config.hidden_size)
         self.T = config.T
         self.t_embedding = nn.Embedding(config.T, config.hidden_size)
+
+        self.inference_sample_steps = config.inference_sample_steps
 
     def step_forward(self, xt, t, cond):
         """
@@ -44,6 +50,7 @@ class DiffusionLayers(nn.Module):
         
         assert cond.shape[:2] == xt.shape[:2] and cond.shape[2] == self.condition_size
         t_emb = self.pre_diffusion_norm(self.t_embedding(t - 1))
+        cond = self.cond_layer_norm(cond)
         # print("t_emb",t_emb.size())
         outputs = torch.cat([xt, t_emb, cond], dim=-1)
         outputs = self.diffusion_layers_1(outputs) + xt
@@ -88,7 +95,7 @@ class DiffusionLayers(nn.Module):
         x_t = torch.sqrt(a_t) * x0 + torch.sqrt(1 - a_t) * eps
         return x_t, eps, a_t
 
-    def inference(self, cond):
+    def inference(self, cond, clip_denoise = False, gt=None, mask=None, reduce_dim=1):
         assert cond.shape[2] == self.condition_size
         z_list = []
         steps = [2 * self.T // 3, self.T // 3, 1]
@@ -96,25 +103,36 @@ class DiffusionLayers(nn.Module):
             x_T = torch.randn(*cond.shape[:2], self.hidden_size)
             x_t = x_T.to(cond.device)
             z_list.append(x_t.detach())
-            for t in range(self.T, 0, -1):
+            
+            # skip frame sampling
+            for t in range(self.T, 0, -self.inference_sample_steps):
                 _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
                 a_t = self._alphas[t]
-                a_t_ = self._alphas[t-1]
+                last_step = False
+                if t > self.inference_sample_steps:
+                    a_t_ = self._alphas[t-self.inference_sample_steps]
+                else:
+                    a_t_ = self._alphas[0]
+                    last_step = True
                 b_t = self.betas[t]
-
-                # DDPM
-                #eps = torch.randn_like(x_t)
-                #if(t == 1):
-                #    eps = eps * 0
-                #x_t = 1.0 / torch.sqrt(1 - b_t) * (x_t - (b_t / torch.sqrt(1 - a_t)) * self.step_forward(x_t, _t, cond)) + torch.sqrt(b_t) * eps
 
                 # DDIM
                 eps_z = torch.randn_like(x_t)
                 eps_t = self.step_forward(x_t, _t, cond)
                 sigma_t = 0.01 * torch.sqrt((1 - a_t_) / (1 - a_t)) * torch.sqrt(1 - a_t/a_t_)
-                x_t = torch.sqrt(a_t_ / a_t) * (x_t - torch.sqrt(1 - a_t) * eps_t) + torch.sqrt(1 - a_t_ - sigma_t ** 2) * eps_t + sigma_t * eps_z
-                if(t in steps):
+                x_t = torch.sqrt(a_t_)*(x_t - torch.sqrt(1-a_t)*eps_t)/torch.sqrt(a_t) + torch.sqrt(1 - a_t_ - sigma_t ** 2) * eps_t + sigma_t ** 2 * eps_z
+                
+                if clip_denoise:
+                    x_t = torch.clamp(x_t, -1, 1)
+                if((t in steps) or last_step):
                     z_list.append(x_t.detach())
+
+                # Debug, test loss
+                if gt is not None:
+                    _, eps, _ = self.diffusion_forward(gt, _t)
+                    loss = weighted_loss(eps_t, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=False)
+                    print("epsilon loss:", loss.item())
+                    
         return z_list
 
 if __name__=="__main__":

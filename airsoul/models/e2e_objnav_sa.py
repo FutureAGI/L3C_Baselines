@@ -133,7 +133,7 @@ class E2EObjNavSA(nn.Module):
                                         loss_wht=loss_weight, 
                                         reduce_dim=reduce_dim)
         else:
-            if self.config.decision_block.state_diffusion.is_training:
+            if use_loss_weight:
                 loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
                                                 cond=wm_out,
                                                 mask=loss_weight,
