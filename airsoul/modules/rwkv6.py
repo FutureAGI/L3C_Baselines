@@ -3,7 +3,7 @@ from torch import nn
 from fla.models.rwkv6.modeling_rwkv6 import RWKV6Block
 from fla.models.rwkv6.configuration_rwkv6 import RWKV6Config
 from fla.models.utils import Cache
-from l3c_baselines.utils import format_cache, memory_cpy, log_warn
+from airsoul.utils import format_cache, memory_cpy, log_warn
 
 
 class RWKV6Layer(nn.Module):

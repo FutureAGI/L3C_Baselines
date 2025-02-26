@@ -3,7 +3,7 @@ from torch import nn
 from fla.layers.gsa import GatedSlotAttention
 from fla.layers.gla import GatedLinearAttention
 from fla.models.utils import Cache
-from l3c_baselines.utils import format_cache, memory_cpy, log_warn 
+from airsoul.utils import format_cache, memory_cpy, log_warn 
 
 class GLABlock(nn.Module):
     def __init__(self,

@@ -10,7 +10,7 @@ from gym.envs.toy_text.frozen_lake import generate_random_map
 from stable_baselines3 import DQN, A2C, TD3, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from l3c_baselines.utils import DiscreteEnvWrapper
+from airsoul.utils import DiscreteEnvWrapper
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):

@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset
 from torch.amp import autocast, GradScaler
-from l3c_baselines.dataloader.prefetch_dataloader import PrefetchDataLoader
+from airsoul.dataloader.prefetch_dataloader import PrefetchDataLoader
 from .tools import Configure, Logger, log_progress, log_debug, log_warn, log_fatal, log_sum_parameters_grad
 from .tools import count_parameters, check_model_validity, model_path, safety_check, apply_gradient_safely, custom_load_model
 from .scheduler import noam_scheduler

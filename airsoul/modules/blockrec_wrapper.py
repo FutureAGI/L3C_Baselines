@@ -10,7 +10,7 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-from l3c_baselines.utils import memory_cpy, format_cache, log_warn, log_fatal
+from airsoul.utils import memory_cpy, format_cache, log_warn, log_fatal
 
 
 class BlockRecurrentWrapper(nn.Module):

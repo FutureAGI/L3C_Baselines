@@ -11,7 +11,7 @@ import multiprocessing
 import pickle
 import random as rnd
 from numpy import random
-from l3c_baselines.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
+from airsoul.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.utils import pseudo_random_seed
 

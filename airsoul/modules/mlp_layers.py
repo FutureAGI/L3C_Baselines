@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 
 
 class MLPEncoder(nn.Module):

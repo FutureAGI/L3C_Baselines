@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from mamba_ssm import Mamba, Mamba2
 from mamba_ssm.utils.generation import InferenceParams
-from l3c_baselines.utils import log_warn
+from airsoul.utils import log_warn
 
 class MambaBlock(nn.Module):
     def __init__(self,
