@@ -37,3 +37,6 @@ class MazeNoisyExpertAgent(SmartSLAMAgent):
             return self.maze_env.action_space.sample(), 'rnd' # Random action
         else:
             return act, f'exp_{self.memory_keep_ratio}'
+        
+    def __repr__(self):
+        return f"MazeNoisyExpertAgent with noise {self.noise_initial:.2f} to {self.noise_final:.2f} and expert_{self.memory_keep_ratio:.2f}"

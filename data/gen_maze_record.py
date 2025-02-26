@@ -25,6 +25,7 @@ def run_maze_epoch(
     # Must intialize agent after reset
     label_agent = OracleAgent(maze_env=maze_env, render=False)
     behavior_agent = MazeNoisyExpertAgent(maze_env=maze_env, render=False)
+    print("Sampled behavior agent:", behavior_agent)
 
     done=False
     observation, information = maze_env.reset()
