@@ -101,16 +101,15 @@ class DiffusionLayers(nn.Module):
         self.clip_threshold = config.clip_threshold
         self.eta = config.eta
 
-    def get_velocity_targets(self, x0, eps, t):  
-        device = t.device
-        alpha_t = self._alphas.to(device)[t].unsqueeze(-1)  
-        sqrt_alpha_t = torch.sqrt(alpha_t)  
-        sqrt_sigma_t = torch.sqrt(1. - alpha_t)
-    
-        v = sqrt_alpha_t * eps - sqrt_sigma_t * x0
-        return v
+    def add_noise(self, x0, t):
+        # x0  = x0.to(torch.float)
+        eps = torch.randn_like(x0).to(x0.device)
+        a_t = torch.take(self._alphas.to(x0.device), t).unsqueeze(-1)
+        x_t = torch.sqrt(a_t) * x0 + torch.sqrt(1 - a_t) * eps
+        x_t = torch.clamp(x_t, -self.clip_threshold, self.clip_threshold) if self.need_clip else x_t
+        return x_t, eps, a_t
 
-    def step_forward(self, xt, t, cond):
+    def denoising(self, xt, t, cond):
         """
         xt: [B, NT, H], float
         t: [B, NT], int
@@ -136,15 +135,15 @@ class DiffusionLayers(nn.Module):
             _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
         else:
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
-        x_t, eps, _ = self.diffusion_forward(x0, _t)
-        eps_t = self.step_forward(x_t, _t, cond)
+        x_t, eps, _ = self.add_noise(x0, _t)
+        model_out = self.denoising(x_t, _t, cond)
         
         if self.prediction_type == 'velocity':  
             target = self.get_velocity_targets(x0, eps, _t)
-            pred = eps_t
+            pred = model_out
         elif self.prediction_type == 'epslion':
             target = eps
-            pred = eps_t
+            pred = model_out
         
         if  need_cnt:
             loss,loss_count_s = weighted_loss(pred.float(), gt=target.float(), loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
@@ -153,7 +152,16 @@ class DiffusionLayers(nn.Module):
             loss = weighted_loss(pred, gt=target, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
             return loss
 
-    def forward(self, x0, cond, mask=None, reduce_dim=1, t=None):
+    def get_velocity_targets(self, x0, eps, t):  
+        device = t.device
+        alpha_t = self._alphas.to(device)[t].unsqueeze(-1)  
+        sqrt_alpha_t = torch.sqrt(alpha_t)  
+        sqrt_sigma_t = torch.sqrt(1. - alpha_t)
+    
+        v = sqrt_alpha_t * eps - sqrt_sigma_t * x0
+        return v
+
+    def one_step_reconstruct(self, x0, cond, mask=None, reduce_dim=1, t=None):
         """
         Allows to back propagate through the whole process
         """
@@ -162,22 +170,17 @@ class DiffusionLayers(nn.Module):
             _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
         else:
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
-        x_t, eps, a_t = self.diffusion_forward(x0, _t)
-        eps_t = self.step_forward(x_t, _t, cond)
+        x_t, eps, a_t = self.add_noise(x0, _t)
+        eps_t = self.denoising(x_t, _t, cond)
         a_0 = torch.full(a_t.shape, 0, dtype=torch.int64, device=cond.device)
         print(x_t.shape, eps.shape, eps_t.shape, a_t.shape, a_0.shape)
 
         return torch.sqrt(a_0 / a_t) * x_t + (torch.sqrt((1 - a_0) / a_0) - torch.sqrt((1 - a_t) / a_t)) * eps_t
 
-    def diffusion_forward(self, x0, t):
-        # x0  = x0.to(torch.float)
-        eps = torch.randn_like(x0).to(x0.device)
-        a_t = torch.take(self._alphas.to(x0.device), t).unsqueeze(-1)
-        x_t = torch.sqrt(a_t) * x0 + torch.sqrt(1 - a_t) * eps
-        x_t = torch.clamp(x_t, -self.clip_threshold, self.clip_threshold) if self.need_clip else x_t
-        return x_t, eps, a_t
-
     def inference(self, cond, gt=None, mask=None, reduce_dim=1):
+        """
+        DDIM inference procedure, from xt to x0.
+        """
         assert cond.shape[2] == self.condition_size
         z_list = []
         steps = [2 * self.T // 3, self.T // 3, 1]
@@ -203,7 +206,7 @@ class DiffusionLayers(nn.Module):
                     variance = self._get_variance(a_t, a_t_)
                     std_dev_t = 0.0 * variance ** (0.5) # Enforces certainty at last step
 
-                model_out = self.step_forward(x_t, _t, cond)
+                model_out = self.denoising(x_t, _t, cond)
                 if self.prediction_type == 'velocity':
                     v = model_out
                     pred_x0 = torch.sqrt(a_t) * x_t + torch.sqrt(1 - a_t) * v
@@ -227,7 +230,7 @@ class DiffusionLayers(nn.Module):
 
                 # Debug, test loss
                 if gt is not None:
-                    _, eps, _ = self.diffusion_forward(gt, _t)
+                    _, eps, _ = self.add_noise(gt, _t)
                     loss, cnt = weighted_loss(pred_epsilon, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=True)
                     print("epsilon loss:", loss.item()/cnt)
 
@@ -275,7 +278,6 @@ class LatentLMDiffusionBlock(nn.Module):
             
         x = self.final_layer(x, c)
         return x
-
 
 class MLPBlock(nn.Module):
     def __init__(self, hidden_size,  mlp_ratio=4.0, drop=0.0, **block_kwargs):
