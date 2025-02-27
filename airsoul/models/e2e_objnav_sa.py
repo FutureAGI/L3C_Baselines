@@ -368,7 +368,6 @@ class E2EObjNavSA(nn.Module):
                             cache=None,
                             single_batch=True,
                             history_single_step=False,
-                            future_single_step=False,
                             raw_images=True,
                             need_predict_states=True,
                             need_numpy=True):
