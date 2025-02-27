@@ -360,7 +360,7 @@ class E2EObjNavSA(nn.Module):
     
     def generate_states_and_action(self, 
                             current_observation, 
-                            future_steps,
+                            future_steps=1,
                             history_observation=None,
                             history_action=None,
                             history_update_memory=True, 
@@ -370,6 +370,7 @@ class E2EObjNavSA(nn.Module):
                             history_single_step=False,
                             future_single_step=False,
                             raw_images=True,
+                            need_predict_states=True,
                             need_numpy=True):
         # Generate state autoregressively in latent space
         # Inputs:
@@ -380,6 +381,8 @@ class E2EObjNavSA(nn.Module):
         # Outputs:
         #   predict_observations: o_{t+1}, ..., o_{t+n}
         #   predict_actions: a_{t}, ..., a_{t+n-1}
+        #   if(n = 1) and need_predict_states is False:
+        #       return predict_actions a_{t} only
 
         his_obs, his_act = self.preprocess(
                     history_observation, 
@@ -424,16 +427,20 @@ class E2EObjNavSA(nn.Module):
                 act_out.append(self.sample_action_discrete(act_pred))
 
                 # Step 2: Predict the next_observation
-                obs_n, _, cache = self.decision_model(obs_out[-1], 
-                                                act_out[-1], 
-                                                cache=cache, need_cache=autoregression_need_cache, 
-                                                update_memory=autoregression_update_memory)
-                obs_out.append(obs_n)
+                if(future_steps > 1 or need_predict_states):
+                    obs_n, _, cache = self.decision_model(obs_out[-1], 
+                                                    act_out[-1], 
+                                                    cache=cache, need_cache=autoregression_need_cache, 
+                                                    update_memory=autoregression_update_memory)
+                    obs_out.append(obs_n)
 
         # Post Processing
-        obs_out = torch.cat(obs_out[1:], dim=1)
-        if(raw_images):
-            obs_out = img_post(self.vae.decoding(obs_out))
+        if(len(obs_out) > 1):
+            obs_out = torch.cat(obs_out[1:], dim=1)
+            if(raw_images):
+                obs_out = img_post(self.vae.decoding(obs_out))
+        else:
+            obs_out = None
         act_out = torch.cat(act_out, dim=1)
         if(need_numpy):
             obs_out = obs_out.cpu().detach().numpy()
