@@ -61,25 +61,43 @@ model_config:
 
       action_diffusion:
           enable: False
-          T: 100
-          hidden_size: 17
-          condition_size: 1024
-          inner_hidden_size: 4096
-          beta: [0.05, 0.20]
-          dropout: 0.0
-          cond_layer_norm: True
-          inference_sample_steps: 5
-  
-      state_diffusion:
-          enable: True
-          T: 400
+          T: 500
           hidden_size: 1024
           condition_size: 1024
+          t_embedding_size: 32
           inner_hidden_size: 4096
-          beta: [0.0001, 0.10]
-          dropout: 0.0
+          beta: [0.0001, 0.02]
+          diffusion_model_name: "latentlm"
+          schedule: "scaled_linear"
+          prediction_type: "velocity"
+          block_size: 3
+          mlp_ratio: 4.0
+          dropout: 0.1
           cond_layer_norm: True
           inference_sample_steps: 5
+          eta: 1.0
+          need_clip: True
+          clip_threshold: 5.0
+  
+      state_diffusion:
+          enable: False
+          T: 1000
+          hidden_size: 1024
+          condition_size: 1024
+          t_embedding_size: 32
+          inner_hidden_size: 4096
+          beta: [0.0001, 0.02]
+          diffusion_model_name: "latentlm"
+          schedule: "cosine"
+          prediction_type: "velocity"
+          block_size: 5
+          mlp_ratio: 6
+          dropout: 0.1
+          cond_layer_norm: True
+          inference_sample_steps: 5
+          eta: 1.0
+          need_clip: True
+          clip_threshold: 5.0
 
       causal_block_trans:
           model_type: TRANSFORMER
