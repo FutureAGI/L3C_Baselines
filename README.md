@@ -8,9 +8,9 @@ AIRSoul is towarding building general-purpose in-context learning (ICL) agents f
 
 # Directory Structure
 - [projects](./projects): implementations of model training and validating for different benchmarks and projects.
-    - [MetaLM](./projects/MetaLM) foundation model for [L3C MetaLM](https://github.com/FutureAGI/L3C/tree/main/l3c/metalang)
-    - [MazeWorld](./projects/MazeWorld) foundation model for [L3C MazeWorld](https://github.com/FutureAGI/L3C/tree/main/l3c/mazeworld)
-    - [OmniRL](./projects/OmniRL) foundation model for [L3C AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp)
+    - [MetaLM](./projects/MetaLM) foundation model for [Xenoverse MetaLM](https://github.com/FutureAGI/Xenoverse/tree/main/l3c/metalang)
+    - [MazeWorld](./projects/MazeWorld) foundation model for [Xenoverse MazeWorld](https://github.com/FutureAGI/Xenoverse/tree/main/l3c/mazeworld)
+    - [OmniRL](./projects/OmniRL) foundation model for [Xenoverse AnyMDP](https://github.com/FutureAGI/Xenoverse/tree/main/l3c/anymdp)
 
 - `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
 
