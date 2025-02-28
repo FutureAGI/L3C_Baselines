@@ -188,7 +188,7 @@ class E2EObjNavSA(nn.Module):
         if(single_batch):
             obs = obs.unsqueeze(0)
             act = act.unsqueeze(0)
-        if(single_step):
+        if(single_step and obs.dim() == 4):
             obs = obs.unsqueeze(1)
             act = act.unsqueeze(1)
         
@@ -197,10 +197,11 @@ class E2EObjNavSA(nn.Module):
         assert obs.shape[1] == act.shape[1], f"Sequence length of observations and actions must be the same, acquire {obs.shape[1]} != {act.shape[1]}"
         
         # batch, step, channel, width, height -> batch, channel, step, width, height
-        obs = obs.permute(0, 1, 4, 2, 3)
+        
 
         if(raw_images):
             assert obs.dim() == 5, f"Input dimension of observations of raw images must be 5, acquire {obs.dim()}"
+            obs = obs.permute(0, 1, 4, 2, 3)
             with torch.no_grad():
                 z_rec, _ = self.vae(obs)
         else:
@@ -367,10 +368,11 @@ class E2EObjNavSA(nn.Module):
 
         # Post Processing
         obs_out = torch.cat(obs_out[1:], dim=1) # we don't need the first one, which is the current input
+        # print(obs_out.shape)
         if(raw_images):
-            obs_out = img_post(self.vae.decoding(obs_out))
+            obs_out = img_post(self.vae.decoding(obs_out)).permute(0, 1, 3, 4, 2) # batch, step, width, height, channel
         if(need_numpy):
-            obs_out = obs_out.cpu().detach().squeeze(0).permute(0, 2, 3, 1).numpy()
+            obs_out = obs_out.cpu().detach().squeeze(0).numpy()
 
         return obs_out, cache
     
@@ -453,13 +455,13 @@ class E2EObjNavSA(nn.Module):
         if(len(obs_out) > 1):
             obs_out = torch.cat(obs_out[1:], dim=1)
             if(raw_images):
-                obs_out = img_post(self.vae.decoding(obs_out))
+                obs_out = img_post(self.vae.decoding(obs_out)).permute(0, 1, 3, 4, 2) # batch, step, width, height, channel
         else:
             obs_out = None
         act_out = torch.cat(act_out, dim=1)
         if(need_numpy):
             # obs_out.cpu().detach().squeeze(0).permute(0, 2, 3, 1).numpy()
-            obs_out = obs_out.cpu().detach().squeeze(0).permute(0, 2, 3, 1).numpy()
+            obs_out = obs_out.cpu().detach().squeeze(0).numpy()
             act_out = act_out.cpu().detach().squeeze(0).numpy()
 
         return obs_out, act_out, cache
