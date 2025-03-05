@@ -105,7 +105,7 @@ class OPTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["sptar", "sar", "sta", "sa"]
+        self.rsa_choice =  ["sptar", "star", "sar", "sta", "sa"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the s
