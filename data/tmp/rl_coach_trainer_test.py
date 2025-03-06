@@ -8,12 +8,12 @@ from sb3_contrib import RecurrentPPO
 import torch.nn as nn
 from l3c.anymdpv2 import AnyMDPv2TaskSampler
 from l3c.anymdpv2 import AnyMDPEnv
-from policy_trainer.noise_distiller import NoiseDistillerWrapper, NoiseDistillerPolicy
+from noise_distiller import NoiseDistillerWrapper, NoiseDistillerPolicy
 from stable_baselines3.common.callbacks import BaseCallback
 import gym
-from policy_trainer.sac_trainer import SACTrainer
-from policy_trainer.ppo_mlp_trainer import PPO_MLP_Trainer
-from policy_trainer.ppo_lstm_trainer import PPO_LSTM_Trainer
+from sac_trainer import SACTrainer
+from ppo_mlp_trainer import PPO_MLP_Trainer
+from ppo_lstm_trainer import PPO_LSTM_Trainer
 
 class CustomCallback(BaseCallback):
     def __init__(self, verbose=0):
