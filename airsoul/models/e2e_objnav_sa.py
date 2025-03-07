@@ -134,12 +134,25 @@ class E2EObjNavSA(nn.Module):
                                         reduce_dim=reduce_dim)
         else:
             if use_loss_weight:
-                loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
-                                                cond=wm_out,
-                                                mask=loss_weight,
-                                                reduce_dim=reduce_dim,
-                                                need_cnt=True)
-                loss["wm-raw"] = 0.0
+                if self.config.decision_block.state_diffusion.training_predict_x0:
+                    loss["wm-latent"], loss["count_wm"], x0_pred = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
+                                                    cond=wm_out,
+                                                    mask=loss_weight,
+                                                    reduce_dim=reduce_dim,
+                                                    need_cnt=True)
+                    obs_pred = self.vae.decoding(x0_pred)
+                    loss["wm-raw"] = weighted_loss(obs_pred, 
+                                                loss_type="mse",
+                                                gt=inputs[:, 1:], 
+                                                loss_wht=loss_weight, 
+                                                reduce_dim=reduce_dim)
+                else:
+                    loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
+                                                    cond=wm_out,
+                                                    mask=loss_weight,
+                                                    reduce_dim=reduce_dim,
+                                                    need_cnt=True)
+                    loss["wm-raw"] = 0.0
             else:
                 z_pred = self.decision_model.s_diffusion.inference(cond=wm_out)[-1]
                 loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
