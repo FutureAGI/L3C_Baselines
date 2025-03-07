@@ -29,18 +29,15 @@ class RLCoach:
         self.n_epochs = n_epochs
         self.mode = mode
         self.task = task
-        
-        # 默认使用所有策略
+
         if policies_to_use is None:
             policies_to_use = ["sac", "ppo_mlp", "ppo_lstm"]
         self.policies_to_use = policies_to_use
-        
-        # 基本策略 - 随机策略始终可用
+
         self.policies = {
             "random": lambda x: env.action_space.sample()
         }
-        
-        # 根据用户选择添加策略
+
         if "sac" in policies_to_use:
             self.policies["sac"] = SACTrainer(env, seed).model
             
@@ -50,7 +47,6 @@ class RLCoach:
         if "ppo_lstm" in policies_to_use:
             self.policies["ppo_lstm"] = PPO_LSTM_Trainer(env, seed).model
         
-        # 训练器对象 - 用于实际训练
         self.trainers = {}
         if "sac" in policies_to_use:
             self.trainers["sac"] = SACTrainer(env, seed)
@@ -72,13 +68,11 @@ class RLCoach:
         self.policy_snapshots = {stage: [] for stage in self.stages.keys()}
 
     def preprocess_state(self, state):
-        # 如果state是numpy数组,确保其为float32类型
+
         if isinstance(state, np.ndarray):
             return state.astype(np.float32)
-        # 如果是list,转换为numpy数组
         elif isinstance(state, list):
             return np.array(state, dtype=np.float32)
-        # 其他情况直接返回
         return state
 
     def check_env_validity(self, num_steps=10):
@@ -108,8 +102,7 @@ class RLCoach:
             if done:
                 break
             state = next_state
-        
-        # 优先使用LSTM进行对比，如果没有则使用其他可用策略
+
         compare_policy = None
         if "ppo_lstm" in self.policies_to_use:
             compare_policy = "ppo_lstm"
@@ -125,7 +118,7 @@ class RLCoach:
         
         # Reset and run the chosen policy for num_steps
         state = self.env.reset()
-        if isinstance(state, tuple):  # 处理新版本 Gym 的 reset() 返回值
+        if isinstance(state, tuple):  
             state = state[0]
         policy_rewards = []
         lstm_states = None
@@ -141,10 +134,10 @@ class RLCoach:
                 action, _ = self.policies[compare_policy].predict(state, deterministic=False)
                 
             step_result = self.env.step(action)
-            if len(step_result) == 5:  # 新版本 Gym
+            if len(step_result) == 5: 
                 next_state, reward, terminated, truncated, info = step_result
                 done = terminated or truncated
-            else:  # 旧版本 Gym
+            else:  
                 next_state, reward, done, info = step_result
             policy_rewards.append(reward)
             if done:
@@ -164,26 +157,81 @@ class RLCoach:
         return True
                 
     def train_policies(self, max_steps_per_epoch, max_episodes_per_epoch):
-        print("Training policies by stages...")
+        """
+        训练各阶段的策略并保存快照
         
-        # 初始化所有算法的 logger
+        Args:
+            max_steps_per_epoch: 每个epoch的最大步数
+            max_episodes_per_epoch: 每个epoch的最大episode数
+        
+        Returns:
+            bool: 训练是否成功
+        """
+        print("Training policies by stages...")
+
         from stable_baselines3.common.logger import configure
         tmp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tmp")
         os.makedirs(tmp_path, exist_ok=True)
 
+        self.env_info = {
+            "observation_space": str(self.env.observation_space),
+            "action_space": str(self.env.action_space),
+            "state_dim": getattr(self.task, 'state_dim', None),
+            "action_dim": getattr(self.task, 'action_dim', None),
+            "ndim": getattr(self.task, 'ndim', None),
+        }
+        
+        print(f"Environment configuration:")
+        print(f"  Observation space: {self.env.observation_space}")
+        print(f"  Action space: {self.env.action_space}")
+        print(f"  State dim: {getattr(self.task, 'state_dim', None)}")
+        print(f"  Action dim: {getattr(self.task, 'action_dim', None)}")
+        print(f"  Ndim: {getattr(self.task, 'ndim', None)}")
+
+        self.trainer_configs = {}
+        for policy_name, trainer in self.trainers.items():
+            if policy_name == "ppo_lstm":
+                model = trainer.model
+                policy_kwargs = getattr(model, 'policy_kwargs', {})
+                self.trainer_configs[policy_name] = {
+                    "policy_kwargs": policy_kwargs,
+                    "lstm_hidden_size": policy_kwargs.get("lstm_hidden_size", 32),
+                    "n_lstm_layers": policy_kwargs.get("n_lstm_layers", 2),
+                    "enable_critic_lstm": policy_kwargs.get("enable_critic_lstm", True)
+                }
+            elif policy_name == "ppo_mlp":
+                model = trainer.model
+                self.trainer_configs[policy_name] = {
+                    "policy_kwargs": getattr(model, 'policy_kwargs', {})
+                }
+            elif policy_name == "sac":
+                model = trainer.model
+                self.trainer_configs[policy_name] = {
+                    "policy_kwargs": getattr(model, 'policy_kwargs', {})
+                }
+        
+        print(f"Trainer configurations:")
+        for name, config in self.trainer_configs.items():
+            print(f"  {name}: {config}")
+
         for stage, config in self.stages.items():
-            print(f"\nTraining stage: {stage}")
+            print(f"\n{'='*50}")
+            print(f"Training stage: {stage}")
+            print(f"{'='*50}")
             policy_name = config["policy"]
 
             if policy_name == "random":
+                print(f"Random policy stage - generating {config['epochs']} snapshots")
                 for epoch in range(config["epochs"]):
                     state = self.env.reset()
                     if isinstance(state, tuple):
                         state = state[0]
                     rewards = []
                     done = False
+                    steps = 0
+                    max_steps = min(max_steps_per_epoch, 1000)  
 
-                    while not done:
+                    while not done and steps < max_steps:
                         action = self.policies["random"](state)
                         step_result = self.env.step(action)
                         if len(step_result) == 5:
@@ -193,15 +241,20 @@ class RLCoach:
                             next_state, reward, done, info = step_result
                         rewards.append(reward)
                         state = next_state
+                        steps += 1
 
-                    for epoch in range(config["epochs"]):
-                        self.policy_snapshots[stage].append({
-                            "stage": stage,
-                            "epoch": epoch,
-                            "policy_name": "random",
-                            "state_dict": None
-                        })
-                    continue
+                    policy_data = {
+                        "stage": stage,
+                        "epoch": epoch,
+                        "policy_name": "random",
+                        "state_dict": None,  
+                        "avg_reward": sum(rewards) if rewards else 0,
+                        "steps": steps
+                    }
+                    self.policy_snapshots[stage].append(policy_data)
+                    print(f"Added random policy snapshot {epoch} - avg_reward: {policy_data['avg_reward']:.2f}, steps: {steps}")
+                
+                continue
 
             elif policy_name == "noise_distilled":
                 print("Creating noise distiller policies based on final stage policies...")
@@ -211,37 +264,123 @@ class RLCoach:
 
                 for epoch in range(config["epochs"]):
                     base_policy_data = random.choice(self.policy_snapshots["final"])
+                    print(f"Creating noise distiller for epoch {epoch} based on {base_policy_data['policy_name']}")
 
-                    noise_distiller = NoiseDistillerWrapper(
-                        self.env, 
-                        base_policy_data["state_dict"],
-                        max_steps=max_steps_per_epoch
-                    )
+                    try:
+                        noise_distiller = NoiseDistillerWrapper(
+                            self.env, 
+                            base_policy_data,  
+                            max_steps=max_steps_per_epoch
+                        )
 
-                    self.policy_snapshots["finalnoisedistiller"].append({
-                        "stage": "finalnoisedistiller",
-                        "epoch": epoch,
-                        "policy_name": f"noise_distilled_{base_policy_data['policy_name']}",
-                        "state_dict": base_policy_data["state_dict"],
-                        "noise_params": {
-                            "upper": noise_distiller.noise_upper,
-                            "lower": noise_distiller.noise_lower,
-                            "decay_steps": noise_distiller.noise_decay_steps
+                        policy_data = {
+                            "stage": "finalnoisedistiller",
+                            "epoch": epoch,
+                            "policy_name": f"noise_distilled_{base_policy_data['policy_name']}",
+                            "state_dict": base_policy_data["state_dict"],
+                            "noise_params": {
+                                "upper": noise_distiller.noise_upper,
+                                "lower": noise_distiller.noise_lower,
+                                "decay_steps": noise_distiller.noise_decay_steps
+                            }
                         }
-                    })
-                    print(f"Created noise distiller policy {epoch} based on {base_policy_data['policy_name']}")
+                        
+                        if "policy_kwargs" in base_policy_data:
+                            policy_data["policy_kwargs"] = base_policy_data["policy_kwargs"]
+                        
+                        if base_policy_data["policy_name"] == "ppo_lstm":
+                            lstm_config = self.trainer_configs.get("ppo_lstm", {})
+                            policy_data["lstm_hidden_size"] = lstm_config.get("lstm_hidden_size", 32)
+                            policy_data["n_lstm_layers"] = lstm_config.get("n_lstm_layers", 2)
+                            policy_data["enable_critic_lstm"] = lstm_config.get("enable_critic_lstm", True)
+                        
+                        self.policy_snapshots["finalnoisedistiller"].append(policy_data)
+                        print(f"Created noise distiller policy {epoch} based on {base_policy_data['policy_name']}")
+                        
+                        state = self.env.reset()
+                        if isinstance(state, tuple):
+                            state = state[0]
+                        rewards = []
+                        done = False
+                        steps = 0
+                        max_steps = min(max_steps_per_epoch, 1000)
+                        
+                        noise_policy = NoiseDistillerPolicy(
+                            None,  
+                            self.env, 
+                            policy_data["noise_params"]
+                        )
+
+                        base_policy_name = base_policy_data["policy_name"]
+                        if base_policy_name == "ppo_lstm":
+                            lstm_config = {
+                                "lstm_hidden_size": policy_data.get("lstm_hidden_size", 32),
+                                "n_lstm_layers": policy_data.get("n_lstm_layers", 2),
+                                "enable_critic_lstm": policy_data.get("enable_critic_lstm", True)
+                            }
+                            base_policy = RecurrentPPO(
+                                "MlpLstmPolicy",
+                                self.env,
+                                verbose=0,
+                                policy_kwargs=lstm_config
+                            )
+                        elif base_policy_name == "ppo_mlp":
+                            base_policy = PPO(
+                                "MlpPolicy",
+                                self.env,
+                                verbose=0
+                            )
+                        else:  # sac
+                            base_policy = SAC(
+                                "MlpPolicy",
+                                self.env,
+                                verbose=0
+                            )
+
+                        base_policy.policy.load_state_dict(base_policy_data["state_dict"])
+                        noise_policy.base_policy = base_policy
+                        
+                        lstm_states = None
+                        while not done and steps < max_steps:
+                            if base_policy_name == "ppo_lstm":
+                                action, lstm_states = noise_policy.predict(
+                                    state, 
+                                    state=lstm_states,
+                                    deterministic=True
+                                )
+                            else:
+                                action, _ = noise_policy.predict(state, deterministic=True)
+                                
+                            step_result = self.env.step(action)
+                            if len(step_result) == 5:
+                                next_state, reward, terminated, truncated, info = step_result
+                                done = terminated or truncated
+                            else:
+                                next_state, reward, done, info = step_result
+                            rewards.append(reward)
+                            state = next_state
+                            steps += 1
+                        
+                        print(f"Noise distiller {epoch} test - avg_reward: {sum(rewards)/len(rewards) if rewards else 0:.2f}, steps: {steps}")
+                        
+                    except Exception as e:
+                        print(f"Error creating noise distiller for epoch {epoch}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
                 continue
 
             elif policy_name == "best_of_all":
+                print(f"Training best-of-all policies for stage: {stage}, epochs: {config['epochs']}")
                 for epoch in range(config["epochs"]):
-                    print(f"\nEpoch {epoch} in stage {stage}:")
+                    print(f"\n{'-'*40}")
+                    print(f"Epoch {epoch} in stage {stage}:")
+                    print(f"{'-'*40}")
                     results = {}
 
-                    # 只训练用户选择的策略
                     for p_name in self.policies_to_use:
                         try:
                             print(f"Training {p_name.upper()}...")
-                            # 使用训练器进行训练
                             train_result = self.trainers[p_name].train(
                                 episodes=max_episodes_per_epoch, 
                                 max_steps=max_steps_per_epoch
@@ -265,24 +404,63 @@ class RLCoach:
                             continue
 
                     if results:  
-                        # 选择表现最好的策略
                         best_policy = max(results.keys(), key=lambda k: results[k]["avg_return"])
-                        # 获取策略的状态字典
+                        best_policy_model = self.trainers[best_policy].model
                         state_dict = self.trainers[best_policy].get_state_dict()
 
-                        self.policy_snapshots[stage].append({
+                        policy_data = {
                             "stage": stage,
                             "epoch": epoch,
                             "policy_name": best_policy,
-                            "state_dict": state_dict
-                        })
+                            "state_dict": state_dict,
+                            "avg_return": results[best_policy]["avg_return"],
+                            "success_rate": results[best_policy]["total_success"] / results[best_policy]["episode_count"] if results[best_policy]["episode_count"] > 0 else 0,
+                            "episodes": results[best_policy]["episode_count"],
+                            "steps": results[best_policy]["total_steps"]
+                        }
+
+                        if best_policy == "ppo_lstm":
+                            lstm_config = self.trainer_configs.get("ppo_lstm", {})
+                            policy_data["policy_kwargs"] = lstm_config.get("policy_kwargs", {})
+                            policy_data["lstm_hidden_size"] = lstm_config.get("lstm_hidden_size", 32)
+                            policy_data["n_lstm_layers"] = lstm_config.get("n_lstm_layers", 2)
+                            policy_data["enable_critic_lstm"] = lstm_config.get("enable_critic_lstm", True)
+                        else:
+                            policy_kwargs = getattr(best_policy_model, 'policy_kwargs', {})
+                            if policy_kwargs:
+                                policy_data["policy_kwargs"] = policy_kwargs
+
+                        self.policy_snapshots[stage].append(policy_data)
                         print(f"Epoch {epoch} best policy: {best_policy.upper()} with avg_return: {results[best_policy]['avg_return']:.2f}")
+
+                        print(f"Saved policy configuration:")
+                        for k, v in policy_data.items():
+                            if k != "state_dict":  
+                                print(f"  {k}: {v}")
                     else:
                         print("No policies successfully completed training in this epoch")
-            
+
             else:
                 print(f"Unknown policy type: {policy_name}")
 
+        total_snapshots = sum(len(snapshots) for snapshots in self.policy_snapshots.values())
+        if total_snapshots == 0:
+            print("Warning: No policy snapshots were created during training.")
+            return False
+        
+        print(f"\nTraining completed successfully. Generated {total_snapshots} policy snapshots across all stages.")
+
+        for stage, snapshots in self.policy_snapshots.items():
+            if snapshots:
+                policies_by_type = {}
+                for snap in snapshots:
+                    policy_type = snap["policy_name"]
+                    if policy_type not in policies_by_type:
+                        policies_by_type[policy_type] = 0
+                    policies_by_type[policy_type] += 1
+                
+                print(f"Stage {stage}: {len(snapshots)} snapshots - {policies_by_type}")
+        
         return True
 
     def save(self, path):
@@ -306,12 +484,18 @@ class RLCoach:
                 "state_dim": self.task.state_dim if hasattr(self.task, 'state_dim') else None,
                 "action_dim": self.task.action_dim if hasattr(self.task, 'action_dim') else None
             },
+            "env_info": getattr(self, 'env_info', {}),  
+            "trainer_configs": getattr(self, 'trainer_configs', {}),  
             "behavior_policies": behavior_policies,
             "reference_policies": reference_policies
         }
         
         with open(path, 'wb') as f:
             pickle.dump(save_data, f)
+        
+        print(f"Coach saved to {path}")
+        # print(f"Saved {sum(len(policies) for policies in behavior_policies.values())} behavior policies")
+        # print(f"Saved {len(reference_policies)} reference policies")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

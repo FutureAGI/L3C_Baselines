@@ -41,10 +41,9 @@ class SACTrainer:
         total_success = 0
         episode_returns = []
         
-        # 开始训练循环
         while episode_count < episodes and total_steps < max_steps:
             state = self.env.reset()
-            if isinstance(state, tuple):  # 处理新版本 Gym 的 reset() 返回值
+            if isinstance(state, tuple):  
                 state = state[0]
             done = False
             episode_reward = 0
@@ -52,19 +51,16 @@ class SACTrainer:
             
             while not done:
                 try:
-                    # 使用模型预测动作
                     action, _ = self.model.predict(state, deterministic=False)
                     
-                    # 执行动作
                     step_result = self.env.step(action)
-                    if len(step_result) == 5:  # 新版本 Gym
+                    if len(step_result) == 5:  
                         next_state, reward, terminated, truncated, info = step_result
                         done = terminated or truncated
-                    else:  # 旧版本 Gym
+                    else:  
                         next_state, reward, done, info = step_result
                         terminated = done
                     
-                    # 将经验添加到回放缓冲区
                     self.model.replay_buffer.add(
                         obs=state,
                         action=action,
@@ -83,13 +79,11 @@ class SACTrainer:
                     done = True
                     break
             
-            # 记录回合结果
             success = terminated and reward > 0
             total_success += int(success)
             episode_returns.append(episode_reward)
             episode_count += 1
         
-        # 训练模型
         try:
             if self.model.replay_buffer.size() > self.model.batch_size:
                 self.model.train(gradient_steps=1)
@@ -98,7 +92,6 @@ class SACTrainer:
             import traceback
             traceback.print_exc()
         
-        # 计算并返回结果
         avg_return = np.mean(episode_returns) if episode_returns else 0
         success_rate = total_success / episode_count if episode_count > 0 else 0
         
@@ -114,5 +107,4 @@ class SACTrainer:
         }
         
     def get_state_dict(self):
-        """返回策略的状态字典"""
         return self.model.policy.state_dict().copy()

@@ -34,24 +34,18 @@ class PPO_LSTM_Trainer:
         )
         
     def preprocess_state(self, state):
-        """预处理观测状态"""
-        # 如果state是numpy数组,确保其为float32类型
         if isinstance(state, np.ndarray):
             return state.astype(np.float32)
-        # 如果是list,转换为numpy数组
         elif isinstance(state, list):
             return np.array(state, dtype=np.float32)
-        # 其他情况直接返回
         return state
         
     def train(self, episodes=10, max_steps=1000):
-        # 首先收集评估数据以便与训练后比较
         episode_count = 0
         total_steps = 0
         total_success = 0
         episode_returns = []
         
-        # 执行评估回合
         while episode_count < min(3, episodes) and total_steps < min(max_steps // 3, 1000):
             state = self.env.reset()
             if isinstance(state, tuple):
@@ -63,7 +57,6 @@ class PPO_LSTM_Trainer:
             
             while not done:
                 try:
-                    # 对于LSTM我们需要传递隐藏状态
                     action, lstm_states = self.model.predict(
                         state,
                         state=lstm_states,
@@ -89,14 +82,10 @@ class PPO_LSTM_Trainer:
             episode_returns.append(episode_reward)
             episode_count += 1
         
-        # 使用learn方法进行训练
         try:
-            # 确保不超过最大步数
-            total_timesteps = min(max_steps, 2048)  # 使用model.n_steps作为默认值
+            total_timesteps = min(max_steps, 40000)  
             
-            # 创建回调函数以便在训练过程中进行监控
             callback = CustomCallback()
-            # 使用learn方法训练模型
             self.model.learn(
                 total_timesteps=total_timesteps,
                 callback=callback,
@@ -110,7 +99,6 @@ class PPO_LSTM_Trainer:
             import traceback
             traceback.print_exc()
         
-        # 训练后再进行一次评估
         post_train_episode_count = 0
         post_train_total_steps = 0
         post_train_total_success = 0
@@ -152,13 +140,11 @@ class PPO_LSTM_Trainer:
             post_train_episode_returns.append(episode_reward)
             post_train_episode_count += 1
         
-        # 合并所有统计数据
         total_episode_count = episode_count + post_train_episode_count
         all_episode_returns = episode_returns + post_train_episode_returns
         total_success_count = total_success + post_train_total_success
         total_step_count = total_steps + post_train_total_steps + total_timesteps
         
-        # 计算并返回结果
         avg_return = np.mean(all_episode_returns) if all_episode_returns else 0
         success_rate = total_success_count / total_episode_count if total_episode_count > 0 else 0
         
@@ -174,5 +160,4 @@ class PPO_LSTM_Trainer:
         }
         
     def get_state_dict(self):
-        """返回策略的状态字典"""
         return self.model.policy.state_dict().copy()
