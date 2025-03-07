@@ -321,14 +321,6 @@ class LatentLMDiffusionBlock(nn.Module):
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.final_layer = FinalLayer(hidden_size, hidden_size)
 
-        self.fusion_gate = nn.Sequential(
-            nn.Linear(2*hidden_size, hidden_size),
-            nn.Sigmoid()
-        )
-
-        self.cond_norm = nn.LayerNorm(hidden_size, eps=1.0e-5)
-        self.time_norm = nn.LayerNorm(hidden_size, eps=1.0e-5)
-
         cold_start = True
         if cold_start:
             # Initialize timestep embedding MLP:
@@ -340,19 +332,11 @@ class LatentLMDiffusionBlock(nn.Module):
             # Zero-out output layers:
             nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(self.final_layer.linear.weight, 0)
-            # Initialize fusion layer:
-            nn.init.constant_(self.fusion_gate[0].bias, 0.5)  
-            nn.init.xavier_uniform_(self.fusion_gate[0].weight, gain=1.0)
 
     def forward(self, x, t, condition):
         bsz, seq_len = t.shape if t.dim() > 1 else (t.shape[0], 1)
         t = self.t_embedder(t.view(-1)).view(bsz, seq_len, -1)
-        #c = condition + t
-        condition = self.cond_norm(condition)
-        t = self.time_norm(t)
-        gate_input = torch.cat([condition,t], dim=-1)
-        gate = self.fusion_gate(gate_input)
-        c = gate * condition + (1 - gate) * t
+        c = condition + t
         #x = self.noisy_x_embedder(x) # nn.Linear(in_channels, hidden_size, bias=False)
         
         for block in self.diffusion_blocks:
