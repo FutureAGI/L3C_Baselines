@@ -134,13 +134,22 @@ class E2EObjNavSA(nn.Module):
                                         reduce_dim=reduce_dim)
         else:
             if use_loss_weight:
-                if self.config.decision_block.state_diffusion.training_predict_x0:
-                    loss["wm-latent"], loss["count_wm"], x0_pred = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
-                                                    cond=wm_out,
-                                                    mask=loss_weight,
+                if self.config.decision_block.state_diffusion.prediction_type == "sample":
+                    z_pred = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
+                                                        cond=wm_out,
+                                                        mask=loss_weight,
+                                                        reduce_dim=reduce_dim,
+                                                        need_cnt=True)
+                    # World Model Loss - Latent Space
+                    loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
+                                                    loss_type="mse",
+                                                    gt=z_rec_l[:, 1:], 
+                                                    loss_wht=loss_weight, 
                                                     reduce_dim=reduce_dim,
                                                     need_cnt=True)
-                    obs_pred = self.vae.decoding(x0_pred)
+
+                    # World Model Loss - Raw Image
+                    obs_pred = self.vae.decoding(z_pred)
                     loss["wm-raw"] = weighted_loss(obs_pred, 
                                                 loss_type="mse",
                                                 gt=inputs[:, 1:], 

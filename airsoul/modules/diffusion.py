@@ -103,7 +103,6 @@ class DiffusionLayers(nn.Module):
         self.need_clip = config.need_clip
         self.clip_threshold = config.clip_threshold
         self.eta = config.eta
-        self.training_predict_x0 = config.training_predict_x0
 
     def add_noise(self, x0, t):
         # x0  = x0.to(torch.float)
@@ -148,27 +147,20 @@ class DiffusionLayers(nn.Module):
         elif self.prediction_type == 'epslion':
             target = eps
             pred = model_out
+        elif self.prediction_type == "sample":
+            return model_out
         
         # if self.prediction_type == "epslion":
         #     a_t = torch.take(self._alphas.to(_t.device), _t)
         #     loss_weight = 1.0 / (1 - a_t.clamp(max=0.999, min=1e-6)).sqrt()
         #     mask = loss_weight.squeeze() * mask
 
-        if self.training_predict_x0:
-            x0 = self.one_step_reconstruct(x_t, a_t, model_out, t_ = 0)
-
         if  need_cnt:
             loss,loss_count_s = weighted_loss(pred.float(), gt=target.float(), loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
-            if self.training_predict_x0:
-                return loss, loss_count_s, x0
-            else:
-                return loss, loss_count_s
+            return loss, loss_count_s
         else:
             loss = weighted_loss(pred, gt=target, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
-            if self.training_predict_x0:
-                return loss, x0
-            else:
-                return loss
+            return loss
 
     def get_velocity_targets(self, x0, eps, t):  
         device = t.device
@@ -192,6 +184,9 @@ class DiffusionLayers(nn.Module):
         elif self.prediction_type == 'epslion':
             pred_epsilon = model_out
             pred_x0 = (x_t - torch.sqrt(1 - a_t)*pred_epsilon) / torch.sqrt(a_t)
+        elif self.config.prediction_type == "sample":
+            pred_x0 = model_out
+            pred_epsilon = (x_t - a_t ** (0.5) * pred_x0) / (1-a_t) ** (0.5)
         pred_sample_direction = torch.sqrt(1 - a_t_)  * pred_epsilon
         x_0 = torch.sqrt(a_t_) * pred_x0 + pred_sample_direction
         return x_0
