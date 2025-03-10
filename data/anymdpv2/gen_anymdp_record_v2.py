@@ -14,6 +14,7 @@ import gym
 from policy_trainer.sac_trainer import SACTrainer
 from policy_trainer.ppo_mlp_trainer import PPO_MLP_Trainer
 from policy_trainer.ppo_lstm_trainer import PPO_LSTM_Trainer
+import gc
 
 def create_directory(path):
     os.makedirs(path, exist_ok=True)
@@ -25,7 +26,6 @@ class DataGenerator:
             random.seed(seed)
             np.random.seed(seed)
 
-        # 保存参数用于后续重初始化
         if mode is None:
             self.mode = random.choice(["static", "dynamic", "universal"])
         else:
@@ -35,7 +35,6 @@ class DataGenerator:
         self.ndim = ndim
         self.max_steps = max_steps
 
-        # 创建环境和任务
         self.env = gym.make("anymdp-v2-visualizer")
         self.task = AnyMDPv2TaskSampler(
             state_dim=state_dim,
@@ -47,17 +46,14 @@ class DataGenerator:
         )
         self.env.set_task(self.task)
 
-        # 设置可用的策略
         if policies_to_use is None:
             policies_to_use = ["sac", "ppo_mlp", "ppo_lstm"]
         self.policies_to_use = policies_to_use
 
-        # 初始化基础策略
         self.policies = {
             "random": lambda x: self.env.action_space.sample()
         }
-        
-        # 根据用户选择添加策略
+
         if "sac" in policies_to_use:
             self.policies["sac"] = SACTrainer(self.env, seed).model
             
@@ -66,8 +62,7 @@ class DataGenerator:
             
         if "ppo_lstm" in policies_to_use:
             self.policies["ppo_lstm"] = PPO_LSTM_Trainer(self.env, seed).model
-        
-        # 加载教练文件
+
         if os.path.isdir(coach_path):
             coach_dir = coach_path
         else:
@@ -94,7 +89,6 @@ class DataGenerator:
         self.reference_policies = data["reference_policies"]
         self.task_config = data["task_config"]
 
-        # 添加解析教练的环境信息和训练器配置
         self.env_info = data.get("env_info", {})
         self.trainer_configs = data.get("trainer_configs", {})
 
@@ -108,8 +102,7 @@ class DataGenerator:
 
         self.mask_all_tag_prob = 0.15
         self.mask_epoch_tag_prob = 0.15
-        
-        # 创建各阶段策略
+
         def create_stage_policy(stage_policies):
             def stage_policy(state, lstm_states=None):
                 policy_data = random.choice(stage_policies)
@@ -118,10 +111,8 @@ class DataGenerator:
                         
                 elif "noise_distilled_" in policy_data["policy_name"]:
                     base_policy_name = policy_data["policy_name"].replace("noise_distilled_", "")
-                    
-                    # 使用保存的policy_kwargs或默认值
+
                     if base_policy_name == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -170,7 +161,6 @@ class DataGenerator:
                         
                 else:
                     if policy_data["policy_name"] == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -214,10 +204,8 @@ class DataGenerator:
                             
             return stage_policy
 
-        # 定义各阶段及其策略
         self.stages = ["random", "early", "middle", "final", "finalnoisedistiller"]
         
-        # 创建行为策略字典和参考策略字典
         self.behavior_dict = [
             (create_stage_policy(self.behavior_policies["random"]), 0.10),
             (create_stage_policy(self.behavior_policies["early"]), 0.10),
@@ -230,7 +218,6 @@ class DataGenerator:
             (create_stage_policy([self.reference_policies["final"]]), 1.0)    
         ]
         
-        # 计算采样概率
         self.blist, bprob = zip(*self.behavior_dict)
         self.rlist, rprob = zip(*self.reference_dict)
         
@@ -240,6 +227,14 @@ class DataGenerator:
         self.rprob /= self.rprob[-1]
     
     def reset_env_and_task(self):
+        if hasattr(self, 'env'):
+            self.env.close()
+            del self.env
+        if hasattr(self, 'task'):
+            del self.task
+
+        import gc
+        gc.collect()
         print("Reinitializing environment and task...")
         self.env = gym.make("anymdp-v2-visualizer")
         self.task = AnyMDPv2TaskSampler(
@@ -570,7 +565,7 @@ def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state
         max_steps=max_steps,
         seed=seed
     )
-    
+
     for epoch_id in epoch_range:
         results = generator.generate_data(epoch_id, max_steps)
         
@@ -580,14 +575,24 @@ def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state
             continue
             
         file_path = f'{path_name}/record-{epoch_id:06d}'
-        create_directory(file_path)
-        
-        np.save(f"{file_path}/observations.npy", results["states"])
-        np.save(f"{file_path}/actions_behavior.npy", results["actions_behavior"])
-        np.save(f"{file_path}/actions_label.npy", results["actions_label"])
-        np.save(f"{file_path}/rewards.npy", results["rewards"])
-        np.save(f"{file_path}/prompts.npy", results["prompts"])
-        np.save(f"{file_path}/tags.npy", results["tags"])
+        try:
+            create_directory(file_path)
+            print(f"Saving data for epoch {epoch_id} to {file_path}")
+
+            np.save(f"{file_path}/observations.npy", results["states"])
+            np.save(f"{file_path}/actions_behavior.npy", results["actions_behavior"])
+            np.save(f"{file_path}/actions_label.npy", results["actions_label"])
+            np.save(f"{file_path}/rewards.npy", results["rewards"])
+            np.save(f"{file_path}/prompts.npy", results["prompts"])
+            np.save(f"{file_path}/tags.npy", results["tags"])
+            
+            print(f"Successfully saved all data for epoch {epoch_id}")
+            
+        except Exception as e:
+            print(f"Error saving data for epoch {epoch_id}: {e}")
+            
+        del results
+        gc.collect()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -602,26 +607,42 @@ if __name__ == "__main__":
     parser.add_argument("--state_dim", type=int, default=256, help="State dimension")
     parser.add_argument("--action_dim", type=int, default=256, help="Action dimension")
     parser.add_argument("--ndim", type=int, default=8, help="ndim for task sampler")
+    parser.add_argument("--batch_size", type=int, default=100, help="Batch size for each worker")
     
     args = parser.parse_args()
 
-    worker_splits = args.epochs / args.workers + 1.0e-6
-    processes = []
-    n_b_t = args.start_index
+    recommended_workers = min(
+        args.workers,
+        max(1, (args.epochs + args.batch_size - 1) // args.batch_size)
+    )
     
-    for worker_id in range(args.workers):
-        n_e_t = n_b_t + worker_splits
-        n_b = int(n_b_t)
-        n_e = int(n_e_t)
-        
-        print("start processes generating %04d to %04d" % (n_b, n_e))
+    print(f"Using {recommended_workers} workers (requested: {args.workers})")
+
+    epochs_per_worker = []
+    remaining_epochs = args.epochs
+    current_index = args.start_index
+    
+    while remaining_epochs > 0:
+        batch = min(args.batch_size, remaining_epochs)
+        epochs_per_worker.append((current_index, current_index + batch))
+        current_index += batch
+        remaining_epochs -= batch
+
+    processes = []
+for batch_start in range(0, args.epochs, args.batch_size * recommended_workers):
+    for worker_id in range(recommended_workers):
+        start_idx = batch_start + worker_id * args.batch_size
+        end_idx = min(start_idx + args.batch_size, args.epochs)
+        if start_idx >= args.epochs:
+            break
+            
         process = multiprocessing.Process(
             target=dump_anymdp,
             args=(
                 args.output_path,
                 args.coach_path,
                 args.max_steps,
-                range(n_b, n_e),
+                range(start_idx, end_idx),
                 args.mode,
                 args.ndim,
                 args.state_dim,
@@ -632,7 +653,7 @@ if __name__ == "__main__":
         processes.append(process)
         process.start()
         
-        n_b_t = n_e_t
-    
+    # 等待当前批次的进程完成
     for process in processes:
         process.join()
+    processes = []
