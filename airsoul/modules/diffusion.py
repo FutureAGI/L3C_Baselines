@@ -184,7 +184,7 @@ class DiffusionLayers(nn.Module):
         elif self.prediction_type == 'epslion':
             pred_epsilon = model_out
             pred_x0 = (x_t - torch.sqrt(1 - a_t)*pred_epsilon) / torch.sqrt(a_t)
-        elif self.config.prediction_type == "sample":
+        elif self.prediction_type == "sample":
             pred_x0 = model_out
             pred_epsilon = (x_t - a_t ** (0.5) * pred_x0) / (1-a_t) ** (0.5)
         pred_sample_direction = torch.sqrt(1 - a_t_)  * pred_epsilon
@@ -239,6 +239,9 @@ class DiffusionLayers(nn.Module):
                 elif self.prediction_type == 'epslion':
                     pred_epsilon = model_out
                     pred_x0 = (x_t - torch.sqrt(1 - a_t)*pred_epsilon) / torch.sqrt(a_t)
+                elif self.prediction_type == "sample":
+                    pred_x0 = model_out
+                    pred_epsilon = (x_t - a_t ** (0.5) * pred_x0) / (1-a_t) ** (0.5)
                 
                 # Compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
                 pred_sample_direction = torch.sqrt(1 - a_t_ - std_dev_t**2)  * pred_epsilon
