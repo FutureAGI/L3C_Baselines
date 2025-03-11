@@ -1,5 +1,5 @@
 import torch
-import math
+import math, numpy
 from torch import nn
 from torch.nn import functional as F
 from airsoul.utils import weighted_loss
@@ -59,13 +59,16 @@ class DiffusionLayers(nn.Module):
         super().__init__()
 
         if config.schedule == "linear":
+            self.schedule = "linear"
             self.betas = torch.linspace(config.beta[0], config.beta[1], config.T)
             self.betas = torch.cat([torch.tensor([0.0]), self.betas], dim=0)
         elif config.schedule == "cosine":
+            self.schedule = "cosine"
             self.betas = betas_for_alpha_bar(config.T)
             self.betas = torch.cat([torch.tensor([0.0]), self.betas], dim=0)
         elif config.schedule == "scaled_linear":
             # this schedule is very specific to the latent diffusion model.
+            self.schedule = "scaled_linear"
             self.betas = torch.linspace(config.beta[0]**0.5, config.beta[1]**0.5, config.T, dtype=torch.float32) ** 2
             self.betas = torch.cat([torch.tensor([0.0]), self.betas], dim=0)
         self.alphas = 1 - self.betas
@@ -81,20 +84,20 @@ class DiffusionLayers(nn.Module):
         model_name = config.diffusion_model_name
         if model_name == "basic":
             self.model = BasicModel(
-                hidden_size=config.hidden_size,
-                condition_size=config.condition_size,
-                t_embedding_size=config.t_embedding_size,
-                inner_hidden_size=config.inner_hidden_size,
+                hidden_size=config.basic_model.hidden_size,
+                condition_size=config.basic_model.condition_size,
+                t_embedding_size=config.basic_model.t_embedding_size,
+                inner_hidden_size=config.basic_model.inner_hidden_size,
                 diffusion_T=config.T,
-                dropout=config.dropout,
-                use_cond_layer_norm=config.cond_layer_norm
+                dropout=config.basic_model.dropout,
+                use_cond_layer_norm=config.basic_model.cond_layer_norm
             )
         elif model_name == "latentlm":
             self.model = LatentLMDiffusionBlock(
-                mlp_ratio=config.mlp_ratio,
-                hidden_size=config.hidden_size,
-                drop=config.dropout, 
-                diffusion_depth = config.block_size)
+                mlp_ratio=config.latentlm.mlp_ratio,
+                hidden_size=config.latentlm.hidden_size,
+                drop=config.latentlm.dropout, 
+                diffusion_depth = config.latentlm.block_size)
         
 
         self.inference_sample_steps = config.inference_sample_steps
@@ -136,7 +139,7 @@ class DiffusionLayers(nn.Module):
             _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
         else:
             _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
-        x_t, eps, _ = self.add_noise(x0, _t)
+        x_t, eps, a_t = self.add_noise(x0, _t)
         model_out = self.denoising(x_t, _t, cond)
         
         if self.prediction_type == 'velocity':  
@@ -145,7 +148,14 @@ class DiffusionLayers(nn.Module):
         elif self.prediction_type == 'epslion':
             target = eps
             pred = model_out
+        elif self.prediction_type == "sample":
+            return model_out
         
+        # if self.prediction_type == "epslion":
+        #     a_t = torch.take(self._alphas.to(_t.device), _t)
+        #     loss_weight = 1.0 / (1 - a_t.clamp(max=0.999, min=1e-6)).sqrt()
+        #     mask = loss_weight.squeeze() * mask
+
         if  need_cnt:
             loss,loss_count_s = weighted_loss(pred.float(), gt=target.float(), loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=need_cnt)
             return loss, loss_count_s
@@ -162,21 +172,25 @@ class DiffusionLayers(nn.Module):
         v = sqrt_alpha_t * eps - sqrt_sigma_t * x0
         return v
 
-    def one_step_reconstruct(self, x0, cond, mask=None, reduce_dim=1, t=None):
+    def one_step_reconstruct(self, x_t, a_t, model_out, t_ = 0):
         """
         Allows to back propagate through the whole process
         """
 
-        if(t is None):
-            _t = torch.randint(low=1, high=self.T + 1, size=x0.shape[:2], dtype=torch.int64, device=x0.device)
-        else:
-            _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
-        x_t, eps, a_t = self.add_noise(x0, _t)
-        eps_t = self.denoising(x_t, _t, cond)
-        a_0 = torch.full(a_t.shape, 0, dtype=torch.int64, device=cond.device)
-        print(x_t.shape, eps.shape, eps_t.shape, a_t.shape, a_0.shape)
-
-        return torch.sqrt(a_0 / a_t) * x_t + (torch.sqrt((1 - a_0) / a_0) - torch.sqrt((1 - a_t) / a_t)) * eps_t
+        a_t_ = torch.full(a_t.shape, t_, dtype=torch.int64, device=x_t.device)
+        if self.prediction_type == 'velocity':
+            v = model_out
+            pred_x0 = torch.sqrt(a_t) * x_t + torch.sqrt(1 - a_t) * v
+            pred_epsilon = torch.sqrt(a_t) * v + torch.sqrt(1 - a_t) * x_t
+        elif self.prediction_type == 'epslion':
+            pred_epsilon = model_out
+            pred_x0 = (x_t - torch.sqrt(1 - a_t)*pred_epsilon) / torch.sqrt(a_t)
+        elif self.prediction_type == "sample":
+            pred_x0 = model_out
+            pred_epsilon = (x_t - a_t ** (0.5) * pred_x0) / (1-a_t) ** (0.5)
+        pred_sample_direction = torch.sqrt(1 - a_t_)  * pred_epsilon
+        x_0 = torch.sqrt(a_t_) * pred_x0 + pred_sample_direction
+        return x_0
 
     def inference(self, cond, gt=None, mask=None, reduce_dim=1):
         """
@@ -184,28 +198,39 @@ class DiffusionLayers(nn.Module):
         """
         assert cond.shape[2] == self.condition_size
         z_list = []
-        steps = [2 * self.T // 3, self.T // 3, 1]
+
+        # if self.schedule == "cosine":
+        #     steps = self._get_jump_steps_cosine(self.T, num_steps=self.inference_sample_steps)
+        # else:
+        #     steps = self._get_jump_steps_linear(self.T, num_steps=self.inference_sample_steps)
+        
+        steps = self._get_jump_steps_uniform(self.T, num_steps=self.inference_sample_steps)
         
         with torch.no_grad():
             x_T = torch.randn(*cond.shape[:2], self.hidden_size)
             x_t = x_T.to(cond.device)
             z_list.append(x_t.detach())
 
-            for t in range(self.T, 0, -self.inference_sample_steps):
-                _t = torch.full(cond.shape[:2], t, dtype=torch.int64, device=cond.device)
-                a_t = self._alphas[t]
-                last_step = t <= self.inference_sample_steps
-
+            for t in range(0,len(steps),1):
+                _t = torch.full(cond.shape[:2], steps[t], dtype=torch.int64, device=cond.device)
+                a_t = self._alphas[steps[t]]
+                last_step = t+1 >= len(steps)
                 if not last_step:
-                    assert t - self.inference_sample_steps > 0
-                    a_t_ = self._alphas[t - self.inference_sample_steps]
+                    t_ = steps[t+1]
+                    assert t_ > 0 
+                    a_t_ = self._alphas[t_]
                     # Construct sigma_t with eta 
                     variance = self._get_variance(a_t, a_t_)
-                    std_dev_t = self.eta * variance ** (0.5)
+                    eta = min(self.eta * (steps[t] / self.T)**0.5, 1.0)
+                    std_dev_t = eta * variance ** (0.5)
                 else:
                     a_t_ = self._alphas[0]
                     variance = self._get_variance(a_t, a_t_)
                     std_dev_t = 0.0 * variance ** (0.5) # Enforces certainty at last step
+
+                if gt is not None:
+                    x_t_gt, eps, _ = self.add_noise(gt, _t)
+                    x_t = x_t_gt
 
                 model_out = self.denoising(x_t, _t, cond)
                 if self.prediction_type == 'velocity':
@@ -215,6 +240,9 @@ class DiffusionLayers(nn.Module):
                 elif self.prediction_type == 'epslion':
                     pred_epsilon = model_out
                     pred_x0 = (x_t - torch.sqrt(1 - a_t)*pred_epsilon) / torch.sqrt(a_t)
+                elif self.prediction_type == "sample":
+                    pred_x0 = model_out
+                    pred_epsilon = (x_t - a_t ** (0.5) * pred_x0) / (1-a_t) ** (0.5)
                 
                 # Compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
                 pred_sample_direction = torch.sqrt(1 - a_t_ - std_dev_t**2)  * pred_epsilon
@@ -226,12 +254,11 @@ class DiffusionLayers(nn.Module):
                 variance = std_dev_t * torch.randn_like(x_t)
                 x_t = x_t + variance
                 
-                if (t in steps) or last_step:
+                if last_step:
                     z_list.append(x_t.detach())
 
                 # Debug, test loss
                 if gt is not None:
-                    _, eps, _ = self.add_noise(gt, _t)
                     loss, cnt = weighted_loss(pred_epsilon, gt=eps, loss_type="mse", loss_wht=mask, reduce_dim=reduce_dim, need_cnt=True)
                     print("epsilon loss:", loss.item()/cnt)
 
@@ -244,6 +271,43 @@ class DiffusionLayers(nn.Module):
         variance = (beta_prod_t_prev / beta_prod_t) * (1 - a_t / a_t_)
 
         return variance
+    
+    def _get_jump_steps_linear(self, T, num_steps=50):
+        """
+        T: Trainint steps
+        num_steps: Inference steps
+        """
+        # 3stage, fast -> slow
+        early = int(0.15 * num_steps)
+        mid = int(0.65 * num_steps)
+        late = num_steps - early - mid
+
+        steps = [
+            numpy.linspace(T, 0.8*T, early, endpoint=False),
+            numpy.linspace(0.8*T, 0.2*T, mid, endpoint=False),
+            numpy.linspace(0.2*T, 1, late)
+        ]
+        return numpy.unique(numpy.concatenate(steps)).astype(int)[::-1]
+    
+    def _get_jump_steps_cosine(self, T, num_steps=50):
+        """
+        Non-uniform sampling based on cosine function
+        """
+        t = numpy.linspace(0, numpy.pi/2, num_steps)
+        steps = T * (numpy.cos(t) ** 2)
+        steps = steps.astype(int)
+        for i in range(len(steps) - 1, -1, -1):
+            if steps[i] > 0:
+                break
+        return steps[:i + 1]
+    
+    def _get_jump_steps_uniform(self, T, num_steps=50):
+        """
+        T: Trainint steps
+        num_steps: Inference steps
+        """
+        steps = numpy.linspace(1, T, num_steps, endpoint=True)
+        return steps.astype(int)[::-1]
 
 ############## Latent LM diffusion block ############
 
@@ -251,7 +315,7 @@ class LatentLMDiffusionBlock(nn.Module):
     def __init__(self, hidden_size, mlp_ratio=4.0, drop=0.0, diffusion_depth = 3):
         super().__init__()
         self.diffusion_blocks = nn.ModuleList([
-            MLPBlock(hidden_size, mlp_ratio=mlp_ratio) for _ in range(diffusion_depth)
+            MLPBlock(hidden_size, mlp_ratio=mlp_ratio, drop=drop) for _ in range(diffusion_depth)
         ])
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.final_layer = FinalLayer(hidden_size, hidden_size)
@@ -342,17 +406,6 @@ class RMSNorm(nn.Module):
 
     def extra_repr(self) -> str:
         return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
-
-class ConditionLayer(nn.Module):
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.norm_final = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, hidden_size, bias=False)
-
-    def forward(self, x):
-        x = self.norm_final(x)
-        x = self.linear(x)
-        return x
 
 class TimestepEmbedder(nn.Module):
     """

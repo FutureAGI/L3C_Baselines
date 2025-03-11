@@ -24,12 +24,16 @@ class SADecisionModel(nn.Module):
 
         self.s_encoder = MLPEncoder(config.state_encode)
         self.a_encoder = MLPEncoder(config.action_encode)
-        self.s_decoder = ResidualMLPDecoder(config.state_decode)
-        self.a_decoder = ResidualMLPDecoder(config.action_decode)
+        
         if(config.action_diffusion.enable):
             self.a_diffusion = DiffusionLayers(config.action_diffusion)
+        else:
+            self.a_decoder = ResidualMLPDecoder(config.action_decode)
+
         if(config.state_diffusion.enable):
             self.s_diffusion = DiffusionLayers(config.state_diffusion)
+        else:
+            self.s_decoder = ResidualMLPDecoder(config.state_decode)
 
     def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
@@ -105,7 +109,7 @@ class OPTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["sptar", "sar", "sta", "sa"]
+        self.rsa_choice =  ["sptar", "star", "sar", "sta", "sa"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the s
@@ -121,14 +125,17 @@ class OPTARDecisionModel(nn.Module):
 
         self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
         self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
-        self.s_decoder = ResidualMLPDecoder(config.state_decode)
-        self.a_decoder = ResidualMLPDecoder(config.action_decode)
         self.r_decoder = ResidualMLPDecoder(config.reward_decode)
 
         if(config.action_diffusion.enable):
             self.a_diffusion = DiffusionLayers(config.action_diffusion)
+        else:
+            self.a_decoder = ResidualMLPDecoder(config.action_decode)
+            
         if(config.state_diffusion.enable):
             self.s_diffusion = DiffusionLayers(config.state_diffusion)
+        else:
+            self.s_decoder = ResidualMLPDecoder(config.state_decode)
 
         if(self.config.state_encode.input_type == "Discrete"):
             self.s_discrete = True

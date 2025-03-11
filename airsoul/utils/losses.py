@@ -26,6 +26,9 @@ def metrics(out, gt=None, loss_type='mse', **kwargs):
             loss_array = focal_loss(out, gt, kwargs['gamma'])
     elif(loss_type == 'ent'):
         return ent_loss(out)
+    elif(loss_type == 'psnr'):
+        assert gt is not None, "Ground Truth Must Be Provided When Using PSNR Loss"
+        return calculate_psnr(out, gt)
     else:
         raise ValueError('Unknown loss type {}'.format(loss_type))
     return loss_array
@@ -97,7 +100,14 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         return mean_loss, counts
     else:
         return mean_loss
-    
+
+def calculate_psnr(ground_truth, generated_image):
+    mse = torch.mean((ground_truth - generated_image) ** 2)
+    assert mse > 0, "mse is zero"
+    max_i = torch.max(ground_truth)
+    psnr = 20 * torch.log10(max_i / torch.sqrt(mse))
+    return psnr.item()
+
 def parameters_regularization(*layers):
     norm = 0
     cnt = 0
