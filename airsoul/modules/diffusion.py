@@ -83,20 +83,20 @@ class DiffusionLayers(nn.Module):
         model_name = config.diffusion_model_name
         if model_name == "basic":
             self.model = BasicModel(
-                hidden_size=config.hidden_size,
-                condition_size=config.condition_size,
-                t_embedding_size=config.t_embedding_size,
-                inner_hidden_size=config.inner_hidden_size,
+                hidden_size=config.basic_model.hidden_size,
+                condition_size=config.basic_model.condition_size,
+                t_embedding_size=config.basic_model.t_embedding_size,
+                inner_hidden_size=config.basic_model.inner_hidden_size,
                 diffusion_T=config.T,
-                dropout=config.dropout,
-                use_cond_layer_norm=config.cond_layer_norm
+                dropout=config.basic_model.dropout,
+                use_cond_layer_norm=config.basic_model.cond_layer_norm
             )
         elif model_name == "latentlm":
             self.model = LatentLMDiffusionBlock(
-                mlp_ratio=config.mlp_ratio,
-                hidden_size=config.hidden_size,
-                drop=config.dropout, 
-                diffusion_depth = config.block_size)
+                mlp_ratio=config.latentlm.mlp_ratio,
+                hidden_size=config.latentlm.hidden_size,
+                drop=config.latentlm.dropout, 
+                diffusion_depth = config.latentlm.block_size)
         
 
         self.inference_sample_steps = config.inference_sample_steps
@@ -314,7 +314,7 @@ class LatentLMDiffusionBlock(nn.Module):
     def __init__(self, hidden_size, mlp_ratio=4.0, drop=0.0, diffusion_depth = 3):
         super().__init__()
         self.diffusion_blocks = nn.ModuleList([
-            MLPBlock(hidden_size, mlp_ratio=mlp_ratio) for _ in range(diffusion_depth)
+            MLPBlock(hidden_size, mlp_ratio=mlp_ratio, drop=drop) for _ in range(diffusion_depth)
         ])
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.final_layer = FinalLayer(hidden_size, hidden_size)

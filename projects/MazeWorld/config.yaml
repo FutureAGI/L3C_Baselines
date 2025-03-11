@@ -61,42 +61,50 @@ model_config:
 
       action_diffusion:
           enable: False
-          T: 500
-          hidden_size: 1024
-          condition_size: 1024
-          t_embedding_size: 32
-          inner_hidden_size: 4096
-          beta: [0.0001, 0.02]
-          diffusion_model_name: "latentlm"
-          schedule: "scaled_linear"
-          prediction_type: "velocity"
-          block_size: 3
-          mlp_ratio: 4.0
-          dropout: 0.1
-          cond_layer_norm: True
-          inference_sample_steps: 5
+          prediction_type: "sample" # epslion / sample /velocity
+          diffusion_model_name: "latentlm" # latentlm / basic
+          basic_model:
+            hidden_size: 1024
+            condition_size: 1024
+            t_embedding_size: 32
+            inner_hidden_size: 4096
+            cond_layer_norm: True
+            dropout: 0.1
+          latentlm:
+            hidden_size: 1024
+            block_size: 3
+            mlp_ratio: 4
+            dropout: 0.0
+          schedule: "cosine" # linear / cosine / scaled_linear
+          T: 20
+          beta: [0.0001, 0.02] # For linear / scaled_linear
+          inference_sample_steps: 20
           eta: 1.0
-          need_clip: True
+          need_clip: False # Set True if predict type is epslion or velocity
           clip_threshold: 5.0
   
       state_diffusion:
           enable: False
-          T: 1000
-          hidden_size: 1024
-          condition_size: 1024
-          t_embedding_size: 32
-          inner_hidden_size: 4096
-          beta: [0.0001, 0.02]
-          diffusion_model_name: "latentlm"
-          schedule: "cosine"
-          prediction_type: "velocity"
-          block_size: 5
-          mlp_ratio: 6
-          dropout: 0.1
-          cond_layer_norm: True
-          inference_sample_steps: 5
+          prediction_type: "sample" # epslion / sample /velocity
+          diffusion_model_name: "latentlm" # latentlm / basic
+          basic_model:
+            hidden_size: 1024
+            condition_size: 1024
+            t_embedding_size: 32
+            inner_hidden_size: 4096
+            cond_layer_norm: True
+            dropout: 0.1
+          latentlm:
+            hidden_size: 1024
+            block_size: 5
+            mlp_ratio: 6
+            dropout: 0.0
+          schedule: "cosine" # linear / cosine / scaled_linear
+          T: 20
+          beta: [0.0001, 0.02] # For linear / scaled_linear
+          inference_sample_steps: 20
           eta: 1.0
-          need_clip: True
+          need_clip: False # Set True if predict type is epslion or velocity
           clip_threshold: 5.0
 
       causal_block_trans:
