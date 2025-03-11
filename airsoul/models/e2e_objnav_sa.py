@@ -128,7 +128,7 @@ class E2EObjNavSA(nn.Module):
             # World Model Loss - Raw Image
             obs_pred = self.vae.decoding(z_pred)
             loss["wm-raw"] = weighted_loss(obs_pred, 
-                                        loss_type="mse",
+                                        loss_type="psnr",
                                         gt=inputs[:, 1:], 
                                         loss_wht=loss_weight, 
                                         reduce_dim=reduce_dim)
@@ -151,7 +151,7 @@ class E2EObjNavSA(nn.Module):
                     # World Model Loss - Raw Image
                     obs_pred = self.vae.decoding(z_pred)
                     loss["wm-raw"] = weighted_loss(obs_pred, 
-                                                loss_type="mse",
+                                                loss_type="psnr",
                                                 gt=inputs[:, 1:], 
                                                 loss_wht=loss_weight, 
                                                 reduce_dim=reduce_dim)
@@ -172,7 +172,7 @@ class E2EObjNavSA(nn.Module):
                                                 need_cnt=True)
                 obs_pred = self.vae.decoding(z_pred)
                 loss["wm-raw"] = weighted_loss(obs_pred, 
-                                            loss_type="mse",
+                                            loss_type="psnr",
                                             gt=inputs[:, 1:], 
                                             loss_wht=loss_weight, 
                                             reduce_dim=reduce_dim)
