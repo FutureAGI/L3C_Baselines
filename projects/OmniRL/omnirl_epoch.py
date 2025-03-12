@@ -9,7 +9,7 @@ from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go, downsample
 from airsoul.utils import EpochManager, GeneratorBase, Logger
 from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
-from airsoul.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
+from airsoul.dataloader import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gymnasium 
 import gym
@@ -42,7 +42,7 @@ class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPDataSet
+        self.DataType=AnyMDPv2DataSet #AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
                         "loss_worldmodel_state", 
