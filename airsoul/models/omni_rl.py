@@ -12,9 +12,9 @@ from l3c_baselines.utils import weighted_loss, sa_dropout, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.utils import log_debug, log_warn, log_fatal
 from l3c_baselines.modules import ImageEncoder, ImageDecoder
-from .decision_model import OPTARDecisionModel
+from .decision_model import POTARDecisionModel
 
-class OmniRL(OPTARDecisionModel):
+class OmniRL(POTARDecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 

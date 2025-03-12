@@ -11,7 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from l3c_baselines.utils import weighted_loss, img_pro, img_post
 from l3c_baselines.utils import parameters_regularization, count_parameters
 from l3c_baselines.modules import ImageEncoder, ImageDecoder, VAE
-from .decision_model import SADecisionModel
+from .decision_model import SADecisionModel, POTARDecisionModel
 
 class E2EObjNavSA(nn.Module):
     def __init__(self, config, verbose=False): 
@@ -23,7 +23,7 @@ class E2EObjNavSA(nn.Module):
 
         self.img_decoder = ImageDecoder(config.image_decoder_block)
 
-        self.decision_model = SADecisionModel(config.decision_block)
+        self.decision_model = POTARDecisionModel(config.decision_block)
 
         self.vae = VAE(config.vae_latent_size, self.img_encoder, self.img_decoder) 
 
@@ -45,7 +45,12 @@ class E2EObjNavSA(nn.Module):
                 count_parameters(self.img_decoder), 
                 count_parameters(self.decision_model)))
         
-    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0, update_memory=True):
+    def forward(self, observations, 
+                    prompts,
+                    tags,
+                    actions,
+                    rewards,
+                    cache=None, need_cache=True, state_dropout=0.0,update_memory=True):
         """
         Input Size:
             observations:[B, NT, C, W, H]
@@ -58,8 +63,8 @@ class E2EObjNavSA(nn.Module):
         NT = actions.shape[1]
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
-
-        z_pred, a_pred, new_cache = self.decision_model(z_rec, actions, 
+        z_pred, a_pred, new_cache = self.decision_model(
+                z_rec, prompts, tags, actions, rewards,
                 cache=cache, need_cache=need_cache, state_dropout=state_dropout, 
                 update_memory=update_memory)
 
@@ -74,7 +79,12 @@ class E2EObjNavSA(nn.Module):
     def reset(self):
         self.decision_model.reset()
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, 
+    def sequential_loss(self, observations, 
+                        prompts,
+                        tags,
+                        behavior_actions, 
+                        rewards, 
+                        label_actions, 
                         additional_info=None, # Kept for passing additional information
                         state_dropout=0.0, 
                         update_memory=True,
@@ -96,8 +106,15 @@ class E2EObjNavSA(nn.Module):
         pe = ps + seq_len
 
         # Predict the latent representation of action and next frame (World Model)
-        z_rec, z_pred, a_pred, cache = self.forward(inputs[:, :-1], behavior_actions, 
-                cache=None, need_cache=False, state_dropout=state_dropout,
+        z_rec, z_pred, a_pred, cache = self.forward(
+                inputs[:, :-1], 
+                prompts,
+                tags,
+                behavior_actions, 
+                rewards,
+                cache=None, 
+                need_cache=False, 
+                state_dropout=state_dropout,
                 update_memory=update_memory)
         
         # Encode the last frame to latent space
@@ -159,72 +176,30 @@ class E2EObjNavSA(nn.Module):
 
         return loss
     
-    def preprocess(self, 
-                   observations, 
-                   actions, 
+    def preprocess_others(self, 
+                   vals, 
                    single_batch=True, 
-                   single_step=True, 
-                   raw_images=True):
-        if(observations is None or actions is None):
-            return None, None
-
-        if(isinstance(observations, numpy.ndarray)):
-            obs = torch.tensor(observations, device=next(self.parameters()).device)
-        elif(isinstance(observations, torch.Tensor)):
-            obs = observations.to(next(self.parameters()).device)
-        else:
-            raise TypeError(f"Unsupported type of observations: {type(observations)}")
-
-        if(isinstance(actions, numpy.ndarray)):
-            act = torch.tensor(actions, device=next(self.parameters()).device)
-        elif(isinstance(actions, torch.Tensor)):
-            act = actions.to(next(self.parameters()).device)
-        else:
-            raise TypeError(f"Unsupported type of actions: {type(actions)}")
-        
-        if(single_batch):
-            obs = obs.unsqueeze(0)
-            act = act.unsqueeze(0)
-        if(single_step):
-            obs = obs.unsqueeze(1)
-            act = act.unsqueeze(1)
-        
-        assert act.dim == 2, f"Input dimension of actions must be 2, acquire {act.dim}"
-        assert obs.shape[0] == act.shape[0], f"Batch size of observations and actions must be the same, acquire {obs.shape[0]} != {act.shape[0]}"
-        assert obs.shape[1] == act.shape[1], f"Sequence length of observations and actions must be the same, acquire {obs.shape[1]} != {act.shape[1]}"
-
-        if(raw_images):
-            assert obs.dim == 5, f"Input dimension of observations of raw images must be 5, acquire {obs.dim}"
-            with torch.no_grad():
-                z_rec, _ = self.vae(obs)
-        else:
-            z_rec = obs
-
-        return z_rec, act
-    
-    def preprocess_action(self, 
-                   actions, 
-                   single_batch=True, 
-                   single_step=True, 
-                   raw_images=True):
-        if(actions is None):
+                   single_step=True,
+                   default_dim=None):
+        if(vals is None):
             return None
 
-        if(isinstance(actions, numpy.ndarray)):
-            act = torch.tensor(actions, device=next(self.parameters()).device)
-        elif(isinstance(actions, torch.Tensor)):
-            act = actions.to(next(self.parameters()).device)
+        if(isinstance(vals, numpy.ndarray)):
+            vals = torch.tensor(vals, device=next(self.parameters()).device)
+        elif(isinstance(vals, torch.Tensor)):
+            vals = vals.to(next(self.parameters()).device)
         else:
-            raise TypeError(f"Unsupported type of actions: {type(actions)}")
+            raise TypeError(f"Unsupported type of values: {type(vals)}")
         
         if(single_batch):
-            act = act.unsqueeze(0)
+            vals = vals.unsqueeze(0)
         if(single_step):
-            act = act.unsqueeze(1)
+            vals = vals.unsqueeze(1)
         
-        assert act.dim == 2, f"Input dimension of actions must be 2, acquire {act.dim}"
+        if(default_dim is not None):
+            assert vals.dim == default_dim + 2, f"Input dimension of actions must be {default_dim + 2}, acquire {vals.dim}"
 
-        return act
+        return vals
 
     def preprocess_observation(self, 
                    observations, 
@@ -254,9 +229,30 @@ class E2EObjNavSA(nn.Module):
             z_rec = obs
 
         return z_rec
+    
+    def preprocess(self, 
+                observations, 
+                prompts,
+                tags,
+                actions,
+                rewards, 
+                single_batch=True, 
+                single_step=True, 
+                raw_images=True):
+        z_rec = self.preprocess_observation(observations, single_batch=single_batch, single_step=single_step, raw_images=raw_images)
+        act = self.preprocess_others(actions, single_batch=single_batch, single_step=single_step, default_dim=0)
+        prompts = self.preprocess_others(prompts, single_batch=single_batch, single_step=single_step, default_dim=1)
+        tags = self.preprocess_others(tags, single_batch=single_batch, single_step=single_step, default_dim=0)
+        rewards = self.preprocess_others(rewards, single_batch=single_batch, single_step=single_step, default_dim=0)
 
-    def in_context_learn(self, observations, 
+        return z_rec, prompts, tags, actions, rewards
+
+    def in_context_learn(self, 
+                         observations,
+                         prompts,
+                         tags, 
                          actions,
+                         rewards,
                          cache=None,
                          need_cache=False,
                          single_batch=True,
@@ -268,10 +264,18 @@ class E2EObjNavSA(nn.Module):
         # Outputs:
         #   new_cache: [B, NC, H] if need_cache is True
 
+        o,p,t,a,r = self.preprocess(
+                        observations,
+                        prompts,
+                        tags, 
+                        actions,
+                        rewards,
+                        single_batch=single_batch,
+                        single_step=single_step, 
+                        raw_images=raw_images)
 
-        obs, act = self.preprocess(observations, actions, single_batch=single_batch, single_step=single_step, raw_images=raw_images)
-
-        z_pred, a_pred, new_cache = self.decision_model(obs, act, 
+        z_pred, a_pred, new_cache = self.decision_model(
+                o, p, t, a, r, 
                 cache=cache, need_cache=need_cache, 
                 update_memory=True)
 
@@ -319,7 +323,7 @@ class E2EObjNavSA(nn.Module):
             single_step=True, 
             raw_images=raw_images)
         
-        act = self.preprocess_action(action_trajectory, 
+        act = self.preprocess_others(action_trajectory, 
                                      single_batch=single_batch,
                                      single_step=future_single_step)
 
