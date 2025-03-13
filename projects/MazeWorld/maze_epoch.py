@@ -193,6 +193,7 @@ class MazeEpochCausal:
                                     seg_bev,
                                     state_dropout=0.20,
                                     use_loss_weight=self.is_training,
+                                    is_training=self.is_training,
                                     reduce_dim=self.reduce_dim,) 
             losses.append(loss)
             if(self.is_training):
