@@ -279,7 +279,7 @@ class POTARDecisionModel(nn.Module):
             # Predict a_0, a_1, ..., a_t
             act_output = self.a_decoder(pm_out, T=T)
         
-        rew_output = self.r_decoder(pm_out)
+        rew_output = self.r_decoder(wm_out)
         
         return obs_output, act_output, rew_output
 
