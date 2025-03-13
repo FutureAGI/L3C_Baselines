@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock, DiffusionLayers
+from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock, DiffusionLayers, FixedEncoderDecoder
 from airsoul.utils import format_cache, log_fatal
 
 class SADecisionModel(nn.Module):
@@ -123,18 +123,26 @@ class OPTARDecisionModel(nn.Module):
         if(self.rsa_type.lower() not in self.rsa_choice):
             log_fatal(f"rsa_type must be one of the following: {self.rsa_choice}, get {self.rsa_type}")
 
-        self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
-        self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
         self.r_decoder = ResidualMLPDecoder(config.reward_decode)
 
         if(config.action_diffusion.enable):
             self.a_diffusion = DiffusionLayers(config.action_diffusion)
+            self.a_mapping = FixedEncoderDecoder(low_dim=config.action_encode.input_size,
+                                                 high_dim=config.action_encode.hidden_size)
+            self.a_encoder = self.a_mapping.encoder
+            self.a_decoder = self.a_mapping.decoder
         else:
+            self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
             self.a_decoder = ResidualMLPDecoder(config.action_decode)
             
         if(config.state_diffusion.enable):
             self.s_diffusion = DiffusionLayers(config.state_diffusion)
+            self.s_mapping = FixedEncoderDecoder(low_dim=config.state_encode.input_size,
+                                                 high_dim=config.state_encode.hidden_size)
+            self.s_encoder = self.s_mapping.encoder
+            self.s_decoder = self.s_mapping.decoder
         else:
+            self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
             self.s_decoder = ResidualMLPDecoder(config.state_decode)
 
         if(self.config.state_encode.input_type == "Discrete"):

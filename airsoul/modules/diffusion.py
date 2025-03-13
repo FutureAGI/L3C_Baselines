@@ -76,9 +76,6 @@ class DiffusionLayers(nn.Module):
 
         self.prediction_type = config.prediction_type
 
-        self.condition_size = config.condition_size
-        self.hidden_size = config.hidden_size
-        self.t_embedding_size = config.t_embedding_size
         self.T = config.T
 
         model_name = config.diffusion_model_name
@@ -92,12 +89,16 @@ class DiffusionLayers(nn.Module):
                 dropout=config.basic_model.dropout,
                 use_cond_layer_norm=config.basic_model.cond_layer_norm
             )
+            self.condition_size = config.basic_model.condition_size
+            self.hidden_size = config.basic_model.hidden_size
         elif model_name == "latentlm":
             self.model = LatentLMDiffusionBlock(
                 mlp_ratio=config.latentlm.mlp_ratio,
                 hidden_size=config.latentlm.hidden_size,
                 drop=config.latentlm.dropout, 
                 diffusion_depth = config.latentlm.block_size)
+            self.condition_size = config.latentlm.hidden_size
+            self.hidden_size = config.latentlm.hidden_size
         
 
         self.inference_sample_steps = config.inference_sample_steps

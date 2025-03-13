@@ -48,7 +48,7 @@ class OmniRL(OPTARDecisionModel):
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
-            log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model)))
+            log_debug("Causal Block Parameters: {}".format(count_parameters(self.causal_model)))
 
     def sequential_loss(self, observations, 
                             prompts,
@@ -83,7 +83,14 @@ class OmniRL(OPTARDecisionModel):
                     self.loss_weight.dtype)
         if(use_loss_weight):
             loss_weight_s = self.loss_weight[ps:pe]
-            loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
+            if self.action_dtype == "Discrete":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
+            elif self.action_dtype == "Continuous":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0).unsqueeze(-1)
+                loss_weight_a = torch.mean(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
+        else:
+            if self.action_dtype == "Continuous":
+                loss_weight_a = torch.sum(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
 
         # World Model Loss - States and Rewards
         if self.state_dtype == "Discrete":
@@ -92,30 +99,33 @@ class OmniRL(OPTARDecisionModel):
                                         loss_type="ce",
                                         loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim,
-                                        need_cnt=True)
-        elif self.state_dtype == "Continuous" and not self.config.state_diffusion.enable:
-            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                        need_cnt=True)       
+        elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
+            if use_loss_weight: # If training
+                if self.config.state_diffusion.prediction_type == "sample":
+                    s_latent = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]), cond=wm_out)
+                    s_pred = self.s_decoder(s_latent)
+                    loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                                gt=observations[:, 1:], 
+                                                loss_type="mse",
+                                                loss_wht=loss_weight_s, 
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+                else:   
+                    loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]),
+                                                cond=wm_out,
+                                                mask=loss_weight_s,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+            else: # If testing 
+                s_latent = self.s_diffusion.inference(cond=wm_out)[-1]
+                s_pred = self.s_decoder(s_latent)
+                loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
                                         gt=observations[:, 1:], 
                                         loss_type="mse",
                                         loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
-        
-        elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
-            if self.config.decision_block.state_diffusion.prediction_type == "sample":
-                s_pred = self.s_diffusion.loss_DDPM(x0=observations[:, 1:], cond=wm_out)
-                loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
-                                            gt=observations[:, 1:], 
-                                            loss_type="mse",
-                                            loss_wht=loss_weight_s, 
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
-            else:    
-                loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=observations[:, 1:],
-                                            cond=wm_out,
-                                            mask=loss_weight_s,
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
                 
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
@@ -131,33 +141,41 @@ class OmniRL(OPTARDecisionModel):
                                     loss_wht=loss_weight_a, 
                                     reduce_dim=reduce_dim,
                                     need_cnt=True)
-        elif self.action_dtype == "Continuous" and not self.config.action_diffusion.enable:
-            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
-                                       gt=label_actions, 
-                                       loss_type="mse",
-                                       loss_wht=loss_weight_a, 
-                                       reduce_dim=reduce_dim,
-                                       need_cnt=True)
         elif self.action_dtype == "Continuous" and self.config.action_diffusion.enable:
-            if self.config.decision_block.action_diffusion.prediction_type == "sample":
-                a_pred = self.a_diffusion.loss_DDPM(x0=label_actions,cond=pm_out)
+            if use_loss_weight: # If training
+                if self.config.action_diffusion.prediction_type == "sample":
+                    a_latent = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),cond=pm_out)
+                    a_pred = self.a_decoder(a_latent)
+                    loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                        gt=label_actions, 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_a, 
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
+                else: 
+                    loss["pm"], loss["count_a"] = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),
+                                                cond=pm_out,
+                                                mask=loss_weight_a,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+            else: # If testing
+                a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+                a_pred = self.a_decoder(a_latent)
                 loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
                                        gt=label_actions, 
                                        loss_type="mse",
                                        loss_wht=loss_weight_a, 
                                        reduce_dim=reduce_dim,
                                        need_cnt=True)
-            else:
-                loss["pm"], loss["count_a"] = self.a_diffusion.loss_DDPM(x0=label_actions,
-                                            cond=pm_out,
-                                            mask=loss_weight_a,
-                                            reduce_dim=reduce_dim,
-                                            need_cnt=True)
         # Entropy Loss
-        loss["ent"] = weighted_loss(a_pred, 
-                                    loss_type="ent", 
-                                    loss_wht=loss_weight_a,
-                                    reduce_dim=reduce_dim)
+        if self.action_dtype == "Discrete" :
+            loss["ent"] = weighted_loss(a_pred, 
+                                        loss_type="ent", 
+                                        loss_wht=loss_weight_a,
+                                        reduce_dim=reduce_dim)
+        else:
+            loss["ent"] = 0.0
+        
         loss["causal-l2"] = parameters_regularization(self)
         return loss
     
