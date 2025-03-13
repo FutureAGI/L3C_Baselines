@@ -80,6 +80,25 @@ class AnyMDPDataSet(AnyMDPDataSetBase):
 
         # Orders: O-P-T-A-R and Action Label
         return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
+    
+class AnyMDPv2DataSet(AnyMDPDataSetBase):
+    def __getitem__(self, index):
+        path = self.file_list[index]
+
+        data = self._load_and_process_data(path)
+        
+        if any(arr is None for arr in data):
+            return None
+
+        obs_arr = torch.from_numpy(data[0]).float()
+        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
+        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
+        bact_arr = torch.from_numpy(data[3]).float()
+        rwd_arr = torch.from_numpy(data[4]).float()
+        lact_arr = torch.from_numpy(data[5]).float()
+
+        # Orders: O-P-T-A-R and Action Label
+        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
 
 class AnyMDPDataSetContinuousState(AnyMDPDataSetBase):
     def __getitem__(self, index):

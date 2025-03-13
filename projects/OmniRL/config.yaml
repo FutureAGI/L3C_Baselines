@@ -84,6 +84,26 @@ model_config:
       dropout: 0.0
       is_frozen: False
 
+  action_diffusion:
+      enable: False
+      T: 20
+      hidden_size: 512
+      condition_size: 512
+      inner_hidden_size: 2048
+      beta: [0.05, 0.20]
+      dropout: 0.0
+      is_frozen: False
+
+  state_diffusion:
+      enable: False
+      T: 20
+      hidden_size: 512
+      condition_size: 512
+      inner_hidden_size: 2048
+      beta: [0.05, 0.20]
+      dropout: 0.0
+      is_frozen: False
+
   causal_block_bak_1: # change to causal_block if use this block
       model_type: TRANSFORMER
       num_layers: 6
