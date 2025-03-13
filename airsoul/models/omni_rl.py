@@ -12,9 +12,9 @@ from airsoul.utils import weighted_loss, sa_dropout, img_pro, img_post
 from airsoul.utils import parameters_regularization, count_parameters
 from airsoul.utils import log_debug, log_warn, log_fatal
 from airsoul.modules import ImageEncoder, ImageDecoder
-from .decision_model import OPTARDecisionModel
+from .decision_model import POTARDecisionModel
 
-class OmniRL(OPTARDecisionModel):
+class OmniRL(POTARDecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 
@@ -365,8 +365,6 @@ class OmniRL(OPTARDecisionModel):
             update_memory=True)
         
         return new_cache
-
-        
 
 if __name__=="__main__":
     from utils import Configure

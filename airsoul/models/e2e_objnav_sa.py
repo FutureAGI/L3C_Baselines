@@ -11,7 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from airsoul.utils import weighted_loss, img_pro, img_post
 from airsoul.utils import parameters_regularization, count_parameters
 from airsoul.modules import ImageEncoder, ImageDecoder, VAE
-from .decision_model import SADecisionModel
+from .decision_model import SADecisionModel, POTARDecisionModel
 
 class E2EObjNavSA(nn.Module):
     def __init__(self, config, verbose=False): 
@@ -23,7 +23,7 @@ class E2EObjNavSA(nn.Module):
 
         self.img_decoder = ImageDecoder(config.image_decoder_block)
 
-        self.decision_model = SADecisionModel(config.decision_block)
+        self.decision_model = POTARDecisionModel(config.decision_block)
 
         self.vae = VAE(config.vae_latent_size, self.img_encoder, self.img_decoder) 
 
@@ -45,7 +45,12 @@ class E2EObjNavSA(nn.Module):
                 count_parameters(self.img_decoder), 
                 count_parameters(self.decision_model)))
         
-    def forward(self, observations, actions, cache=None, need_cache=True, state_dropout=0.0, update_memory=True):
+    def forward(self, observations, 
+                    prompts,
+                    tags,
+                    actions,
+                    rewards,
+                    cache=None, need_cache=True, state_dropout=0.0,update_memory=True):
         """
         Input Size:
             observations:[B, NT, C, W, H]
@@ -58,8 +63,8 @@ class E2EObjNavSA(nn.Module):
         NT = actions.shape[1]
         with torch.no_grad():
             z_rec, _ = self.vae(observations)
-
-        wm_out, pm_out, new_cache = self.decision_model.forward(z_rec, actions, 
+        wm_out, pm_out, new_cache = self.decision_model(
+                z_rec, prompts, tags, actions, rewards,
                 cache=cache, need_cache=need_cache, state_dropout=state_dropout, 
                 update_memory=update_memory)
 
@@ -74,7 +79,12 @@ class E2EObjNavSA(nn.Module):
     def reset(self):
         self.decision_model.reset()
 
-    def sequential_loss(self, observations, behavior_actions, label_actions, 
+    def sequential_loss(self, observations, 
+                        prompts,
+                        tags,
+                        behavior_actions, 
+                        rewards, 
+                        label_actions, 
                         additional_info=None, # Kept for passing additional information
                         state_dropout=0.0, 
                         update_memory=True,
@@ -97,8 +107,15 @@ class E2EObjNavSA(nn.Module):
         pe = ps + seq_len
 
         # Predict the latent representation of action and next frame (World Model)
-        z_rec, wm_out, pm_out, cache = self.forward(inputs[:, :-1], behavior_actions, 
-                cache=None, need_cache=False, state_dropout=state_dropout,
+        z_rec, wm_out, pm_out, cache = self.forward(
+                inputs[:, :-1], 
+                prompts,
+                tags,
+                behavior_actions, 
+                rewards,
+                cache=None, 
+                need_cache=False, 
+                state_dropout=state_dropout,
                 update_memory=update_memory)
         
         z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
@@ -222,192 +239,285 @@ class E2EObjNavSA(nn.Module):
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
         return loss
-        
-    def expand_discrete_action(self, tensor, num_classes=17):
-        tensor = tensor.long()  
-        one_hot_matrix = torch.eye(num_classes, device=tensor.device)
-        one_hot_tensor = one_hot_matrix[tensor.squeeze(0)] 
-        one_hot_tensor = one_hot_tensor.unsqueeze(0).to(torch.float)  
-        return one_hot_tensor
+    
+    def preprocess_others(self, 
+                   vals, 
+                   single_batch=True, 
+                   single_step=True,
+                   default_dim=None):
+        if(vals is None):
+            return None
 
-    def inference_step_by_step(self, observations, actions, 
-                               temp, start_position, device, 
-                               n_step=1, cache=None, verbose=True):
-        """
-        Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
-               observations: s_{tc}, ... s_{t}
-               actions: a_{tc}, ..., a_{t-1}
-               temp: temperature
-        Returns:
-            obs_pred: numpy.array [n, W, H, C], s_{t+1}, ..., s_{t+n}
-            act_pred: numpy.array [n], a_{t}, ..., a_{t+n-1}
-            new_cache: torch.array caches up to s_0, a_0, ..., s_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
-        """
-        obss = numpy.array(observations, dtype=numpy.float32)
-        acts = numpy.array(actions, dtype=numpy.int64)
-        Nobs, W, H, C = obss.shape
-        (No,) = acts.shape
-
-        assert Nobs == No + 1
-
-        valid_obs = torch.from_numpy(img_pro(obss)).float().to(device)
-        valid_obs = valid_obs.permute(0, 3, 1, 2).unsqueeze(0)
-
-        if(No < 1):
-            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+        if(isinstance(vals, numpy.ndarray)):
+            vals = torch.tensor(vals, device=next(self.parameters()).device)
+        elif(isinstance(vals, torch.Tensor)):
+            vals = vals.to(next(self.parameters()).device)
         else:
-            valid_act = torch.from_numpy(acts).int()
-            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+            raise TypeError(f"Unsupported type of values: {type(vals)}")
+        
+        if(single_batch):
+            vals = vals.unsqueeze(0)
+        if(single_step):
+            vals = vals.unsqueeze(1)
+        
+        if(default_dim is not None):
+            assert vals.dim == default_dim + 2, f"Input dimension of actions must be {default_dim + 2}, acquire {vals.dim}"
 
-        # Update the cache first
-        # Only use ground truth
-        if(Nobs > 1):
-            with torch.no_grad():
-                z_rec, z_pred, a_pred, valid_cache  = self.forward(
-                        valid_obs[:, :-1], valid_act[:, :-1], 
-                        cache=cache, need_cache=True,
-                        update_memory=True)
+        return vals
+
+    def preprocess_observation(self, 
+                   observations, 
+                   single_batch=True, 
+                   single_step=True, 
+                   raw_images=True):
+        if(observations is None):
+            return None
+
+        if(isinstance(observations, numpy.ndarray)):
+            obs = torch.tensor(observations, device=next(self.parameters()).device)
+        elif(isinstance(observations, torch.Tensor)):
+            obs = observations.to(next(self.parameters()).device)
         else:
-            valid_cache = cache
+            raise TypeError(f"Unsupported type of observations: {type(observations)}")
+        
+        if(single_batch):
+            obs = obs.unsqueeze(0)
+        if(single_step):
+            obs = obs.unsqueeze(1)
 
-        # Inference Action First
-        pred_obs_list = []
-        pred_act_list = []
-        updated_cache = valid_cache
-        n_act = valid_act[:, -1:]
-        z_rec, _ = self.vae(valid_obs[:, -1:])
-
-        for step in range(n_step):
+        if(raw_images):
+            assert obs.dim == 5, f"Input dimension of observations of raw images must be 5, acquire {obs.dim}"
             with torch.no_grad():
-                # Temporal Encoders
-                wm_out, pm_out, _ = self.decision_model.forward(z_rec, n_act, cache=updated_cache, need_cache=True)
-                _, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
-
-                if self.config.decision_block.state_diffusion.enable:
-                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
-                if self.config.decision_block.action_diffusion.enable:
-                    action = self.decision_model.a_diffusion.inference(pm_out)[-1]
-                else:
-                    action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
-
-                n_act[:, 0] = action
-                pred_act_list.append(action.squeeze(0).cpu().numpy())
-                if(verbose):
-                    print(f"Action: {valid_act[:, -1]} Raw Output: {a_pred[:, -1]}")
-
-                # Inference Next Observation based on Sampled Action
-                # Do not update the memory based on current imagination
-                wm_out, pm_out, updated_cache = self.decision_model.forward(z_rec, n_act, 
-                        cache=updated_cache, need_cache=True, 
-                        update_memory=(step==0))
-                
-                z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
-
-                if self.config.decision_block.state_diffusion.enable:
-                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
-                if self.config.decision_block.action_diffusion.enable:
-                    a_pred = self.decision_model.a_diffusion.inference(pm_out)[-1]
-
-                if self.config.decision_block.action_encoder.input_type == "Discrete":
-                    action = torch.multinomial(a_pred[:, 0], num_samples=1).squeeze(1)
-
-                # Only the first step uses the ground truth
-                if(step == 0):
-                    valid_cache = updated_cache
-
-                # Decode the prediction
-                pred_obs = self.vae.decoding(z_pred)
-                pred_obs = img_post(pred_obs)
-
-                pred_obs_list.append(pred_obs.squeeze(1).squeeze(0).permute(1, 2, 0).cpu().numpy())
-
-                # Do auto-regression for n_step
-                z_rec = z_pred
-
-        return pred_obs_list, pred_act_list, valid_cache
-
-
-    def generate_step_by_step(self, observations, actions, actions_gt,
-                              temp, drop_out, device, 
-                              in_context_len, len_causal,
-                              n_step=1, cache=None, verbose=True
-                              ):
-        """
-        Given: cache - from s_0, a_0, ..., s_{tc}, a_{tc}
-               observations: s_{tc}, ... s_{t}
-               actions: a_{tc}, ..., a_{t-1}
-               actions_gt: a_{t},...a_{t+n}
-        Returns:
-            obs_pred: numpy.array [n, W, H, C], s_{t+1}, ..., s_{t+n}
-            new_cache: torch.array caches up to s_0, a_0, ..., s_{t}, a_{t} (Notice not to t+n, as t+1 to t+n are imagined)
-        """
-        obss = numpy.array(observations, dtype=numpy.float32)
-        acts = numpy.array(actions, dtype=numpy.int64)
-        Nobs, W, H, C = obss.shape
-        (No,) = acts.shape
-
-        assert Nobs == No + 1
-
-        valid_obs = torch.from_numpy(img_pro(obss)).float().to(device)
-        valid_obs = valid_obs.permute(0, 3, 1, 2).unsqueeze(0)
-
-        if(No < 1):
-            valid_act = torch.zeros((1, 1), dtype=torch.int64).to(device)
+                z_rec, _ = self.vae(obs)
         else:
-            valid_act = torch.from_numpy(acts).int()
-            valid_act = torch.cat((valid_act, torch.zeros((1,), dtype=torch.int64)), dim=0).unsqueeze(0).to(device)
+            z_rec = obs
 
-        # Update the cache first
-        # Only use ground truth
-        cache = None
+        return z_rec
+    
+    def preprocess(self, 
+                observations, 
+                prompts,
+                tags,
+                actions,
+                rewards, 
+                single_batch=True, 
+                single_step=True, 
+                raw_images=True):
+        z_rec = self.preprocess_observation(observations, single_batch=single_batch, single_step=single_step, raw_images=raw_images)
+        act = self.preprocess_others(actions, single_batch=single_batch, single_step=single_step, default_dim=0)
+        prompts = self.preprocess_others(prompts, single_batch=single_batch, single_step=single_step, default_dim=1)
+        tags = self.preprocess_others(tags, single_batch=single_batch, single_step=single_step, default_dim=0)
+        rewards = self.preprocess_others(rewards, single_batch=single_batch, single_step=single_step, default_dim=0)
+
+        return z_rec, prompts, tags, actions, rewards
+
+    def in_context_learn(self, 
+                         observations,
+                         prompts,
+                         tags, 
+                         actions,
+                         rewards,
+                         cache=None,
+                         need_cache=False,
+                         single_batch=True,
+                         single_step=False,
+                         raw_images=True):
+        # Inputs:
+        #   observations: [B, NT, C, W, H]
+        #   actions: [B, NT]
+        # Outputs:
+        #   new_cache: [B, NC, H] if need_cache is True
+
+        o,p,t,a,r = self.preprocess(
+                        observations,
+                        prompts,
+                        tags, 
+                        actions,
+                        rewards,
+                        single_batch=single_batch,
+                        single_step=single_step, 
+                        raw_images=raw_images)
+
+        _, _, new_cache = self.decision_model(
+                o, p, t, a, r, 
+                cache=cache, need_cache=need_cache, 
+                update_memory=True)
+
+        return new_cache
+    
+    def sample_action_discrete(self, logits, temperature = 1.0):
+        # Inputs:
+        #   logits: [B, D]
+        # Outputs:
+        #   action: [B]
+        return torch.multinomial(logits / temperature, num_samples=1)
+    
+    def generate_states_only(self, 
+                            current_observation, 
+                            action_trajectory,
+                            history_observation=None,
+                            history_action=None,
+                            history_update_memory=True, 
+                            autoregression_update_memory=False,
+                            cache=None,
+                            single_batch=True,
+                            history_single_step=False,
+                            future_single_step=False,
+                            raw_images=True,
+                            need_numpy=True):
+        # Generate state autoregressively in latent space
+        # Inputs:
+        #   history_observations: o_1, o_2, ..., o_t
+        #   history_actions: a_1, a_2, ..., a_t
+        #   current_observation: o_{t+1}
+        #   action_trajectory: a_{t+1}, a_{t+2}, ..., a_{t+n}
+        # Outputs:
+        #   predict_observations: o_{t+1}, ..., o_{t+n}
+
+        his_obs, his_act = self.preprocess(
+                    history_observation, 
+                    history_action, 
+                    single_batch=single_batch, 
+                    single_step=history_single_step, 
+                    raw_images=raw_images)
+
+        obs = self.preprocess_observation(
+            observation, 
+            single_batch=single_batch, 
+            single_step=True, 
+            raw_images=raw_images)
         
-        if(Nobs > 1):
+        act = self.preprocess_others(action_trajectory, 
+                                     single_batch=single_batch,
+                                     single_step=future_single_step)
+
+        if(autoregression_update_memory and not history_update_memory):
+            raise ValueError("Autoregression update memory cannot be True when history update memory is False")
+
+        # If do not update memory, then we need to cache it to keep consistency
+        if(not history_update_memory):
+            history_need_cache = True
+        if(not autoregression_update_memory):
+            autoregression_need_cache = True
+
+
+        if(his_obs is not None):
             with torch.no_grad():
-                z_rec, z_pred, a_pred, valid_cache  = self.forward(
-                        valid_obs[:, :-1], valid_act[:, :-1], 
-                        cache=cache, need_cache=True,
-                        update_memory=True)
+                _, _, cache = self.decision_model(his_obs,    
+                                                    his_act, 
+                                                    cache=cache,need_cache=history_need_cache, 
+                                                    update_memory=history_update_memory)
+        
+        obs_out = [obs]
+        for i in range(act.shape[1]):
+            with torch.no_grad():
+                wm_out, pm_out, cache = self.decision_model(obs_out[-1], 
+                                                act[:, i:i+1], 
+                                                cache=cache, need_cache=autoregression_need_cache, 
+                                                update_memory=autoregression_update_memory)
+                
+                obs_n, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                obs_out.append(obs_n)
+
+        # Post Processing
+        obs_out = torch.cat(obs_out, dim=1)
+        if(raw_images):
+            obs_out = img_post(self.vae.decoding(obs_out))
+        if(need_numpy):
+            obs_out = obs_out.cpu().detach().numpy()
+
+        return obs_out, cache
+    
+    def generate_states_and_action(self, 
+                            current_observation, 
+                            future_steps=1,
+                            history_observation=None,
+                            history_action=None,
+                            history_update_memory=True, 
+                            autoregression_update_memory=False,
+                            cache=None,
+                            single_batch=True,
+                            history_single_step=False,
+                            raw_images=True,
+                            need_predict_states=True,
+                            need_numpy=True):
+        # Generate state autoregressively in latent space
+        # Inputs:
+        #   history_observations: o_1, o_2, ..., o_t
+        #   history_actions: a_1, a_2, ..., a_t
+        #   current_observation: o_{t+1}
+        #   future_steps: n
+        # Outputs:
+        #   predict_observations: o_{t+1}, ..., o_{t+n}
+        #   predict_actions: a_{t}, ..., a_{t+n-1}
+        #   if(n = 1) and need_predict_states is False:
+        #       return predict_actions a_{t} only
+
+        his_obs, his_act = self.preprocess(
+                    history_observation, 
+                    history_action, 
+                    single_batch=single_batch, 
+                    single_step=history_single_step, 
+                    raw_images=raw_images)
+
+        obs = self.preprocess_observation(
+            observation, 
+            single_batch=single_batch, 
+            single_step=True, 
+            raw_images=raw_images)
+
+        ext_act = torch.zeros((1, 1), dtype=torch.int64).to(next(self.parameters()).device)
+
+        if(autoregression_update_memory and not history_update_memory):
+            raise ValueError("Autoregression update memory cannot be True when history update memory is False")
+
+        # If do not update memory, then we need to cache it to keep consistency
+        if(not history_update_memory):
+            history_need_cache = True
+        if(not autoregression_update_memory):
+            autoregression_need_cache = True
+
+        if(his_obs is not None):
+            with torch.no_grad():
+                _, _, cache = self.decision_model(his_obs,    
+                                                    his_act, 
+                                                    cache=cache,need_cache=history_need_cache, 
+                                                    update_memory=history_update_memory)
+        
+        obs_out = [obs]
+        act_out = []
+        for i in range(future_steps):
+            with torch.no_grad():
+                # Step 1: Predict the next_action, do not update memory and cache
+                wm_out, pm_out, _ = self.decision_model(obs_out[-1], 
+                                                ext_act, 
+                                                cache=cache, need_cache=False, 
+                                                update_memory=False)
+                _, act_pred = self.decision_model.post_decoder(wm_out, pm_out)
+                act_out.append(self.sample_action_discrete(act_pred))
+
+                # Step 2: Predict the next_observation
+                if(future_steps > 1 or need_predict_states):
+                    wm_out, pm_out, cache = self.decision_model(obs_out[-1], 
+                                                    act_out[-1], 
+                                                    cache=cache, need_cache=autoregression_need_cache, 
+                                                    update_memory=autoregression_update_memory)
+                    obs_n, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                    obs_out.append(obs_n)
+
+        # Post Processing
+        if(len(obs_out) > 1):
+            obs_out = torch.cat(obs_out[1:], dim=1)
+            if(raw_images):
+                obs_out = img_post(self.vae.decoding(obs_out))
         else:
-            valid_cache = cache
+            obs_out = None
+        act_out = torch.cat(act_out, dim=1)
+        if(need_numpy):
+            obs_out = obs_out.cpu().detach().numpy()
+            act_out = act_out.cpu().detach().numpy()
 
-        pred_obs_list = []
-        updated_cache = valid_cache
-        
-        actions_gt =  numpy.array(actions_gt, dtype=numpy.int64)
-        actions_gt = torch.from_numpy(actions_gt).int().to(device)
-        actions_gt = actions_gt.unsqueeze(0)
-
-        ob = valid_obs[:, -1:]
-        z_rec, _ = self.vae(ob)
-
-        for step in range(n_step):
-            with torch.no_grad():
-                # Temporal Encoders
-                
-                action_input = actions_gt[:, step:step+1]
-
-                wm_out, pm_out, updated_cache = self.decision_model.forward(z_rec, action_input, 
-                        cache=updated_cache, need_cache=True, 
-                        update_memory=False)
-                
-                z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
-
-                if self.config.decision_block.state_diffusion.enable:
-                    z_pred = self.decision_model.s_diffusion.inference(wm_out)[-1]
-
-                # Decode the prediction
-                pred_obs = self.vae.decoding(z_pred)
-                pred_obs = img_post(pred_obs)
-
-                pred_obs_list.append(pred_obs.squeeze(1).squeeze(0).permute(1, 2, 0).cpu().numpy())
-
-                # Do auto-regression for n_step
-                z_rec = z_pred
-                
-
-        return pred_obs_list    
-        
-        
+        return obs_out, act_out, cache
 
 if __name__=="__main__":
     from utils import Configure

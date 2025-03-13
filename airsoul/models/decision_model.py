@@ -96,7 +96,7 @@ class SADecisionModel(nn.Module):
         self.causal_model.reset()
 
 
-class OPTARDecisionModel(nn.Module):
+class POTARDecisionModel(nn.Module):
     """
     Take Observations, actions and reward; output next state, action and reward.
     """
@@ -109,7 +109,7 @@ class OPTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["sptar", "star", "sar", "sta", "sa"]
+        self.rsa_choice =  ["potar", "pota", "oar", "ota", "oa"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the s
