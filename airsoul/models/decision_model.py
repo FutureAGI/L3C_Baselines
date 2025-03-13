@@ -123,7 +123,8 @@ class POTARDecisionModel(nn.Module):
         if(self.rsa_type.lower() not in self.rsa_choice):
             log_fatal(f"rsa_type must be one of the following: {self.rsa_choice}, get {self.rsa_type}")
 
-        self.r_decoder = ResidualMLPDecoder(config.reward_decode)
+        if(self.rsa_type.find('r') > -1):
+            self.r_decoder = ResidualMLPDecoder(config.reward_decode)
 
         if(config.action_diffusion.enable):
             self.a_diffusion = DiffusionLayers(config.action_diffusion)
@@ -159,6 +160,8 @@ class POTARDecisionModel(nn.Module):
 
         type_embeddings = torch.randn(1, 1, self.rsa_occ, self.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
+        mask_embeddings = torch.randn(1, 1, config.state_encode.input_size)
+        self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
         if("p" in self.rsa_type):
             self.p_encoder = MLPEncoder(config.prompt_encode)
@@ -192,7 +195,7 @@ class POTARDecisionModel(nn.Module):
             self.r_included = False
 
     def forward(self, o_arr, p_arr, t_arr, a_arr, r_arr, 
-                cache=None, need_cache=True, T=1.0, update_memory=True):
+                cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -222,14 +225,26 @@ class POTARDecisionModel(nn.Module):
             assert t_arr.shape[:2] == o_arr.shape[:2]            
 
         # Add state dropouts
-        device = o_arr.device
+        if not self.s_discrete and state_dropout > 0.0:
+            H = o_arr.shape[2]
+            device = o_arr.device
+            p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            eps = torch.randn((B, NT, H)).to(device)
+            dp_eps = torch.bernoulli(p_noise)
+            dp_mask = torch.bernoulli(p_mask)
+            # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+            observation_in = o_arr + eps * dp_eps
+            observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+        else:
+            observation_in = o_arr
 
         if(self.s_discrete):
-            o_arr = torch.where(o_arr<0, torch.full_like(o_arr, self.s_dim), o_arr)
+            observation_in = torch.where(observation_in<0, torch.full_like(observation_in, self.s_dim), observation_in)
         if(self.a_discrete):
             a_arr = torch.where(a_arr<0, torch.full_like(a_arr, self.a_dim), a_arr)
 
-        o_in = self.s_encoder(o_arr).view(B, NT, 1, -1)
+        o_in = self.s_encoder(observation_in).view(B, NT, 1, -1)
         a_in = self.a_encoder(a_arr).view(B, NT, 1, -1)
 
         inputs = [o_in, a_in]
@@ -279,7 +294,8 @@ class POTARDecisionModel(nn.Module):
             # Predict a_0, a_1, ..., a_t
             act_output = self.a_decoder(pm_out, T=T)
         
-        rew_output = self.r_decoder(wm_out)
+        if(self.rsa_type.find('r') > -1):
+            rew_output = self.r_decoder(wm_out)
         
         return obs_output, act_output, rew_output
 

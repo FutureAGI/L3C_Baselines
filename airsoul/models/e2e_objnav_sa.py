@@ -35,6 +35,8 @@ class E2EObjNavSA(nn.Module):
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
+        self.state_dtype = config.decision_block.state_encode.input_type
+        self.action_dtype = config.decision_block.action_encode.input_type
 
         self.policy_loss = config.policy_loss_type.lower()
 
@@ -79,8 +81,8 @@ class E2EObjNavSA(nn.Module):
     def reset(self):
         self.decision_model.reset()
 
-    def sequential_loss(self, observations, 
-                        prompts,
+    def sequential_loss(self, prompts, 
+                        observations,
                         tags,
                         behavior_actions, 
                         rewards, 
@@ -155,7 +157,7 @@ class E2EObjNavSA(nn.Module):
             # World Model Loss - Raw Image
             obs_pred = self.vae.decoding(z_pred)
             loss["wm-raw"] = weighted_loss(obs_pred, 
-                                        loss_type="psnr",
+                                        loss_type="mse",
                                         gt=inputs[:, 1:], 
                                         loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim)
@@ -178,9 +180,9 @@ class E2EObjNavSA(nn.Module):
                     # World Model Loss - Raw Image
                     obs_pred = self.vae.decoding(z_pred)
                     loss["wm-raw"] = weighted_loss(obs_pred, 
-                                                loss_type="psnr",
+                                                loss_type="mse",
                                                 gt=inputs[:, 1:], 
-                                                loss_wht=loss_weight_s, 
+                                                loss_wht=loss_weight_s.unsqueeze(0), 
                                                 reduce_dim=reduce_dim)
                 else:
                     loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
@@ -199,13 +201,13 @@ class E2EObjNavSA(nn.Module):
                                                 need_cnt=True)
                 obs_pred = self.vae.decoding(z_pred)
                 loss["wm-raw"] = weighted_loss(obs_pred, 
-                                            loss_type="psnr",
+                                            loss_type="mse",
                                             gt=inputs[:, 1:], 
                                             loss_wht=loss_weight_s, 
                                             reduce_dim=reduce_dim)
 
         # Decision Model Loss
-        if self.config.decision_block.action_encode.input_type == "Discrete":
+        if self.action_dtype == "Discrete":
             if(self.policy_loss == 'crossentropy'):
                 assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
                 truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
