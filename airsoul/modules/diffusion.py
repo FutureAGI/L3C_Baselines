@@ -3,6 +3,7 @@ import math, numpy
 from torch import nn
 from torch.nn import functional as F
 from airsoul.utils import weighted_loss
+from airsoul.utils import weighted_loss
 
 class BasicModel(nn.Module):
     def __init__(self, 
