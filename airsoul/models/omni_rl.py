@@ -258,7 +258,8 @@ class OmniRL(POTARDecisionModel):
                 act_in = a_pred
                 act_out = act_in.squeeze()
         else:
-            act_out = self.a_diffusion.inference(pm_out)[-1]
+            a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+            act_out = self.a_decoder(a_latent)
 
         act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
@@ -282,7 +283,8 @@ class OmniRL(POTARDecisionModel):
             if not self.config.state_diffusion.enable:
                 state = o_pred.detach().cpu().squeeze()
             else:
-                o_pred = self.s_diffusion.inference(wm_out)[-1]
+                o_latent = self.s_diffusion.inference(cond=wm_out)[-1]
+                o_pred = self.s_decoder(o_latent)
                 state = o_pred.detach().cpu().squeeze()
                 
             reward = r_pred.detach().cpu().squeeze()

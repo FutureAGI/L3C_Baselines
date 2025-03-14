@@ -109,7 +109,7 @@ class POTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["potar", "pota", "oar", "ota", "oa"]
+        self.rsa_choice =  ["potar", "pota", "poa", "oar", "ota", "oa"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the observation
