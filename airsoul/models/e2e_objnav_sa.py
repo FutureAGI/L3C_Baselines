@@ -35,6 +35,8 @@ class E2EObjNavSA(nn.Module):
         self.register_buffer('loss_weight', loss_weight)
 
         self.nactions = config.action_dim
+        self.state_dtype = config.decision_block.state_encode.input_type
+        self.action_dtype = config.decision_block.action_encode.input_type
 
         self.policy_loss = config.policy_loss_type.lower()
 
@@ -79,8 +81,8 @@ class E2EObjNavSA(nn.Module):
     def reset(self):
         self.decision_model.reset()
 
-    def sequential_loss(self, observations, 
-                        prompts,
+    def sequential_loss(self, prompts, 
+                        observations,
                         tags,
                         behavior_actions, 
                         rewards, 
@@ -89,6 +91,7 @@ class E2EObjNavSA(nn.Module):
                         state_dropout=0.0, 
                         update_memory=True,
                         use_loss_weight=True,
+                        is_training=True,
                         reduce_dim=1):
                         
         # print("label_actions  ",label_actions.size())
@@ -118,7 +121,7 @@ class E2EObjNavSA(nn.Module):
                 state_dropout=state_dropout,
                 update_memory=update_memory)
         
-        z_pred, a_pred = self.decision_model.post_decoder(wm_out, pm_out)
+        z_pred, a_pred, r_pred = self.decision_model.post_decoder(wm_out, pm_out)
         
         # Encode the last frame to latent space
         with torch.no_grad():
@@ -128,54 +131,63 @@ class E2EObjNavSA(nn.Module):
         # Calculate the loss information
         loss = dict()
 
+        loss_weight_s = None
+        loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
+                    self.loss_weight.dtype)
         if(use_loss_weight):
-            loss_weight = self.loss_weight[ps:pe]
+            loss_weight_s = self.loss_weight[ps:pe]
+            if self.action_dtype == "Discrete":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
+            elif self.action_dtype == "Continuous":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0).unsqueeze(-1)
+                loss_weight_a = torch.mean(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
         else:
-            loss_weight = None
+            if self.action_dtype == "Continuous":
+                loss_weight_a = torch.sum(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
 
         if not self.config.decision_block.state_diffusion.enable:
             # World Model Loss - Latent Space
             loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                             loss_type="mse",
                                             gt=z_rec_l[:, 1:], 
-                                            loss_wht=loss_weight, 
+                                            loss_wht=loss_weight_s, 
                                             reduce_dim=reduce_dim,
                                             need_cnt=True)
 
             # World Model Loss - Raw Image
             obs_pred = self.vae.decoding(z_pred)
             loss["wm-raw"] = weighted_loss(obs_pred, 
-                                        loss_type="psnr",
+                                        loss_type="mse",
                                         gt=inputs[:, 1:], 
-                                        loss_wht=loss_weight, 
+                                        loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim)
         else:
-            if use_loss_weight:
+            if is_training:
                 if self.config.decision_block.state_diffusion.prediction_type == "sample":
                     z_pred = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
                                                         cond=wm_out,
-                                                        mask=loss_weight,
+                                                        mask=loss_weight_s,
                                                         reduce_dim=reduce_dim,
                                                         need_cnt=True)
                     # World Model Loss - Latent Space
                     loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                                     loss_type="mse",
                                                     gt=z_rec_l[:, 1:], 
-                                                    loss_wht=loss_weight, 
+                                                    loss_wht=loss_weight_s, 
                                                     reduce_dim=reduce_dim,
                                                     need_cnt=True)
 
                     # World Model Loss - Raw Image
                     obs_pred = self.vae.decoding(z_pred)
                     loss["wm-raw"] = weighted_loss(obs_pred, 
-                                                loss_type="psnr",
+                                                loss_type="mse",
                                                 gt=inputs[:, 1:], 
-                                                loss_wht=loss_weight, 
+                                                loss_wht=loss_weight_s.unsqueeze(0), 
                                                 reduce_dim=reduce_dim)
                 else:
                     loss["wm-latent"], loss["count_wm"] = self.decision_model.s_diffusion.loss_DDPM(x0=z_rec_l[:, 1:],
                                                     cond=wm_out,
-                                                    mask=loss_weight,
+                                                    mask=loss_weight_s,
                                                     reduce_dim=reduce_dim,
                                                     need_cnt=True)
                     loss["wm-raw"] = 0.0
@@ -184,57 +196,66 @@ class E2EObjNavSA(nn.Module):
                 loss["wm-latent"], loss["count_wm"] = weighted_loss(z_pred, 
                                                 loss_type="mse",
                                                 gt=z_rec_l[:, 1:], 
-                                                loss_wht=loss_weight, 
+                                                loss_wht=loss_weight_s, 
                                                 reduce_dim=reduce_dim,
                                                 need_cnt=True)
                 obs_pred = self.vae.decoding(z_pred)
                 loss["wm-raw"] = weighted_loss(obs_pred, 
-                                            loss_type="psnr",
+                                            loss_type="mse",
                                             gt=inputs[:, 1:], 
-                                            loss_wht=loss_weight, 
+                                            loss_wht=loss_weight_s, 
                                             reduce_dim=reduce_dim)
 
         # Decision Model Loss
-        if not self.config.decision_block.action_diffusion.enable:
+        if self.action_dtype == "Discrete":
             if(self.policy_loss == 'crossentropy'):
                 assert label_actions.dtype in [torch.int64, torch.int32, torch.uint8]
-                loss_weight = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
-                if(use_loss_weight):
-                    loss_weight = loss_weight * self.loss_weight[ps:pe]
                 truncated_actions = torch.clip(label_actions, 0, self.nactions - 1)
                 loss["pm"], loss["count_pm"] = weighted_loss(a_pred,
                                         loss_type="ce",
                                         gt=truncated_actions, 
-                                        loss_wht=loss_weight, 
+                                        loss_wht=loss_weight_a, 
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
             elif(self.policy_loss == 'mse'):
                 if(use_loss_weight):
-                    loss_weight = self.loss_weight[ps:pe]
+                    loss_weight_a = self.loss_weight[ps:pe]
                 else:
-                    loss_weight = None
+                    loss_weight_a = None
                 loss["pm"], loss["count_pm"] = weighted_loss(a_pred,
                                         loss_type="mse", 
                                         gt=label_actions, 
-                                        loss_wht=loss_weight, 
+                                        loss_wht=loss_weight_a, 
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
             else:
                 log_fatal(f"no such policy loss type: {self.policy_loss}")
-        else:
-            if self.config.decision_block.action_encode.input_type == "Discrete":
-                label_actions_tensor = self.expand_discrete_action(label_actions, self.config.decision_block.action_encode.input_size)
-                loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions_tensor,
-                                        cond=pm_out,
-                                        mask=loss_weight,
+        elif self.config.decision_block.action_diffusion.enable and self.config.decision_block.action_encode.input_type == "Continuous":
+            if is_training: # If training
+                if self.config.action_diffusion.prediction_type == "sample":
+                    a_latent = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),cond=pm_out)
+                    a_pred = self.a_decoder(a_latent)
+                    loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                        gt=label_actions, 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_a, 
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
+                else:
+                    loss["pm"], loss["count_a"] = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),
+                                                cond=pm_out,
+                                                mask=loss_weight_a,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
             else:
-                loss["pm"], loss["count_pm"] = self.decision_model.a_diffusion.loss_DDPM(x0=label_actions,
-                                        cond=pm_out,
-                                        mask=loss_weight,
-                                        reduce_dim=reduce_dim,
-                                        need_cnt=True)
+                a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+                a_pred = self.a_decoder(a_latent)
+                loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                       gt=label_actions, 
+                                       loss_type="mse",
+                                       loss_wht=loss_weight_a, 
+                                       reduce_dim=reduce_dim,
+                                       need_cnt=True)
             
         loss["causal-l2"] = parameters_regularization(self.decision_model)
 
@@ -416,7 +437,9 @@ class E2EObjNavSA(nn.Module):
                                                 cache=cache, need_cache=autoregression_need_cache, 
                                                 update_memory=autoregression_update_memory)
                 
-                obs_n, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                obs_n, _, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                if self.config.decision_block.state_diffusion.enable:
+                    obs_n = self.decision_model.s_diffusion.inference(cond=wm_out)[-1]
                 obs_out.append(obs_n)
 
         # Post Processing
@@ -493,7 +516,9 @@ class E2EObjNavSA(nn.Module):
                                                 ext_act, 
                                                 cache=cache, need_cache=False, 
                                                 update_memory=False)
-                _, act_pred = self.decision_model.post_decoder(wm_out, pm_out)
+                _, act_pred, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                if self.config.decision_block.action_diffusion.enable:
+                    act_pred = self.decision_model.s_diffusion.inference(cond=pm_out)[-1]
                 act_out.append(self.sample_action_discrete(act_pred))
 
                 # Step 2: Predict the next_observation
@@ -502,7 +527,9 @@ class E2EObjNavSA(nn.Module):
                                                     act_out[-1], 
                                                     cache=cache, need_cache=autoregression_need_cache, 
                                                     update_memory=autoregression_update_memory)
-                    obs_n, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                    obs_n, _, _ = self.decision_model.post_decoder(wm_out, pm_out)
+                    if self.config.decision_block.state_diffusion.enable:
+                        obs_n = self.decision_model.s_diffusion.inference(cond=wm_out)[-1]
                     obs_out.append(obs_n)
 
         # Post Processing

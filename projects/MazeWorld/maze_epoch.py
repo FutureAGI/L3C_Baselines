@@ -7,7 +7,7 @@ from airsoul.dataloader import segment_iterator
 from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go
-from airsoul.utils import EpochManager
+from airsoul.utils import EpochManager, GeneratorBase
 from airsoul.utils import noam_scheduler, LinearScheduler
 from airsoul.dataloader import MazeDataSet, PrefetchDataLoader
 
@@ -75,6 +75,7 @@ class MazeEpochVAE:
                             self.device, obs_arr):
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
+            seg_obs = seg_obs.contiguous()
 
             if(self.is_training):
                 sigma = self.sigma_scheduler()
@@ -183,16 +184,20 @@ class MazeEpochCausal:
 
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
+            seg_obs = seg_obs.contiguous()
             seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
+            seg_bev = seg_bev.contiguous()
 
             loss = self.model.module.sequential_loss(
-                                    seg_cmd,
-                                    seg_obs, 
-                                    seg_behavior_act,
-                                    seg_label_act, 
-                                    seg_bev,
+                                    prompts = seg_cmd,
+                                    observations = seg_obs,
+                                    tags = None, 
+                                    behavior_actions = seg_behavior_act,
+                                    rewards = None,
+                                    label_actions = seg_label_act, 
                                     state_dropout=0.20,
                                     use_loss_weight=self.is_training,
+                                    is_training=self.is_training,
                                     reduce_dim=self.reduce_dim,) 
             losses.append(loss)
             if(self.is_training):

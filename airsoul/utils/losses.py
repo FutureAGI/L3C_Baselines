@@ -106,7 +106,7 @@ def calculate_psnr(ground_truth, generated_image):
     assert mse > 0, "mse is zero"
     max_i = torch.max(ground_truth)
     psnr = 20 * torch.log10(max_i / torch.sqrt(mse))
-    return psnr.item()
+    return psnr
 
 def parameters_regularization(*layers):
     norm = 0

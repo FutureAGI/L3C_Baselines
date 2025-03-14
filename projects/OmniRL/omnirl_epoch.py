@@ -97,6 +97,7 @@ class OmniRLEpoch:
                     lactions, # Reference Actions
                     state_dropout=state_dropout, 
                     use_loss_weight=self.is_training,
+                    is_training=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
             if(self.is_training):

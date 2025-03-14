@@ -158,6 +158,7 @@ def EpochManager(cls):
                     if(manual_sync):
                         for param in self.model.parameters():
                             if(param.grad is not None):
+                                param.grad = param.grad.contiguous()
                                 dist.all_reduce(param.grad)
                                 param.grad.div_(self.world_size)
                     #log_sum_parameters_grad(self.model, self.rank)

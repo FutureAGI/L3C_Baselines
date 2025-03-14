@@ -59,6 +59,7 @@ class OmniRL(POTARDecisionModel):
                             state_dropout=0.0,
                             update_memory=True,
                             use_loss_weight=True,
+                            is_training=True,
                             reduce_dim=1):
         bsz = behavior_actions.shape[0]
         seq_len = behavior_actions.shape[1]
@@ -101,7 +102,7 @@ class OmniRL(POTARDecisionModel):
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)       
         elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
-            if use_loss_weight: # If training
+            if is_training: # If training
                 if self.config.state_diffusion.prediction_type == "sample":
                     s_latent = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]), cond=wm_out)
                     s_pred = self.s_decoder(s_latent)
@@ -142,7 +143,7 @@ class OmniRL(POTARDecisionModel):
                                     reduce_dim=reduce_dim,
                                     need_cnt=True)
         elif self.action_dtype == "Continuous" and self.config.action_diffusion.enable:
-            if use_loss_weight: # If training
+            if is_training: # If training
                 if self.config.action_diffusion.prediction_type == "sample":
                     a_latent = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),cond=pm_out)
                     a_pred = self.a_decoder(a_latent)
@@ -257,7 +258,8 @@ class OmniRL(POTARDecisionModel):
                 act_in = a_pred
                 act_out = act_in.squeeze()
         else:
-            act_out = self.a_diffusion.inference(pm_out)[-1]
+            a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+            act_out = self.a_decoder(a_latent)
 
         act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
@@ -281,7 +283,8 @@ class OmniRL(POTARDecisionModel):
             if not self.config.state_diffusion.enable:
                 state = o_pred.detach().cpu().squeeze()
             else:
-                o_pred = self.s_diffusion.inference(wm_out)[-1]
+                o_latent = self.s_diffusion.inference(cond=wm_out)[-1]
+                o_pred = self.s_decoder(o_latent)
                 state = o_pred.detach().cpu().squeeze()
                 
             reward = r_pred.detach().cpu().squeeze()
