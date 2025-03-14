@@ -14,7 +14,7 @@ model_config:
   max_position_loss_weighting: 48000
   action_dim: 5
   policy_loss_type: CrossEntropy
-  rsa_type: sptar  #sta, sa, sar
+  rsa_type: pota  #potar, otar, oar, oa
 
   state_encode:
       input_type: Discrete

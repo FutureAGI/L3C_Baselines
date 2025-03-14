@@ -112,11 +112,11 @@ class POTARDecisionModel(nn.Module):
         self.rsa_choice =  ["potar", "pota", "oar", "ota", "oa"]
         self.rsa_occ = len(self.rsa_type)
 
-        # Use prompt to predict the action, else use the s
+        # Use prompt to predict the action, else use the observation
         if(self.rsa_type.find('p') > -1):
             self.pm_pos = self.rsa_type.find('p')
         else:
-            self.pm_pos = self.rsa_type.find('s')
+            self.pm_pos = self.rsa_type.find('o')
         # Predict world modeling from the action
         self.wm_pos = self.rsa_type.find('a')
 
