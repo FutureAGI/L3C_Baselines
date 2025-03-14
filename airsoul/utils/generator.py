@@ -75,10 +75,9 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
 
     model_num = config.generator_config.agent_num
     models = []
-    model = model_type(config.model_config, verbose=main)
     for model_idx in range(model_num):
         # Create model and move it to GPU with id `gpu`
-        models.append(model)
+        models.append(model_type(config.model_config, verbose=main))
         models[model_idx] = models[model_idx].to(device)
         
         if use_gpu:

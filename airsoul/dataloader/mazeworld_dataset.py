@@ -29,6 +29,7 @@ class MazeDataSet(Dataset):
         path = self.file_list[index]
 
         try:
+            cmds = np.load(path + '/commands.npy')
             observations = np.load(path + '/observations.npy')
             actions_behavior_id = np.load(path + '/actions_behavior_id.npy')
             actions_label_id = np.load(path + '/actions_label_id.npy')
@@ -53,6 +54,14 @@ class MazeDataSet(Dataset):
             else:
                 n_b = 0
                 n_e = self.time_step
+            cmd_arr = torch.from_numpy(cmds).float()
+            
+            # Normalize command to [B, 16*16*3]
+            if(cmd_arr.dim() == 2): # Normalize to [B，16，16，3]
+                cmd_arr = np.repeat(cmd_arr, 256, axis=1)
+            elif(cmd_arr.dim() == 4):
+                cmd_arr = cmd_arr.reshape(cmd_arr.shape[0], -1)
+
             obs_arr = torch.from_numpy(observations[n_b:(n_e + 1)]).float() 
             bact_id_arr = torch.from_numpy(actions_behavior_id[n_b:n_e]).long() 
             lact_id_arr = torch.from_numpy(actions_label_id[n_b:n_e]).long() 
@@ -60,7 +69,7 @@ class MazeDataSet(Dataset):
             lact_val_arr = torch.from_numpy(actions_label_val[n_b:n_e]).float() 
             reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
             bev_arr = torch.from_numpy(bevs[n_b:n_e]).float()
-            return obs_arr, bact_id_arr, lact_id_arr, bact_val_arr, lact_val_arr, reward_arr, bev_arr
+            return cmd_arr, obs_arr, bact_id_arr, lact_id_arr, bact_val_arr, lact_val_arr, reward_arr, bev_arr
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
             return None
@@ -74,5 +83,5 @@ if __name__=="__main__":
     data_path = sys.argv[1]
     dataset = MazeDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
-    obs, bact, lact, bactv, lactv, rewards, bevs = dataset[0]
-    print(obs.shape, bact.shape, lact.shape, bactv.shape, lactv.shape, rewards.shape, bevs.shape)
+    cmd, obs, bact, lact, bactv, lactv, rewards, bevs = dataset[0]
+    print(cmd.shape, obs.shape, bact.shape, lact.shape, bactv.shape, lactv.shape, rewards.shape, bevs.shape)
