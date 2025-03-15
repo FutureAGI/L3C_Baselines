@@ -2,14 +2,31 @@ import os
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
+import cv2
+import numpy as np
+
+from l3c_baselines.dataloader import segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
+from l3c_baselines.utils import Configure, DistStatistics, rewards2go
+from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
+from l3c_baselines.utils import noam_scheduler, LinearScheduler
+from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader
+import logging
+from queue import Queue
+import threading
+import matplotlib.pyplot as plt
+import torch.nn as nn
+
 
 from airsoul.dataloader import segment_iterator
 from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go
-from airsoul.utils import EpochManager
+from airsoul.utils import EpochManager, GeneratorBase
 from airsoul.utils import noam_scheduler, LinearScheduler
 from airsoul.dataloader import MazeDataSet, PrefetchDataLoader
+
 
 def string_mean_var(downsample_length, res):
     string=""
@@ -69,12 +86,12 @@ class MazeEpochVAE:
             assert self.optimizer is not None, "optimizer is required for training"
 
         losses = []
-        seq_len = self.config.seq_len_vae
         for sub_idx, seg_obs in segment_iterator(
                             self.config.seq_len_vae, self.config.seg_len_vae,
                             self.device, obs_arr):
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
+            seg_obs = seg_obs.contiguous()
 
             if(self.is_training):
                 sigma = self.sigma_scheduler()
@@ -82,11 +99,10 @@ class MazeEpochVAE:
                 sigma = 0
             loss = self.model.module.vae_loss(
                     seg_obs,
-                    _sigma=sigma,
-                    seq_len=seq_len)
+                    _sigma=sigma)
             losses.append(loss)
             if(self.is_training):
-                syn_loss = (loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]) / loss["count"]
+                syn_loss = loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]
                 if(self.scaler is not None):
                     self.scaler.scale(syn_loss).backward()
                 else:
@@ -151,7 +167,7 @@ class MazeEpochCausal:
             self.reduce_dim = None
             
     def valid_epoch(self, epoch_id): # Add epoch control for VAE training
-        if(self.config.has_attr('epoch_causal_start')):
+        if(self.config.has_attr('epoch_causal_stop')):
             if(epoch_id < self.config.epoch_causal_start):
                 return False
         return True
@@ -183,16 +199,20 @@ class MazeEpochCausal:
 
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
+            seg_obs = seg_obs.contiguous()
             seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
+            seg_bev = seg_bev.contiguous()
 
             loss = self.model.module.sequential_loss(
-                                    seg_cmd,
-                                    seg_obs, 
-                                    seg_behavior_act,
-                                    seg_label_act, 
-                                    seg_bev,
+                                    prompts = seg_cmd,
+                                    observations = seg_obs,
+                                    tags = None, 
+                                    behavior_actions = seg_behavior_act,
+                                    rewards = None,
+                                    label_actions = seg_label_act, 
                                     state_dropout=0.20,
                                     use_loss_weight=self.is_training,
+                                    is_training=self.is_training,
                                     reduce_dim=self.reduce_dim,) 
             losses.append(loss)
             if(self.is_training):
@@ -258,3 +278,80 @@ class MazeEpochCausal:
                             os.remove(file_path)
                         with open(file_path, 'w') as f_model:
                             f_model.write(res_text)
+
+
+
+class MAZEGenerator(GeneratorBase):
+
+    def __call__(self, epoch_id):
+    
+        folder_count = 0
+
+        for folder in os.listdir(self.config.data_root):
+            folder_path = os.path.join(self.config.data_root, folder)
+            
+            if os.path.isdir(folder_path):
+                states = np.load(os.path.join(folder_path, 'observations.npy'))
+                actions = np.load(os.path.join(folder_path, 'actions_behavior_id.npy'))
+
+                in_context_len = self.config.in_context_len
+                pred_len = self.config.pred_len
+                start = self.config.start_position
+                temp = self.config.temp
+                drop_out = self.config.drop_out
+                len_causal = self.config.seg_len_causal
+                output_folder = self.config.output
+                
+                end = min(start + in_context_len, len(states))
+
+                pred_obs_list = self.model.module.generate_step_by_step(
+                    observations=states[start:end+1],
+                    actions=actions[start:end],
+                    actions_gt=actions[end:end+pred_len],
+                    temp=temp,
+                    drop_out = drop_out,
+                    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                    in_context_len = in_context_len,
+                    len_causal = len_causal,
+                    n_step=pred_len
+                )
+
+                real = [states[i] for i in range(end+1, end + 1 + pred_len)] 
+
+                pred_obs_list_with_initial = pred_obs_list
+                
+                
+                video_folder = os.path.join(output_folder, f'video_{folder_count}')
+                if not os.path.exists(video_folder):
+                    os.makedirs(video_folder)
+
+                video_filename = os.path.join(video_folder, f"pred_obs_video_{folder_count}.avi")
+                fourcc = cv2.VideoWriter_fourcc(*'XVID') 
+                frame_height, frame_width = pred_obs_list_with_initial[0].shape[:2]
+                video_writer = cv2.VideoWriter(video_filename, fourcc, 10.0, (frame_width * 2, frame_height))
+
+                for real_frame, pred_frame in zip(real, pred_obs_list_with_initial):
+                    rotated_real = cv2.rotate(real_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    rotated_pred = cv2.rotate(pred_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+                    concatenated_img = np.hstack((rotated_real, rotated_pred))
+
+                    img = np.clip(concatenated_img, 0, 255).astype(np.uint8)
+                    video_writer.write(img)
+
+                video_writer.release() 
+
+                print(f"Saved video with {len(real)} frames to {video_filename}")
+
+                
+                updated_cache = None
+                print(f"Cache cleared after generating {len(real)} frames.")
+
+                folder_count += 1  
+
+                if folder_count >= 16:
+                    print("Processed 16 folders. Stopping.")
+                    break 
+
+
+

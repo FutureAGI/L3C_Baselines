@@ -2,8 +2,8 @@ import copy
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from l3c_baselines.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock
-from l3c_baselines.utils import format_cache, log_fatal
+from airsoul.modules import MLPEncoder, ResidualMLPDecoder, CausalBlock, DiffusionLayers, FixedEncoderDecoder
+from airsoul.utils import format_cache, log_fatal
 
 class SADecisionModel(nn.Module):
     """
@@ -24,8 +24,16 @@ class SADecisionModel(nn.Module):
 
         self.s_encoder = MLPEncoder(config.state_encode)
         self.a_encoder = MLPEncoder(config.action_encode)
-        self.s_decoder = ResidualMLPDecoder(config.state_decode)
-        self.a_decoder = ResidualMLPDecoder(config.action_decode)
+        
+        if(config.action_diffusion.enable):
+            self.a_diffusion = DiffusionLayers(config.action_diffusion)
+        else:
+            self.a_decoder = ResidualMLPDecoder(config.action_decode)
+
+        if(config.state_diffusion.enable):
+            self.s_diffusion = DiffusionLayers(config.state_diffusion)
+        else:
+            self.s_decoder = ResidualMLPDecoder(config.state_decode)
 
     def forward(self, s_arr, a_arr, cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
@@ -71,13 +79,18 @@ class SADecisionModel(nn.Module):
         # Acqure Outputs: [a_0, s_1, a_1, ...]
         outputs = outputs.reshape(B, NT, 2, -1)
 
-        # Predict s_1, s_2, ..., s_{t+1}
-        obs_output = self.s_decoder(outputs[:, :, 1])
+        wm_out = outputs[:, :, 1]
+        pm_out = outputs[:, :, 0]
 
-        # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, 0], T=T)
+        return wm_out, pm_out, new_cache
 
-        return obs_output, act_output, new_cache
+    def post_decoder(self, wm_out, pm_out, T=1.0):
+        obs_output, act_output = None, None
+        if not self.config.state_diffusion.enable:
+            obs_output = self.s_decoder(wm_out)
+        if not self. config.action_diffusion.enable:
+            act_output = self.a_decoder(pm_out, T=T)
+        return obs_output, act_output
 
     def reset(self):
         self.causal_model.reset()
@@ -96,25 +109,42 @@ class POTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["potar", "pota", "oar", "ota", "oa"]
+        self.rsa_choice =  ["potar", "pota", "poa", "oar", "ota", "oa"]
         self.rsa_occ = len(self.rsa_type)
 
-        # Use prompt to predict the action, else use the s
+        # Use prompt to predict the action, else use the observation
         if(self.rsa_type.find('p') > -1):
             self.pm_pos = self.rsa_type.find('p')
         else:
-            self.pm_pos = self.rsa_type.find('s')
+            self.pm_pos = self.rsa_type.find('o')
         # Predict world modeling from the action
         self.wm_pos = self.rsa_type.find('a')
 
         if(self.rsa_type.lower() not in self.rsa_choice):
             log_fatal(f"rsa_type must be one of the following: {self.rsa_choice}, get {self.rsa_type}")
 
-        self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
-        self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
-        self.s_decoder = ResidualMLPDecoder(config.state_decode)
-        self.a_decoder = ResidualMLPDecoder(config.action_decode)
-        self.r_decoder = ResidualMLPDecoder(config.reward_decode)
+        if(self.rsa_type.find('r') > -1):
+            self.r_decoder = ResidualMLPDecoder(config.reward_decode)
+
+        if(config.action_diffusion.enable):
+            self.a_diffusion = DiffusionLayers(config.action_diffusion)
+            self.a_mapping = FixedEncoderDecoder(low_dim=config.action_encode.input_size,
+                                                 high_dim=config.action_encode.hidden_size)
+            self.a_encoder = self.a_mapping.encoder
+            self.a_decoder = self.a_mapping.decoder
+        else:
+            self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
+            self.a_decoder = ResidualMLPDecoder(config.action_decode)
+            
+        if(config.state_diffusion.enable):
+            self.s_diffusion = DiffusionLayers(config.state_diffusion)
+            self.s_mapping = FixedEncoderDecoder(low_dim=config.state_encode.input_size,
+                                                 high_dim=config.state_encode.hidden_size)
+            self.s_encoder = self.s_mapping.encoder
+            self.s_decoder = self.s_mapping.decoder
+        else:
+            self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
+            self.s_decoder = ResidualMLPDecoder(config.state_decode)
 
         if(self.config.state_encode.input_type == "Discrete"):
             self.s_discrete = True
@@ -130,6 +160,8 @@ class POTARDecisionModel(nn.Module):
 
         type_embeddings = torch.randn(1, 1, self.rsa_occ, self.hidden_size)
         self.type_query = nn.Parameter(type_embeddings, requires_grad=True)
+        mask_embeddings = torch.randn(1, 1, config.state_encode.input_size)
+        self.mask_query = nn.Parameter(mask_embeddings, requires_grad=True)
 
         if("p" in self.rsa_type):
             self.p_encoder = MLPEncoder(config.prompt_encode)
@@ -163,7 +195,7 @@ class POTARDecisionModel(nn.Module):
             self.r_included = False
 
     def forward(self, o_arr, p_arr, t_arr, a_arr, r_arr, 
-                cache=None, need_cache=True, T=1.0, update_memory=True):
+                cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
         """
         Input Size:
             observations:[B, NT, H], float
@@ -193,14 +225,26 @@ class POTARDecisionModel(nn.Module):
             assert t_arr.shape[:2] == o_arr.shape[:2]            
 
         # Add state dropouts
-        device = o_arr.device
+        if not self.s_discrete and state_dropout > 0.0:
+            H = o_arr.shape[2]
+            device = o_arr.device
+            p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            eps = torch.randn((B, NT, H)).to(device)
+            dp_eps = torch.bernoulli(p_noise)
+            dp_mask = torch.bernoulli(p_mask)
+            # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
+            observation_in = o_arr + eps * dp_eps
+            observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+        else:
+            observation_in = o_arr
 
         if(self.s_discrete):
-            o_arr = torch.where(o_arr<0, torch.full_like(o_arr, self.s_dim), o_arr)
+            observation_in = torch.where(observation_in<0, torch.full_like(observation_in, self.s_dim), observation_in)
         if(self.a_discrete):
             a_arr = torch.where(a_arr<0, torch.full_like(a_arr, self.a_dim), a_arr)
 
-        o_in = self.s_encoder(o_arr).view(B, NT, 1, -1)
+        o_in = self.s_encoder(observation_in).view(B, NT, 1, -1)
         a_in = self.a_encoder(a_arr).view(B, NT, 1, -1)
 
         inputs = [o_in, a_in]
@@ -236,22 +280,31 @@ class POTARDecisionModel(nn.Module):
 
         # Extract world models outputs
         wm_out = outputs[:, :, self.wm_pos]
-        # Predict s_1, s_2, ..., s_{t+1}
-        obs_output = self.s_decoder(wm_out)
-        # Predict r_0, r_1, ..., r_t
-        rew_output = self.r_decoder(wm_out)
+        pm_out = outputs[:, :, self.pm_pos]
 
-        # Predict a_0, a_1, ..., a_t
-        act_output = self.a_decoder(outputs[:, :, self.pm_pos], T=T)
+        return wm_out, pm_out, new_cache
+    
+    def post_decoder(self, wm_out, pm_out, T=1.0):
+        obs_output, act_output, rew_output = None, None, None
+        if(not self.config.state_diffusion.enable):
+            # Predict s_1, s_2, ..., s_{t+1}
+            obs_output = self.s_decoder(wm_out)
 
-        return obs_output, act_output, rew_output, new_cache
+        if(not self.config.action_diffusion.enable):
+            # Predict a_0, a_1, ..., a_t
+            act_output = self.a_decoder(pm_out, T=T)
+        
+        if(self.rsa_type.find('r') > -1):
+            rew_output = self.r_decoder(wm_out)
+        
+        return obs_output, act_output, rew_output
 
     def reset(self):
         self.causal_model.reset()
 
 if __name__=='__main__':
     import sys
-    from l3c_baselines.utils import Configure
+    from airsoul.utils import Configure
     config = Configure()
     config.from_yaml(sys.argv[1])
     RSADM = SADecisionModel(config.model_config.decision_block)
