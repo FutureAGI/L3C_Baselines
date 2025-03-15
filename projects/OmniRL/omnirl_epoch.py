@@ -9,7 +9,7 @@ from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go, downsample
 from airsoul.utils import EpochManager, GeneratorBase, Logger
 from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
-from airsoul.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
+from airsoul.dataloader import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gymnasium 
 import gym
@@ -19,7 +19,8 @@ import pickle
 from pathlib import Path
 import random
 import re
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
+from airsoul.utils import AgentVisualizer
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -41,7 +42,7 @@ class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPDataSet
+        self.DataType=AnyMDPv2DataSet #AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
                         "loss_worldmodel_state", 
@@ -96,6 +97,7 @@ class OmniRLEpoch:
                     lactions, # Reference Actions
                     state_dropout=state_dropout, 
                     use_loss_weight=self.is_training,
+                    is_training=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
             if(self.is_training):
@@ -832,8 +834,9 @@ class OmniRLGenerator(GeneratorBase):
                 trail_reward_shaped += shaped_reward
                 trail_reward_loss += (shaped_reward - pred_reward) ** 2
 
-                step += 1
+                step += 1 + self.config.skip_frame
                 if(step > self.max_steps):
+                    step = self.max_steps
                     print("Reach max_steps, break trail.")
                     done = True
                 if(done):
@@ -996,9 +999,11 @@ class MultiAgentGenerator(OmniRLGenerator):
                     return abs(goal_pos[0]-pos[0]) + abs(goal_pos[1]-pos[1])
                 
                 if distance_to_goal(current_pos,goal_pos) < distance_to_goal(last_pos,goal_pos):
-                    rew = 0
+                    rew = 0.08
+                elif distance_to_goal(current_pos,goal_pos) > distance_to_goal(last_pos,goal_pos):
+                    rew = -0.12
                 else:
-                    rew = -0.005
+                    rew = -0.04
 
                 if not done[i]:
                     reward[i] = rew
@@ -1006,7 +1011,39 @@ class MultiAgentGenerator(OmniRLGenerator):
                     reward[i] = 1.0 if reward[i] > 0.0 else rew
                     
         return reward
-        
+    
+    def in_context_learn_from_teacher(self, epoch_id):
+        # Task ID: retrieve the correpsonding teacher trajectory with task ID
+        for agent_index in range(self.agent_num):
+            for folder in os.listdir(self.config.data_root):
+                folder_path = os.path.join(self.config.data_root, folder)
+
+                if os.path.isdir(folder_path):
+                    states = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_observations.npy'))
+                    prompts = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_prompts.npy'))
+                    tags = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_tags.npy'))
+                    actions = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_actions_behavior.npy'))
+                    rewards = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_rewards.npy'))
+                    states = states.astype(numpy.int32)
+                    prompts = prompts.astype(numpy.int32)
+                    tags = tags.astype(numpy.int32)
+                    actions = actions.astype(numpy.int32)
+                    rewards = rewards.astype(numpy.float32)
+                    segment_len = 1000
+                    for start in range(0, len(states), segment_len):
+                        end = min(start + segment_len, len(states))
+                        self.model[agent_index].module.in_context_learn(
+                            states[start:end],
+                            prompts[start:end],
+                            tags[start:end],
+                            actions[start:end],
+                            rewards[start:end],
+                            single_batch=True,
+                            single_step=False)
+                else:
+                    log_warn(f"Folder {folder_path} does not exist.")
+        print("Finish Learning.")
+
     def __call__(self, epoch_id):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
@@ -1025,6 +1062,10 @@ class MultiAgentGenerator(OmniRLGenerator):
                 self.benchmark(epoch_id)
             else:
                 print("Run ICL Only.")
+
+        if self.config.learn_from_data:
+            self.in_context_learn_from_teacher(epoch_id)
+
         # Start ICL
         obs_arrs = [[] for _ in range(self.agent_num)]
         act_arrs = [[] for _ in range(self.agent_num)]
@@ -1094,10 +1135,15 @@ class MultiAgentGenerator(OmniRLGenerator):
                 new_state, new_reward, done, *_ = self.env.step(env_action)
                 # Reward shaping
                 shaped_reward = self.reward_shaping(done, new_reward, previous_state, new_state)
+                if not agents_info[0]['stop_learning'] and not agents_info[1]['stop_learning']:
+                    sum_reward = sum(shaped_reward)
+                    shaped_reward[0] = sum_reward
+                    shaped_reward[1] = sum_reward
+
                 # Collect gif frame
                 if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
                     if self.config.env.lower().find("anymdp") < 0:
-                        frames.extend(self.env.render())
+                        frames.append(self.env.render(mode='rgb_array'))
 
                 for agent_index in range(self.agent_num):
                     agents_info[agent_index]['done'] = done[agent_index]

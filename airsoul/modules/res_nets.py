@@ -32,9 +32,9 @@ class ImageEncoder(nn.Module):
         n_res_block = config.n_res_block
         self.output_size = out_channel
 
-        channel_b1 = out_channel // 64
-        channel_b2 = out_channel // 32
-        channel_b3 = out_channel // 16
+        channel_b1 = out_channel // 32
+        channel_b2 = out_channel // 16
+        channel_b3 = out_channel // 8
         cur_size = img_size // 8
         fin_channel = cur_size * cur_size * channel_b3
 
@@ -94,7 +94,7 @@ class ImageDecoder(nn.Module):
         n_res_block = config.n_res_block
         self.output_size = out_channel
 
-        channel_b1 = hidden_size // 8
+        channel_b1 = hidden_size // 4
         self.ini_channel = hidden_size // 32
         self.ini_size = img_size // 8
         ini_mapping = self.ini_size * self.ini_size * self.ini_channel

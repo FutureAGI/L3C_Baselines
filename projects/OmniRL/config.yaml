@@ -14,7 +14,7 @@ model_config:
   max_position_loss_weighting: 48000
   action_dim: 5
   policy_loss_type: CrossEntropy
-  rsa_type: sptar  #sta, sa, sar
+  rsa_type: pota  #potar, otar, oar, oa
 
   state_encode:
       input_type: Discrete
@@ -81,6 +81,26 @@ model_config:
           - 1
       layer_norm: True
       residual_connect: True
+      dropout: 0.0
+      is_frozen: False
+
+  action_diffusion:
+      enable: False
+      T: 20
+      hidden_size: 512
+      condition_size: 512
+      inner_hidden_size: 2048
+      beta: [0.05, 0.20]
+      dropout: 0.0
+      is_frozen: False
+
+  state_diffusion:
+      enable: False
+      T: 20
+      hidden_size: 512
+      condition_size: 512
+      inner_hidden_size: 2048
+      beta: [0.05, 0.20]
       dropout: 0.0
       is_frozen: False
 

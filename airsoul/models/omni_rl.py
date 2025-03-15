@@ -8,13 +8,13 @@ import numpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
-from l3c_baselines.utils import weighted_loss, sa_dropout, img_pro, img_post
-from l3c_baselines.utils import parameters_regularization, count_parameters
-from l3c_baselines.utils import log_debug, log_warn, log_fatal
-from l3c_baselines.modules import ImageEncoder, ImageDecoder
-from .decision_model import OPTARDecisionModel
+from airsoul.utils import weighted_loss, sa_dropout, img_pro, img_post
+from airsoul.utils import parameters_regularization, count_parameters
+from airsoul.utils import log_debug, log_warn, log_fatal
+from airsoul.modules import ImageEncoder, ImageDecoder
+from .decision_model import POTARDecisionModel
 
-class OmniRL(OPTARDecisionModel):
+class OmniRL(POTARDecisionModel):
     def __init__(self, config, verbose=False): 
         super().__init__(config)
 
@@ -48,7 +48,7 @@ class OmniRL(OPTARDecisionModel):
 
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
-            log_debug("Causal Block Parameters： {}".format(count_parameters(self.causal_model)))
+            log_debug("Causal Block Parameters: {}".format(count_parameters(self.causal_model)))
 
     def sequential_loss(self, observations, 
                             prompts,
@@ -59,6 +59,7 @@ class OmniRL(OPTARDecisionModel):
                             state_dropout=0.0,
                             update_memory=True,
                             use_loss_weight=True,
+                            is_training=True,
                             reduce_dim=1):
         bsz = behavior_actions.shape[0]
         seq_len = behavior_actions.shape[1]
@@ -67,40 +68,66 @@ class OmniRL(OPTARDecisionModel):
         pe = ps + seq_len
         o_in = sa_dropout(observations[:, :-1].clone())
         # Predict the latent representation of action and next frame (World Model)
-        s_pred, a_pred, r_pred, _ = self.forward(
+        wm_out, pm_out, _ = self.forward(
                 o_in, prompts, tags, behavior_actions, rewards,
                 cache=None, need_cache=False,
                 update_memory=update_memory)
-
+        s_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out)
         # Calculate the loss information
         loss = dict()
         # Mask out the invalid actions
+        if(self.loss_weight.shape[0] < pe):
+            log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
+                    f" than sequence length {pe}")
         loss_weight_s = None
         loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
                     self.loss_weight.dtype)
         if(use_loss_weight):
             loss_weight_s = self.loss_weight[ps:pe]
-            loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
+            if self.action_dtype == "Discrete":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
+            elif self.action_dtype == "Continuous":
+                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0).unsqueeze(-1)
+                loss_weight_a = torch.mean(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
+        else:
+            if self.action_dtype == "Continuous":
+                loss_weight_a = torch.sum(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
 
         # World Model Loss - States and Rewards
-        if self.state_dtype == "Continuous":
-            if observations.dim() == 2:
-                gt = observations[:, 1:].view(*observations.shape, -1)
-            else:
-                gt = observations[:, 1:]
-            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
-                                        gt=gt, 
-                                        loss_type="mse",
-                                        loss_wht=loss_weight_s, 
-                                        reduce_dim=reduce_dim,
-                                        need_cnt=True)
-        else:
+        if self.state_dtype == "Discrete":
             loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
                                         gt=observations[:, 1:], 
                                         loss_type="ce",
                                         loss_wht=loss_weight_s, 
                                         reduce_dim=reduce_dim,
+                                        need_cnt=True)       
+        elif self.state_dtype == "Continuous" and self.config.state_diffusion.enable:
+            if is_training: # If training
+                if self.config.state_diffusion.prediction_type == "sample":
+                    s_latent = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]), cond=wm_out)
+                    s_pred = self.s_decoder(s_latent)
+                    loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                                gt=observations[:, 1:], 
+                                                loss_type="mse",
+                                                loss_wht=loss_weight_s, 
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+                else:   
+                    loss["wm-s"], loss["count_s"] = self.s_diffusion.loss_DDPM(x0=self.s_encoder(observations[:, 1:]),
+                                                cond=wm_out,
+                                                mask=loss_weight_s,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+            else: # If testing 
+                s_latent = self.s_diffusion.inference(cond=wm_out)[-1]
+                s_pred = self.s_decoder(s_latent)
+                loss["wm-s"], loss["count_s"] = weighted_loss(s_pred, 
+                                        gt=observations[:, 1:], 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_s, 
+                                        reduce_dim=reduce_dim,
                                         need_cnt=True)
+                
         loss["wm-r"] = weighted_loss(r_pred, 
                                      gt=rewards.view(*rewards.shape,1), 
                                      loss_type="mse",
@@ -108,29 +135,48 @@ class OmniRL(OPTARDecisionModel):
                                      reduce_dim=reduce_dim)
 
         # Policy Model
-        if self.action_dtype == "Continuous":
-            if label_actions.dim() == 2:
-                gt = label_actions.view(*rewards.shape, 1)
-            else:
-                gt = label_actions
-            loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
-                                       gt=gt, 
-                                       loss_type="mse",
-                                       loss_wht=loss_weight_a, 
-                                       reduce_dim=reduce_dim,
-                                       need_cnt=True)
-        else:
+        if self.action_dtype == "Discrete":
             loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
                                     gt=label_actions, 
                                     loss_type="ce",
                                     loss_wht=loss_weight_a, 
                                     reduce_dim=reduce_dim,
                                     need_cnt=True)
+        elif self.action_dtype == "Continuous" and self.config.action_diffusion.enable:
+            if is_training: # If training
+                if self.config.action_diffusion.prediction_type == "sample":
+                    a_latent = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),cond=pm_out)
+                    a_pred = self.a_decoder(a_latent)
+                    loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                        gt=label_actions, 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_a, 
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
+                else: 
+                    loss["pm"], loss["count_a"] = self.a_diffusion.loss_DDPM(x0=self.a_encoder(label_actions),
+                                                cond=pm_out,
+                                                mask=loss_weight_a,
+                                                reduce_dim=reduce_dim,
+                                                need_cnt=True)
+            else: # If testing
+                a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+                a_pred = self.a_decoder(a_latent)
+                loss["pm"], loss["count_a"] = weighted_loss(a_pred, 
+                                       gt=label_actions, 
+                                       loss_type="mse",
+                                       loss_wht=loss_weight_a, 
+                                       reduce_dim=reduce_dim,
+                                       need_cnt=True)
         # Entropy Loss
-        loss["ent"] = weighted_loss(a_pred, 
-                                    loss_type="ent", 
-                                    loss_wht=loss_weight_a,
-                                    reduce_dim=reduce_dim)
+        if self.action_dtype == "Discrete" :
+            loss["ent"] = weighted_loss(a_pred, 
+                                        loss_type="ent", 
+                                        loss_wht=loss_weight_a,
+                                        reduce_dim=reduce_dim)
+        else:
+            loss["ent"] = 0.0
+        
         loss["causal-l2"] = parameters_regularization(self)
         return loss
     
@@ -191,7 +237,7 @@ class OmniRL(OPTARDecisionModel):
             default_r = None
         default_a = self.default_a.to(device)
 
-        o_pred, a_pred, r_pred, _ = self.forward(
+        wm_out, pm_out, _ = self.forward(
             obs_in,
             pro_in,
             tag_in,
@@ -201,13 +247,19 @@ class OmniRL(OPTARDecisionModel):
             update_memory=False,
             need_cache=False)
         
-        if(self.a_discrete):
-            act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
-            act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
-            act_out = act_in.squeeze()
+        o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
+        
+        if not self.config.action_diffusion.enable:
+            if(self.a_discrete):
+                act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
+                act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
+                act_out = act_in.squeeze()
+            else:
+                act_in = a_pred
+                act_out = act_in.squeeze()
         else:
-            act_in = a_pred
-            act_out = act_in.squeeze()
+            a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
+            act_out = self.a_decoder(a_latent)
 
         act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
@@ -216,7 +268,7 @@ class OmniRL(OPTARDecisionModel):
                 act_out = act_out.item()
 
         if(future_prediction):
-            o_pred, a_pred, r_pred, _ = self.forward(
+            wm_out, pm_out, _ = self.forward(
                 obs_in,
                 pro_in,
                 tag_in,
@@ -226,7 +278,15 @@ class OmniRL(OPTARDecisionModel):
                 update_memory=False,
                 need_cache=False)
             
-            state = o_pred.detach().cpu().squeeze()
+            o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
+            
+            if not self.config.state_diffusion.enable:
+                state = o_pred.detach().cpu().squeeze()
+            else:
+                o_latent = self.s_diffusion.inference(cond=wm_out)[-1]
+                o_pred = self.s_decoder(o_latent)
+                state = o_pred.detach().cpu().squeeze()
+                
             reward = r_pred.detach().cpu().squeeze()
 
             if(need_numpy):
@@ -298,7 +358,7 @@ class OmniRL(OPTARDecisionModel):
             rew_in = rew_in.to(torch.int32)
 
         # observation, prompt, tag, action, reward; update memory = true
-        _, _, _, new_cache = self.forward(
+        _, _, new_cache = self.forward(
             obs_in,
             pro_in,
             tag_in,
@@ -309,14 +369,12 @@ class OmniRL(OPTARDecisionModel):
         
         return new_cache
 
-        
-
 if __name__=="__main__":
     from utils import Configure
     config=Configure()
     config.from_yaml(sys.argv[1])
 
-    model = AnyMDPRSA(config.model_config)
+    model = OmniRL(config.model_config)
 
     observation = torch.randn(8, 33, 3, 128, 128)
     action = torch.randint(4, (8, 32)) 
