@@ -2,6 +2,22 @@ import os
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
+import cv2
+import numpy as np
+
+from l3c_baselines.dataloader import segment_iterator
+from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
+from l3c_baselines.utils import Configure, DistStatistics, rewards2go
+from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
+from l3c_baselines.utils import noam_scheduler, LinearScheduler
+from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader
+import logging
+from queue import Queue
+import threading
+import matplotlib.pyplot as plt
+import torch.nn as nn
+
 
 from airsoul.dataloader import segment_iterator
 from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
@@ -10,6 +26,7 @@ from airsoul.utils import Configure, DistStatistics, rewards2go
 from airsoul.utils import EpochManager, GeneratorBase
 from airsoul.utils import noam_scheduler, LinearScheduler
 from airsoul.dataloader import MazeDataSet, PrefetchDataLoader
+
 
 def string_mean_var(downsample_length, res):
     string=""
@@ -69,7 +86,6 @@ class MazeEpochVAE:
             assert self.optimizer is not None, "optimizer is required for training"
 
         losses = []
-        seq_len = self.config.seq_len_vae
         for sub_idx, seg_obs in segment_iterator(
                             self.config.seq_len_vae, self.config.seg_len_vae,
                             self.device, obs_arr):
@@ -83,11 +99,10 @@ class MazeEpochVAE:
                 sigma = 0
             loss = self.model.module.vae_loss(
                     seg_obs,
-                    _sigma=sigma,
-                    seq_len=seq_len)
+                    _sigma=sigma)
             losses.append(loss)
             if(self.is_training):
-                syn_loss = (loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]) / loss["count"]
+                syn_loss = loss["Reconstruction-Error"] + self.lambda_scheduler() * loss["KL-Divergence"]
                 if(self.scaler is not None):
                     self.scaler.scale(syn_loss).backward()
                 else:
@@ -152,7 +167,7 @@ class MazeEpochCausal:
             self.reduce_dim = None
             
     def valid_epoch(self, epoch_id): # Add epoch control for VAE training
-        if(self.config.has_attr('epoch_causal_start')):
+        if(self.config.has_attr('epoch_causal_stop')):
             if(epoch_id < self.config.epoch_causal_start):
                 return False
         return True
@@ -265,6 +280,7 @@ class MazeEpochCausal:
                             f_model.write(res_text)
 
 
+
 class MAZEGenerator(GeneratorBase):
 
     def __call__(self, epoch_id):
@@ -336,3 +352,6 @@ class MAZEGenerator(GeneratorBase):
                 if folder_count >= 16:
                     print("Processed 16 folders. Stopping.")
                     break 
+
+
+
