@@ -43,7 +43,6 @@ class GSABlock(GLABlock):
                 io_size: int=512,
                 num_heads: int=4,
                 num_slots: int=4,
-                gate_bound: float=50,
                 layer_idx: int=0,
                 is_generate: bool=False):
         super().__init__()
@@ -58,5 +57,4 @@ class GSABlock(GLABlock):
                   hidden_size=io_size,
                   num_heads=num_heads,
                   num_slots=num_slots,
-                  gate_bound=gate_bound,
                   layer_idx=0)

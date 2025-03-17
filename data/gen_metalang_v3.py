@@ -19,7 +19,7 @@ import argparse
 import multiprocessing
 import numpy
 import random
-from l3c.metalang import metalang_generator_v3
+from xenoverse.metalang import metalang_generator_v3
 
 def dump_data(path, idxes, configs):
     for idx in idxes:
@@ -48,7 +48,6 @@ if __name__=='__main__':
 
     configs = vars(args)
     configs["output_type"] = 'npy'
-    configs["version"] = 'v2'
 
     processes = []
     n_b_t = 0

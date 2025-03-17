@@ -41,7 +41,6 @@ class CausalBlock(nn.Module):
                 fc_hidden=config.inner_hidden_size,
                 fc_dropout=config.dropout,
                 io_size=config.hidden_size,
-                gate_bound=config.gate_bound,
                 num_heads=config.nhead,
                 num_slots=config.memory_length,
                 is_generate=is_generate
