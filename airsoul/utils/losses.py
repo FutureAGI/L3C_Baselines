@@ -1,6 +1,14 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+import os
+import pathlib
+from tqdm import tqdm
+import numpy as np
+import torchvision.transforms as TF
+from PIL import Image
+from scipy import linalg
+
 
 def ent_loss(act_out):
     """
@@ -105,15 +113,7 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
         return mean_loss
 
 
-import os
-import pathlib
-from tqdm import tqdm
-import numpy as np
-import torch
-import torchvision.transforms as TF
-from PIL import Image
-from scipy import linalg
-from torch.nn.functional import adaptive_avg_pool2d
+
 
 
 def get_activations(
