@@ -2,7 +2,6 @@ import numpy
 import gymnasium
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
-from ma_gym.envs.switch import Switch
 
 class MapStateToDiscrete:
     def __init__(self, env_name, state_space_dim1, state_space_dim2):
@@ -401,10 +400,17 @@ if __name__ == "__main__":
     print("Step Counts:", step_counts)
     print("Success Rate:", success_rate)
 
-class Switch2(Switch):
+class Switch2:
 
     def __init__(self, full_observable: bool = False, step_cost: float = 0, n_agents: int = 4, max_steps: int = 50,
                  clock: bool = True):
+
+        try:
+            from ma_gym.envs.switch import Switch
+        except ImportError as e:
+            raise RuntimeError("To use Switch2 class, please install ma-gym: pip install ma-gym") from e
+
+        self.__class__ = type("Switch2", (Switch,), {})
         super().__init__(full_observable, step_cost, n_agents, max_steps, clock)
         self.init_mapping()
 
