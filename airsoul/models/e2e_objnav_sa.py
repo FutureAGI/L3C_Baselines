@@ -261,6 +261,7 @@ class E2EObjNavSA(nn.Module):
 
         return loss
     
+
     def preprocess_others(self, 
                    vals, 
                    single_batch=True, 
@@ -295,6 +296,10 @@ class E2EObjNavSA(nn.Module):
             return None
 
         if(isinstance(observations, numpy.ndarray)):
+            # if observations.dtype == numpy.uint8:
+            #     # Normalize the image to [0, 1], the observation is raw image
+            observations = observations.astype(numpy.float32) / 255.0
+
             obs = torch.tensor(observations, device=next(self.parameters()).device)
         elif(isinstance(observations, torch.Tensor)):
             obs = observations.to(next(self.parameters()).device)
@@ -303,17 +308,21 @@ class E2EObjNavSA(nn.Module):
         
         if(single_batch):
             obs = obs.unsqueeze(0)
-        if(single_step):
-            obs = obs.unsqueeze(1)
 
+        if(single_step and obs.dim() == 4):
+            obs = obs.unsqueeze(1)
+        
         if(raw_images):
-            assert obs.dim == 5, f"Input dimension of observations of raw images must be 5, acquire {obs.dim}"
+            assert obs.dim() == 5, f"Input dimension of observations of raw images must be 5, acquire {obs.dim()}"
+            obs = obs.permute(0, 1, 4, 2, 3)
+
             with torch.no_grad():
                 z_rec, _ = self.vae(obs)
         else:
             z_rec = obs
 
         return z_rec
+
     
     def preprocess(self, 
                 observations, 
@@ -349,6 +358,7 @@ class E2EObjNavSA(nn.Module):
         # Outputs:
         #   new_cache: [B, NC, H] if need_cache is True
 
+
         o,p,t,a,r = self.preprocess(
                         observations,
                         prompts,
@@ -373,6 +383,7 @@ class E2EObjNavSA(nn.Module):
         #   action: [B]
         return torch.multinomial(logits / temperature, num_samples=1)
     
+
     def generate_states_only(self, 
                             current_observation, 
                             action_trajectory,
@@ -403,11 +414,12 @@ class E2EObjNavSA(nn.Module):
                     raw_images=raw_images)
 
         obs = self.preprocess_observation(
-            observation, 
+            current_observation, 
             single_batch=single_batch, 
             single_step=True, 
             raw_images=raw_images)
         
+
         act = self.preprocess_others(action_trajectory, 
                                      single_batch=single_batch,
                                      single_step=future_single_step)
