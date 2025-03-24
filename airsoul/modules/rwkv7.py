@@ -30,7 +30,7 @@ class RWKV7Layer(nn.Module):
             is_first_layer = False
         self.encoder = RWKV7Block(
                   self.config,
-                  layer_idx=layer_idx,
+                  layer_idx=0,
                   is_first_layer = is_first_layer)
 
     def forward(self, x, cache=None, need_cache=False):
@@ -50,6 +50,6 @@ class RWKV7Layer(nn.Module):
 
         out, _, new_cache_, v_first = self.encoder(hidden_states=x, past_key_values=cache_, use_cache=use_cache, v_first=v_first)
 
-        new_cache = (new_cache_.states[self.layer_idx], v_first)
+        new_cache = (new_cache_.states[0], v_first)
 
         return out, new_cache
