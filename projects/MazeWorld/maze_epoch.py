@@ -59,7 +59,7 @@ class MazeEpochVAE:
 
     def compute(self, obs_arr, behavior_actid_arr, label_actid_arr, 
                 behavior_act_arr, label_act_arr, 
-                rew_arr, bev_arr,
+                rew_arr,
                 epoch_id=-1, 
                 batch_id=-1):
         """
@@ -168,7 +168,7 @@ class MazeEpochCausal:
 
     def compute(self, cmd_arr, obs_arr, behavior_actid_arr, label_actid_arr, 
                 behavior_act_arr, label_act_arr, 
-                rew_arr, bev_arr,
+                rew_arr,
                 epoch_id=-1, 
                 batch_id=-1):
         """
@@ -178,15 +178,15 @@ class MazeEpochCausal:
             assert self.optimizer is not None, "optimizer is required for training"
 
         losses = []
-        for sub_idx, seg_cmd, seg_obs, seg_behavior_act, seg_label_act, seg_bev in segment_iterator(
+        for sub_idx, seg_cmd, seg_obs, seg_behavior_act, seg_label_act in segment_iterator(
                                 self.config.seq_len_causal, self.config.seg_len_causal, self.device, 
-                                cmd_arr, (obs_arr, 1), behavior_actid_arr, label_actid_arr, bev_arr):
+                                cmd_arr, (obs_arr, 1), behavior_actid_arr, label_actid_arr):
 
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
             seg_obs = seg_obs.contiguous()
-            seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
-            seg_bev = seg_bev.contiguous()
+            # seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
+            # seg_bev = seg_bev.contiguous()
 
             loss = self.model.module.sequential_loss(
                                     prompts = seg_cmd,
