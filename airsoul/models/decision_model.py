@@ -152,7 +152,7 @@ class POTARDecisionModel(nn.Module):
         else:
             self.s_discrete = False
 
-        if(self.config.state_encode.input_type == "Discrete"):
+        if(self.config.action_encode.input_type == "Discrete"):
             self.a_discrete = True
             self.a_dim = self.config.action_encode.input_size
         else:
