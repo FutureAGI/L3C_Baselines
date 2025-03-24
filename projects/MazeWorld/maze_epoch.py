@@ -5,13 +5,13 @@ from torch.optim.lr_scheduler import LambdaLR
 import cv2
 import numpy as np
 
-from l3c_baselines.dataloader import segment_iterator
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
-from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import Configure, DistStatistics, rewards2go
-from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.utils import noam_scheduler, LinearScheduler
-from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader
+from airsoul.dataloader import segment_iterator
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
+from airsoul.utils import Configure, DistStatistics, rewards2go
+from airsoul.utils import EpochManager, GeneratorBase, Logger
+from airsoul.utils import noam_scheduler, LinearScheduler
+from airsoul.dataloader import MazeDataSet, PrefetchDataLoader
 import logging
 from queue import Queue
 import threading
