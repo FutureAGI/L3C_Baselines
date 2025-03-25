@@ -2,6 +2,7 @@ import numpy
 import gymnasium
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
+from l3c.anymdp import AnyMDPSolverOpt
 
 class MapStateToDiscrete:
     def __init__(self, env_name, state_space_dim1, state_space_dim2):
@@ -381,6 +382,38 @@ class OnlineRL:
                 self.log_callback.step_counts, 
                 self.log_callback.success_rate)
 
+class LoadRLModel:
+    def __init__(self, env, env_name, model_name = None, model_path=None):
+        self.env = env
+        self.env_name = env_name.lower()
+        if model_name is None:
+            self.model_name = model_name.lower()
+        if model_path is None:
+            self.model_path = model_path
+        self.supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
+
+    def load(self):
+        if self.env_name.find("anymdp") >= 0:
+            model = AnyMDPSolverOpt(self.env)
+            def benchmark_model(state):
+                return model.policy(state)
+            self.benchmark_opt_model = benchmark_model
+        elif any(self.env_name.find(name) == 0 for name in self.supported_gym_env):
+            model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+            if self.model_name not in model_classes:
+                raise ValueError("Unknown policy type: {}".format())
+            model = model_classes[self.model_name].load(f'{self.model_path}/model/{self.model_name}.zip', env=self.env)
+            def benchmark_model(state):
+                action, _ = model.predict(state)
+                return int(action)
+            self.benchmark_opt_model = benchmark_model
+        else:
+            raise ValueError("Unsupported environment:", self.env_name)
+
+    def __call__(self):
+        self.load()
+        return self.benchmark_opt_model
+    
 if __name__ == "__main__":
     model_name = "dqn"
     env_name = "lake"

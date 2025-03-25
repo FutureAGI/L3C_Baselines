@@ -20,7 +20,7 @@ from pathlib import Path
 import random
 import re
 from airsoul.utils import AgentVisualizer
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, LoadRLModel, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -551,26 +551,12 @@ class OmniRLGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self, epoch_id):
-        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
-        # Load opt model
-        if self.config.env.lower().find("anymdp") >= 0:
-            model = AnyMDPSolverOpt(self.env)
-            def benchmark_model(state):
-                return model.policy(state)
-            self.benchmark_opt_model = benchmark_model
-        elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
-            if self.config.run_benchmark.run_opt:
-                model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
-                model_name = self.config.benchmark_model_name.lower()
-                if model_name not in model_classes:
-                    raise ValueError("Unknown policy type: {}".format())
-                model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
-                def benchmark_model(state):
-                    action, _ = model.predict(state)
-                    return int(action)
-                self.benchmark_opt_model = benchmark_model
-        else:
-            raise ValueError("Unsupported environment:", self.config.env)
+        if self.config.run_benchmark.run_opt:
+            trained_rl = LoadRLModel(self.env, 
+                                    self.config.env, 
+                                    model_name=self.config.benchmark_model_name,
+                                    model_path=self.config.benchmark_model_save_path)
+            self.benchmark_opt_model = trained_rl()
         
         def run_online_rl():
             online_rl = OnlineRL(env=self.env, 
