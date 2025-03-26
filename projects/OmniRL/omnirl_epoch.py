@@ -804,12 +804,19 @@ class OmniRLGenerator(GeneratorBase):
 
 
                 # start learning     
-                self.model.module.in_context_learn(
+                cache = self.model.module.in_context_learn(
                     previous_state,
                     interactive_prompt,
                     self.interactive_tag,
                     action,
                     shaped_reward)
+                
+                if (hasattr(self.config, 'save_cache') 
+                    and self.config.save_cache 
+                    and (total_step + step) % self.config.save_cache_gap == 0):
+                    epoch_dir = os.path.join(self.config.save_cache_path, str(epoch_id)) 
+                    os.makedirs(epoch_dir, exist_ok=True)
+                    numpy.save(os.path.join(epoch_dir, f"cache_{total_step + step}.npy"), cache)
 
                 trail_state_arr.append(new_state)
                 obs_arr.append(new_state) 

@@ -178,6 +178,7 @@ class POTARDecisionModel(nn.Module):
             self.t_included = True
             if(self.config.tag_encode.input_type == "Discrete"):
                 self.t_discrete = True
+                self.t_dim = self.config.tag_encode.input_size
             else:
                 self.t_discrete = False
         else:
@@ -251,6 +252,8 @@ class POTARDecisionModel(nn.Module):
 
         # Insert Prompts, tags and rewards if necessary
         if(self.t_included):
+            if self.t_discrete:
+                t_arr = torch.where(t_arr<0, torch.full_like(t_arr, self.t_dim - 1), t_arr)
             t_in = self.t_encoder(t_arr)
             t_in = t_in.view(B, NT, 1, -1)
             inputs.insert(1, t_in)
