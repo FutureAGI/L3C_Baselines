@@ -883,7 +883,8 @@ class OmniRLGenerator(GeneratorBase):
         # Save step reward
         if self.max_total_steps > 1.0:
             array_to_save = numpy.array(rew_wo_done_arr)
-            array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
+            if self.step_reward_nomalize_factor is not None:
+                array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
             file_path = f'{self.config.output}/step_reward/'
             if not os.path.exists(file_path):
                 os.makedirs(file_path)
