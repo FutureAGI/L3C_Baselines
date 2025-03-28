@@ -11,14 +11,13 @@ import multiprocessing
 import pickle
 import random as rnd
 from numpy import random
-import l3c
+import xenoverse
 from packaging import version
-assert version.parse(l3c.__version__) >= version.parse('0.2.1.19')
 from airsoul.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 
-from l3c.anymdp import AnyMDPTaskSampler
-from l3c.anymdp import AnyMDPSolverOpt
-from l3c.utils import pseudo_random_seed
+from xenoverse.anymdp import AnyMDPTaskSampler
+from xenoverse.anymdp import AnyMDPSolverOpt
+from xenoverse.utils import pseudo_random_seed
 
 current_folder = os.path.dirname(os.path.abspath(__file__))
 if current_folder not in sys.path:

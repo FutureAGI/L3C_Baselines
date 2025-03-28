@@ -10,9 +10,9 @@ import numpy
 import argparse
 import multiprocessing
 import pickle
-import l3c.mazeworld
-from l3c.mazeworld import MazeTaskSampler, Resampler
-from l3c.mazeworld.agents import OracleAgent
+import xenoverse.mazeworld
+from xenoverse.mazeworld import MazeTaskSampler, Resampler
+from xenoverse.mazeworld.agents import OracleAgent
 
 current_folder = os.path.dirname(os.path.abspath(__file__))
 if current_folder not in sys.path:

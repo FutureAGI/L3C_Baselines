@@ -19,7 +19,7 @@ import argparse
 import multiprocessing
 import numpy
 import random
-from l3c.metalang import metalang_generator
+from xenoverse.metalang import metalang_generator
 
 def dump_data(path, idxes, configs):
     for idx in idxes:

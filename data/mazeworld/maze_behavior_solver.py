@@ -11,7 +11,7 @@ import multiprocessing
 import pickle
 import random as rnd
 from numpy import random
-from l3c.mazeworld.agents import SmartSLAMAgent
+from xenoverse.mazeworld.agents import SmartSLAMAgent
 
     
 class MazeNoisyExpertAgent(SmartSLAMAgent):
