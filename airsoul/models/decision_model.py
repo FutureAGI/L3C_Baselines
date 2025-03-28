@@ -108,20 +108,14 @@ class POTARDecisionModel(nn.Module):
         self.causal_model = CausalBlock(config.causal_block)
         self.hidden_size = config.causal_block.hidden_size
 
-        self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["potar", "pota", "poa", "oar", "ota", "oa"]
-        self.rsa_occ = len(self.rsa_type)
-
-        # Use prompt to predict the action, else use the observation
-        if(self.rsa_type.find('p') > -1):
-            self.pm_pos = self.rsa_type.find('p')
-        else:
-            self.pm_pos = self.rsa_type.find('o')
-        # Predict world modeling from the action
-        self.wm_pos = self.rsa_type.find('a')
-
-        if(self.rsa_type.lower() not in self.rsa_choice):
+        self.rsa_choice =  ["podtawr", "podtaw", "podaw", "odawr", "odtawr", "odtaw", "odaw",
+                            "opdtawr"]
+        if(config.rsa_type.lower() not in self.rsa_choice):
             log_fatal(f"rsa_type must be one of the following: {self.rsa_choice}, get {self.rsa_type}")
+        positon_map, self.rsa_type = self.process_string(config.rsa_type)
+        self.rsa_occ = len(self.rsa_type)
+        self.pm_pos = self.rsa_type.find(positon_map['d'])
+        self.wm_pos = self.rsa_type.find(positon_map['w'])      
 
         if(self.rsa_type.find('r') > -1):
             self.r_decoder = ResidualMLPDecoder(config.reward_decode)
@@ -152,7 +146,7 @@ class POTARDecisionModel(nn.Module):
         else:
             self.s_discrete = False
 
-        if(self.config.state_encode.input_type == "Discrete"):
+        if(self.config.action_encode.input_type == "Discrete"):
             self.a_discrete = True
             self.a_dim = self.config.action_encode.input_size
         else:
@@ -178,6 +172,7 @@ class POTARDecisionModel(nn.Module):
             self.t_included = True
             if(self.config.tag_encode.input_type == "Discrete"):
                 self.t_discrete = True
+                self.t_dim = self.config.tag_encode.input_size
             else:
                 self.t_discrete = False
         else:
@@ -244,24 +239,27 @@ class POTARDecisionModel(nn.Module):
         if(self.a_discrete):
             a_arr = torch.where(a_arr<0, torch.full_like(a_arr, self.a_dim), a_arr)
 
-        o_in = self.s_encoder(observation_in).view(B, NT, 1, -1)
-        a_in = self.a_encoder(a_arr).view(B, NT, 1, -1)
-
-        inputs = [o_in, a_in]
+        var_dict = {}
+        var_dict["o_in"] = self.s_encoder(observation_in).view(B, NT, 1, -1)
+        var_dict["a_in"] = self.a_encoder(a_arr).view(B, NT, 1, -1)
 
         # Insert Prompts, tags and rewards if necessary
         if(self.t_included):
+            if self.t_discrete:
+                t_arr = torch.where(t_arr<0, torch.full_like(t_arr, self.t_dim - 1), t_arr)
             t_in = self.t_encoder(t_arr)
-            t_in = t_in.view(B, NT, 1, -1)
-            inputs.insert(1, t_in)
+            var_dict["t_in"] = t_in.view(B, NT, 1, -1)
         if(self.p_included):
             p_in = self.p_encoder(p_arr)
-            p_in = p_in.view(B, NT, 1, -1)
-            inputs.insert(1, p_in)
+            var_dict["p_in"] = p_in.view(B, NT, 1, -1)
         if(self.r_included):
             r_in = self.r_encoder(r_arr)
-            r_in = r_in.view(B, NT, 1, -1)
-            inputs.append(r_in)
+            var_dict["r_in"] = r_in.view(B, NT, 1, -1)
+
+        inputs = []
+        for char in self.rsa_type:
+            var_name = f"{char}_in"
+            inputs.append(var_dict[var_name])
 
         # [B, NT, 2-5, H]
         outputs = torch.cat(inputs, dim=2)
@@ -301,6 +299,20 @@ class POTARDecisionModel(nn.Module):
 
     def reset(self):
         self.causal_model.reset()
+    
+    def process_string(self, s):
+        char_map = {}
+        filtered_str = []
+        s = s.lower()
+        
+        for idx, char in enumerate(s):
+            if char in {'d', 'w'}:
+                if idx > 0 and char not in char_map:
+                    char_map[char] = s[idx-1]
+            else:
+                filtered_str.append(char)
+        
+        return char_map, ''.join(filtered_str)
 
 if __name__=='__main__':
     import sys

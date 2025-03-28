@@ -9,6 +9,7 @@ from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
+from .rwkv7 import RWKV7Layer
 
 class CausalBlock(nn.Module):
     """
@@ -83,6 +84,18 @@ class CausalBlock(nn.Module):
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead,
             )
+        elif(self.model_type == "rwkv7"):
+            main_encoder = MultiBlocks(
+                RWKV7Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                hidden_ratio=config.hidden_ratio,
+                intermediate_size=config.inner_hidden_size,
+                num_hidden_layers=config.num_hidden_layers,
+                num_heads=config.nhead,
+                max_position_embeddings=config.position_encoding_size
+            )       
         else:
             raise Exception("No such causal model: %s" % config.model_type)
         

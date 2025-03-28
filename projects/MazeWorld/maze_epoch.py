@@ -5,13 +5,13 @@ from torch.optim.lr_scheduler import LambdaLR
 import cv2
 import numpy as np
 
-from l3c_baselines.dataloader import segment_iterator
-from l3c_baselines.utils import Logger, log_progress, log_debug, log_warn, log_fatal
-from l3c_baselines.utils import custom_load_model, noam_scheduler, LinearScheduler
-from l3c_baselines.utils import Configure, DistStatistics, rewards2go
-from l3c_baselines.utils import EpochManager, GeneratorBase, Logger
-from l3c_baselines.utils import noam_scheduler, LinearScheduler
-from l3c_baselines.dataloader import MazeDataSet, PrefetchDataLoader
+from airsoul.dataloader import segment_iterator
+from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
+from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
+from airsoul.utils import Configure, DistStatistics, rewards2go
+from airsoul.utils import EpochManager, GeneratorBase, Logger
+from airsoul.utils import noam_scheduler, LinearScheduler
+from airsoul.dataloader import MazeDataSet, PrefetchDataLoader
 import logging
 from queue import Queue
 import threading
@@ -76,7 +76,7 @@ class MazeEpochVAE:
 
     def compute(self, obs_arr, behavior_actid_arr, label_actid_arr, 
                 behavior_act_arr, label_act_arr, 
-                rew_arr, bev_arr,
+                rew_arr,
                 epoch_id=-1, 
                 batch_id=-1):
         """
@@ -183,7 +183,7 @@ class MazeEpochCausal:
 
     def compute(self, cmd_arr, obs_arr, behavior_actid_arr, label_actid_arr, 
                 behavior_act_arr, label_act_arr, 
-                rew_arr, bev_arr,
+                rew_arr,
                 epoch_id=-1, 
                 batch_id=-1):
         """
@@ -193,15 +193,15 @@ class MazeEpochCausal:
             assert self.optimizer is not None, "optimizer is required for training"
 
         losses = []
-        for sub_idx, seg_cmd, seg_obs, seg_behavior_act, seg_label_act, seg_bev in segment_iterator(
+        for sub_idx, seg_cmd, seg_obs, seg_behavior_act, seg_label_act in segment_iterator(
                                 self.config.seq_len_causal, self.config.seg_len_causal, self.device, 
-                                cmd_arr, (obs_arr, 1), behavior_actid_arr, label_actid_arr, bev_arr):
+                                cmd_arr, (obs_arr, 1), behavior_actid_arr, label_actid_arr):
 
             # Permute (B, T, H, W, C) to (B, T, C, H, W)
             seg_obs = seg_obs.permute(0, 1, 4, 2, 3)
             seg_obs = seg_obs.contiguous()
-            seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
-            seg_bev = seg_bev.contiguous()
+            # seg_bev = seg_bev.permute(0, 1, 4, 2, 3)
+            # seg_bev = seg_bev.contiguous()
 
             loss = self.model.module.sequential_loss(
                                     prompts = seg_cmd,
@@ -213,7 +213,7 @@ class MazeEpochCausal:
                                     state_dropout=0.20,
                                     use_loss_weight=self.is_training,
                                     is_training=self.is_training,
-                                    reduce_dim=self.reduce_dim,) 
+                                    reduce_dim=self.reduce_dim) 
             losses.append(loss)
             if(self.is_training):
                 syn_loss = (self.config.lossweight_worldmodel_latent * loss["wm-latent"]
