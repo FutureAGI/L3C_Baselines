@@ -36,7 +36,7 @@ class MazeDataSet(Dataset):
             actions_behavior_val = np.load(path + '/actions_behavior_val.npy')
             actions_label_val = np.load(path + '/actions_label_val.npy')
             rewards = np.load(path + '/rewards.npy')
-            bevs = np.load(path + '/BEVs.npy')
+            # bevs = np.load(path + '/BEVs.npy')
             max_t = actions_behavior_id.shape[0]
 
             # Shape Check
@@ -44,7 +44,7 @@ class MazeDataSet(Dataset):
             assert max_t == actions_behavior_val.shape[0]
             assert max_t == actions_label_id.shape[0]
             assert max_t == actions_label_val.shape[0]
-            assert max_t == bevs.shape[0]
+            # assert max_t == bevs.shape[0]
             assert max_t + 1 == observations.shape[0]
 
             if(self.time_step > max_t):
@@ -68,8 +68,8 @@ class MazeDataSet(Dataset):
             bact_val_arr = torch.from_numpy(actions_behavior_val[n_b:n_e]).float() 
             lact_val_arr = torch.from_numpy(actions_label_val[n_b:n_e]).float() 
             reward_arr = torch.from_numpy(rewards[n_b:n_e]).float()
-            bev_arr = torch.from_numpy(bevs[n_b:n_e]).float()
-            return cmd_arr, obs_arr, bact_id_arr, lact_id_arr, bact_val_arr, lact_val_arr, reward_arr, bev_arr
+            # bev_arr = torch.from_numpy(bevs[n_b:n_e]).float()
+            return cmd_arr, obs_arr, bact_id_arr, lact_id_arr, bact_val_arr, lact_val_arr, reward_arr   #, bev_arr
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
             return None

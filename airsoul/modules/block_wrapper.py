@@ -78,7 +78,13 @@ class MultiBlocks(nn.Module):
                 l_cache = None
             else:
                 l_cache = cache[i]
+                # For rwkv7, get v_first from the previous layer
+                if i>0 and isinstance(l_cache, tuple):
+                    new_l_cache = (l_cache[0], v_prev_layer)
+                    l_cache = new_l_cache
             output, n_cache = layer(output, cache=l_cache, need_cache=True)
+            if isinstance(l_cache, tuple):
+                v_prev_layer = n_cache[1]
             if(need_cache):
                 new_cache.append(n_cache)
 
