@@ -22,7 +22,7 @@ from xenoverse.utils import pseudo_random_seed
 current_folder = os.path.dirname(os.path.abspath(__file__))
 if current_folder not in sys.path:
     sys.path.append(current_folder)
-from anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller, AnyMDPOpter
+from data.anymdp.anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller, AnyMDPOpter
 
 
 
